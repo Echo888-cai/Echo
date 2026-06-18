@@ -182,7 +182,7 @@ function markdownToHtml(markdown = "") {
   const lines = String(markdown).split(/\r?\n/);
   const html = [];
   let inList = false;
-  const sectionTitle = /^(结论|事实|推断|估值\s*\/\s*风险|动作|证伪条件|我的判断|来源|深度研究)$/;
+  const sectionTitle = /^(结论|事实|推断|估值\s*\/\s*风险|动作|还缺什么|证伪条件|我的判断|来源|深度研究)$/;
 
   for (const raw of lines) {
     const line = raw.trim();
@@ -277,6 +277,13 @@ async function refreshSessions() {
   try {
     const data = await api("/api/research/sessions?limit=30");
     recentSessions = data.sessions || [];
+    if (!recentSessions.length && getSessionId()) {
+      setThread([]);
+      setPanel(null);
+      setCompany(null);
+      setDocuments([]);
+      setSessionId(null);
+    }
   } catch {
     recentSessions = [];
   } finally {
@@ -373,6 +380,26 @@ async function deleteSession(id) {
     render();
   } catch (error) {
     toast(error.message || "删除失败。");
+  }
+}
+
+async function clearAllSessions() {
+  if (isBusy || !recentSessions.length) return;
+  const ok = window.confirm("清空全部历史研究？\n\n这会删除本地 SQLite 里的所有历史记录。");
+  if (!ok) return;
+  try {
+    await api("/api/research/sessions", { method: "DELETE" });
+    stopBusy();
+    setThread([]);
+    setPanel(null);
+    setCompany(null);
+    setDocuments([]);
+    setSessionId(null);
+    await refreshSessions();
+    toast("已清空全部历史研究。");
+    render();
+  } catch (error) {
+    toast(error.message || "清空失败。");
   }
 }
 
@@ -502,8 +529,6 @@ function renderResearch() {
   const panel = getPanel();
   const thread = getThread();
   const health = sourceHealth(panel);
-  const docs = getDocuments();
-  const lastUser = [...thread].reverse().find((message) => message.role === "user");
   const activeSessionId = getSessionId();
 
   shell(`
@@ -511,18 +536,9 @@ function renderResearch() {
       <aside class="sidebar">
         <button class="primary wide" data-action="new">新建研究</button>
         <section class="research-snapshot">
-          <p>当前会话</p>
+          <p>研究公司</p>
           <h2>${esc(panel?.companyName || company?.nameZh || "未选择公司")}</h2>
           <span>${esc(company?.ticker || panel?.ticker || "输入公司名或港股代码开始")}</span>
-          <div class="snapshot-meta">
-            <strong>${esc(statusLabel(panel?.researchStatus))}</strong>
-            <em>完整度 ${health.completeness}%</em>
-          </div>
-          <div class="session-facts">
-            <span>当前问题</span><strong>${esc(lastUser?.content?.slice(0, 34) || "暂无")}</strong>
-            <span>对话轮次</span><strong>${Math.ceil(thread.filter((m) => m.role === "user").length)}</strong>
-            <span>资料</span><strong>${docs.length} 份</strong>
-          </div>
         </section>
         ${renderSessionHistory(activeSessionId)}
       </aside>
@@ -533,10 +549,6 @@ function renderResearch() {
             <p>研究室</p>
             <h1>${company ? `${esc(company.nameZh)} ${esc(company.ticker)}` : "一个对话流完成研究"}</h1>
             <span>${company ? esc(company.industry || company.sector || "资料待补齐") : "普通追问、深度研究、资料上传都在同一个上下文里完成"}</span>
-          </div>
-          <div class="desk-status">
-            <strong>${esc(statusLabel(panel?.researchStatus))}</strong>
-            <span>${activeSessionId ? "已保存到 SQLite" : `${health.connected.length} 项数据已接入`}</span>
           </div>
         </div>
         <div class="conversation">
@@ -555,7 +567,10 @@ function renderSessionHistory(activeSessionId) {
       ? `<div class="session-list">${recentSessions.map((session) => renderSessionItem(session, activeSessionId)).join("")}</div>`
       : `<div class="history-empty">还没有历史研究。完成第一轮回答后会自动保存。</div>`;
   return `<section class="history-panel">
-    <div class="side-title"><h3>历史研究</h3><span>${recentSessions.length || 0}</span></div>
+    <div class="side-title">
+      <h3>历史研究</h3>
+      ${recentSessions.length ? `<button type="button" data-action="clear-sessions">清空</button>` : ""}
+    </div>
     ${body}
   </section>`;
 }
@@ -564,11 +579,10 @@ function renderSessionItem(session, activeSessionId) {
   const active = session.id === activeSessionId;
   const title = session.title || session.question || session.companyName || session.ticker || "未命名研究";
   const company = session.companyName || session.company_name || session.ticker || "研究对象";
-  const turns = session.turnCount || session.turn_count || 1;
   return `<div class="session-item ${active ? "is-active" : ""}">
     <button class="session-open" type="button" data-action="load-session" data-id="${esc(session.id)}">
       <strong>${esc(title)}</strong>
-      <span>${esc(company)} · ${turns} 轮 · ${esc(formatSessionTime(session.updated_at || session.updatedAt))}</span>
+      <span>${esc(company)}</span>
     </button>
     <button class="session-delete" type="button" data-action="delete-session" data-id="${esc(session.id)}" aria-label="删除历史研究">×</button>
   </div>`;
@@ -713,6 +727,7 @@ document.addEventListener("click", async (event) => {
   if (action === "new") clearResearch();
   if (action === "load-session") await loadSession(target.dataset.id);
   if (action === "delete-session") await deleteSession(target.dataset.id);
+  if (action === "clear-sessions") await clearAllSessions();
   if (action === "settings") location.hash = "#/settings";
   if (action === "quick") {
     const input = document.querySelector(".composer textarea");

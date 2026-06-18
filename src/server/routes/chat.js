@@ -31,6 +31,26 @@ function usefulSummary(item, fallback) {
   return text;
 }
 
+function humanStatus(status = "") {
+  const text = String(status || "").trim();
+  if (!text || /暂不评分|缺失|未接入|数据不足/.test(text)) return "当前未核到完整口径";
+  return text;
+}
+
+function backendGapLines(panel, dataSources = {}) {
+  const gaps = [];
+  const missing = new Set(Array.isArray(panel?.missingData) ? panel.missingData : []);
+  const financialMissing = dataSources.financials?.status !== "ok" || [...missing].some((item) => /财报|利润|现金流|估值|PE|三表|收入/.test(item));
+  const filingsMissing = dataSources.filings?.status !== "ok" || [...missing].some((item) => /公告|回购|分红|年报|中报/.test(item));
+  const newsMissing = dataSources.news?.status !== "ok" || [...missing].some((item) => /新闻|舆情|监管/.test(item));
+  const estimatesMissing = dataSources.estimates?.status !== "ok" || [...missing].some((item) => /一致预期|评级|目标价/.test(item));
+  if (financialMissing) gaps.push("财报三表、利润率、自由现金流和估值倍数：后台接 FMP / EODHD / Finnhub，并缓存到 financial_snapshots。");
+  if (filingsMissing) gaps.push("年报、中报、业绩公告、回购和分红公告：后台接 HKEXnews 和公司 IR，并解析 PDF。");
+  if (newsMissing) gaps.push("近期新闻、监管和行业事件：后台接 web 搜索证据层，只保留公司 IR、HKEX、主流财经媒体等可信来源。");
+  if (estimatesMissing) gaps.push("一致预期、目标价和盈利预测：后台接 Finnhub / FMP / EODHD 的 analyst estimates。");
+  return gaps.length ? gaps : ["当前关键数据源基本可用，下一步主要是提高来源覆盖和交叉校验。"];
+}
+
 function sourceLines(panel, dataSources = {}) {
   const explicit = Array.isArray(panel?.sources)
     ? panel.sources
@@ -132,10 +152,10 @@ function researchReplyFromPanel(panel, question = "", dataSources = {}) {
     "",
     "事实",
     `1. 行情：当前可用价格口径是 ${price}，来源 ${panel.price?.source || dataSources.market?.provider || "未接入"}，时间 ${priceTime}。这只能说明市场状态，不能直接等同于公司价值。`,
-    `2. 基本面：${fundamental?.status || "待验证"}。${fundamentalText}。`,
-    `3. 估值：${valuation?.status || "待验证"}。${valuationText}。`,
-    `4. 股东回报：${shareholder?.status || "待验证"}。${shareholderText}。`,
-    `5. 风险：${risk?.status || "待验证"}。${riskText}。`,
+    `2. 基本面：${humanStatus(fundamental?.status)}。${fundamentalText}。`,
+    `3. 估值：${humanStatus(valuation?.status)}。${valuationText}。`,
+    `4. 股东回报：${humanStatus(shareholder?.status)}。${shareholderText}。`,
+    `5. 风险：${humanStatus(risk?.status)}。${riskText}。`,
     "",
     "推断",
     `${name} 的投资判断要拆成两层：第一层是商业模式有没有赚钱机制，第二层是利润和现金流能不能稳定兑现。${/赚|盈利|利润|现金流/.test(question) ? "如果只是问“赚不赚钱”，我会先看收入质量、毛利率、经营利润率、自由现金流和资本开支，而不是只看净利润。" : "如果只是看短期涨跌，容易忽略真正驱动股价重估的是基本面兑现和风险收敛。"}`,
@@ -150,6 +170,9 @@ function researchReplyFromPanel(panel, question = "", dataSources = {}) {
     "1. 先补最新财报和公告，确认收入、利润率、现金流是否同向改善。",
     "2. 如果有持仓，记录成本、股数、可承受回撤和计划周期，避免只按股价波动做判断。",
     "3. 如果需要更完整的材料，点击输入框里的“深度研究”，系统会把本轮对话、来源和证据缺口直接补进当前对话流。",
+    "",
+    "还缺什么",
+    ...backendGapLines(panel, dataSources).map((line, index) => `${index + 1}. ${line}`),
     "",
     "证伪条件",
     `1. ${fundamental?.summary ? "基本面指标与当前判断相反" : "收入、利润率或现金流继续走弱"}。`,
@@ -286,8 +309,10 @@ ${sources}
 - 输出中文纯文本，可以用短标题，但不要 Markdown 表格。
 - 第一行必须严格使用：北京时间 ${formatBeijingMinute()}，${panel.companyName} 最近的状态是：……
 - 保持像真实投研对话，不要写成产品说明，不要说“我将/我会获取”。
-- ${moatMode ? "用户问的是护城河/竞争优势。只围绕护城河回答，段落用：结论、护城河拆解、商业模式、我的判断、风险 / 证伪、下一步看什么、来源。不要输出完整行情模板。" : "必须包含这些段落，顺序固定：结论、事实、推断、估值 / 风险、动作、证伪条件、我的判断、来源。"}
+- ${moatMode ? "用户问的是护城河/竞争优势。只围绕护城河回答，段落用：结论、护城河拆解、商业模式、我的判断、风险 / 证伪、下一步看什么、来源。不要输出完整行情模板。" : "必须包含这些段落，顺序固定：结论、事实、推断、估值 / 风险、动作、还缺什么、证伪条件、我的判断、来源。"}
 - “事实”尽量编号，引用当前可用数据；不能编造具体数值。若某项缺失，写“当前未核到/来源缺失”，但继续给推断。
+- 不要使用“暂不评分”“完整度xx%”“需要补充材料”这种产品状态词，改成研究语言：当前未核到、置信度下降、后台应接入某类源。
+- “还缺什么”必须说清楚后台该补什么数据源，例如财报三表、HKEX 公告、公司 IR、web 搜索证据、一致预期。
 - “推断”要把模型自己的商业判断讲出来：商业模式、利润质量、现金流、行业竞争、估值叙事。
 - 对“赚不赚钱”，必须先回答赚钱机制和盈利质量：是否有收入来源、利润是否稳定、现金流是否支撑。
 - 不允许只说数据不足；数据不足只能作为置信度和证伪条件的一部分。

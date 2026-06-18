@@ -2,13 +2,14 @@
  * Research session routes:
  *
  * GET    /api/research/sessions       → list recent sessions
+ * DELETE /api/research/sessions       → clear all sessions
  * GET    /api/research/sessions/:id   → get one session (with data)
  * DELETE /api/research/sessions/:id   → delete one session
  * POST   /api/research/sessions/:id/memo → add a memo note
  */
 
 import { readJsonBody, sendOk, sendError } from "../utils/async.js";
-import { listResearchSessions, getResearchSession, saveResearchSession, deleteResearchSession } from "../repositories/researchSessions.js";
+import { listResearchSessions, getResearchSession, saveResearchSession, deleteResearchSession, clearResearchSessions } from "../repositories/researchSessions.js";
 import { composeReport } from "../services/reportComposer.js";
 
 export async function handleSessionList(req, res) {
@@ -28,6 +29,15 @@ export async function handleSessionList(req, res) {
     sendOk(res, { sessions: withPreview, count: withPreview.length });
   } catch (error) {
     sendError(res, 500, error.message || "获取研究会话失败");
+  }
+}
+
+export async function handleSessionClear(req, res) {
+  try {
+    const deleted = clearResearchSessions();
+    sendOk(res, { deleted, cleared: true });
+  } catch (error) {
+    sendError(res, 500, error.message || "清空研究历史失败");
   }
 }
 

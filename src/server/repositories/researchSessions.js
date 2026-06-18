@@ -153,6 +153,13 @@ export function deleteResearchSession(id) {
   return result.changes > 0;
 }
 
+export function clearResearchSessions() {
+  ensureColumns();
+  const db = getDb();
+  const result = db.prepare("DELETE FROM research_sessions").run();
+  return result.changes;
+}
+
 function safeParse(value) {
   try {
     return JSON.parse(value);

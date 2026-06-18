@@ -29,7 +29,7 @@ import { handleStatusApi } from "./src/server/routes/status.js";
 import { handleDocumentParseApi, handleDocumentList, handleDocumentUpload, handleDocumentGet, handleDocumentDelete } from "./src/server/routes/documents.js";
 import { handleCompanySearch, handleCompanyByTicker, handleCompanyHealth } from "./src/server/routes/companies.js";
 import { handleWatchlistList, handleWatchlistAdd, handleWatchlistGet, handleWatchlistUpdate, handleWatchlistDelete } from "./src/server/routes/watchlist.js";
-import { handleSessionList, handleSessionGet, handleSessionDelete, handleSessionMemo } from "./src/server/routes/research.js";
+import { handleSessionList, handleSessionClear, handleSessionGet, handleSessionDelete, handleSessionMemo } from "./src/server/routes/research.js";
 import { handleChatApi } from "./src/server/routes/chat.js";
 import { handleReportGenerateApi } from "./src/server/routes/reports.js";
 
@@ -170,6 +170,7 @@ const server = createServer(async (req, res) => {
 
   // ── Research session routes ──────────────────────────
   if (method === "GET" && url.startsWith("/api/research/sessions") && !url.includes("/api/research/sessions/")) return handleSessionList(req, res);
+  if (method === "DELETE" && url.split("?")[0] === "/api/research/sessions") return handleSessionClear(req, res);
   if (method === "GET" && /^\/api\/research\/sessions\/[^/]+$/.test(url.split("?")[0])) {
     const id = url.replace("/api/research/sessions/", "").split("?")[0];
     return handleSessionGet(req, res, id);
