@@ -31,8 +31,8 @@ import { newsSnapshotToMarkdown } from "../../newsData.js";
 import { PROMPTS } from "../../prompts.js";
 import { getProviderStatus } from "./modelGateway.js";
 
-const REPAIR_TIMEOUT_MS = 25000;
-const MODEL_TIMEOUT_MS = 45000;
+const REPAIR_TIMEOUT_MS = 8000;
+const MODEL_TIMEOUT_MS = 12000;
 
 /** Extract a JSON object from a model response — even when wrapped in Markdown. */
 export function extractJsonObject(text = "") {

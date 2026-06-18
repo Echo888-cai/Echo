@@ -3,6 +3,7 @@ import { runAgent } from "../services/agentService.js";
 import { RESEARCH_STATUS_LABELS } from "../schemas/agentPanel.js";
 import { callModel, getProviderStatus } from "../services/modelGateway.js";
 import { withTimeout } from "../utils/async.js";
+import { companyByTicker } from "../../data.js";
 
 function formatBeijingMinute(date = new Date()) {
   const parts = new Intl.DateTimeFormat("zh-CN", {
@@ -45,8 +46,52 @@ function sourceLines(panel, dataSources = {}) {
   ];
 }
 
+function isMoatQuestion(question = "") {
+  return /护城河|竞争优势|壁垒|不可替代|垄断|网络效应|优势在哪|优势是什么/.test(String(question));
+}
+
+function moatReplyFromPanel(panel, question = "", dataSources = {}) {
+  const profile = companyByTicker(panel?.ticker);
+  const name = panel?.companyName || profile?.nameZh || panel?.ticker || "这家公司";
+  const moat = profile?.moat?.length ? profile.moat : ["用户/客户关系", "规模效应", "品牌与渠道", "技术或数据积累"];
+  const business = profile?.businessModel?.length ? profile.businessModel : [];
+  const risks = profile?.risks?.length ? profile.risks : ["竞争加剧", "利润率下滑", "监管或商业模式变化"];
+  const sources = sourceLines(panel, dataSources);
+
+  return [
+    `北京时间 ${formatBeijingMinute()}，${name} 的护城河不能只看“规模大”，要看它能不能持续带来定价权、用户留存、低获客成本和现金流。`,
+    "",
+    "结论",
+    `${name} 的护城河是“多层叠加型”，不是单一技术壁垒。最核心的是：${moat.slice(0, 3).join("、")}。但护城河强不等于利润永远稳定，关键要看这些优势能不能继续转化成利润率、现金流和股东回报。`,
+    "",
+    "护城河拆解",
+    ...moat.slice(0, 6).map((item, index) => `${index + 1}. ${item}：这是它相对普通公司的优势来源，但需要用收入质量、利润率和现金流去验证。`),
+    "",
+    "商业模式",
+    ...(business.length
+      ? business.slice(0, 4).map((item, index) => `${index + 1}. ${item}`)
+      : ["1. 当前缺少更完整的业务拆分，但可以先从客户粘性、交易频次、利润池和资本开支强度判断。"]),
+    "",
+    "我的判断",
+    `${name} 的护城河如果要成立，必须满足三个条件：用户或客户离不开它，竞争对手很难用补贴长期打穿它，它的优势最终能落到利润和自由现金流上。只说“它很大”没有意义，真正要验证的是“它的大是否还能赚钱”。`,
+    "",
+    "风险 / 证伪",
+    ...risks.slice(0, 5).map((item, index) => `${index + 1}. ${item}。`),
+    "",
+    "下一步看什么",
+    "1. 核心业务收入是否还在增长。",
+    "2. 高毛利业务占比是否提高。",
+    "3. 获客成本和补贴是否压低利润。",
+    "4. 自由现金流和回购/分红能否持续。",
+    "",
+    "来源：",
+    ...sources
+  ].join("\n");
+}
+
 function researchReplyFromPanel(panel, question = "", dataSources = {}) {
   if (!panel) return "我还没有拿到足够上下文。先告诉我公司名称或港股代码，我会先做阶段判断。";
+  if (isMoatQuestion(question)) return moatReplyFromPanel(panel, question, dataSources);
 
   const status = RESEARCH_STATUS_LABELS[panel.researchStatus] || panel.researchStatus || "待判断";
   const missing = Array.isArray(panel.missingData) ? panel.missingData : [];
@@ -129,11 +174,11 @@ export async function handleChatApi(req, res) {
     const fallback = researchReplyFromPanel(result.decisionPanel, payload.question || "", result.dataSources);
     let content = fallback;
     let chatModel = null;
-    if (getProviderStatus().configured && result.decisionPanel) {
+    if (getProviderStatus().configured && result.decisionPanel && !isMoatQuestion(payload.question || "")) {
       chatModel = await withTimeout(callModel({
         system: "你是 Luvio 的港股研究助理，风格像资深买方研究员：直接、克制、可证伪。普通对话也要给高质量判断，但不要伪装成完整正式报告，不给买卖指令。即使公开数据不完整，也必须基于公司档案、商业模式、行业常识、当前可得行情/财务/公告和模型推理给阶段判断；缺数据只影响置信度，不能只回答“需要接入数据”。",
         user: buildChatPrompt(payload.question || "", result.decisionPanel, result.dataSources)
-      }), 45000, null);
+      }), 16000, null);
       if (chatModel?.content && chatModel.content.length < 9000) content = chatModel.content;
     }
     content = normalizeResearchAnswer(content, result.decisionPanel, result.dataSources);
@@ -171,6 +216,10 @@ function buildChatPrompt(question, panel, dataSources = {}) {
   const missing = (panel.missingData || []).join("、") || "无";
   const connected = (panel.connectedData || []).join("、") || "无";
   const sources = sourceLines(panel, dataSources).join("\n");
+  const profile = companyByTicker(panel.ticker);
+  const moat = profile?.moat?.join("、") || "本地档案暂缺";
+  const businessModel = profile?.businessModel?.join("；") || "本地档案暂缺";
+  const moatMode = isMoatQuestion(question);
   return `用户问题：${question}
 
 当前研究对象：${panel.companyName}（${panel.ticker}）
@@ -188,12 +237,15 @@ ${drivers}
 行情：${dataSources.market?.provider || panel.price?.source || "缺失"}，${panel.price?.value || "缺失"}
 来源候选：
 ${sources}
+本地公司档案：
+- 护城河：${moat}
+- 商业模式：${businessModel}
 
 回答规则：
 - 输出中文纯文本，可以用短标题，但不要 Markdown 表格。
 - 第一行必须严格使用：北京时间 ${formatBeijingMinute()}，${panel.companyName} 最近的状态是：……
 - 保持像真实投研对话，不要写成产品说明，不要说“我将/我会获取”。
-- 必须包含这些段落，顺序固定：结论、事实、推断、估值 / 风险、动作、证伪条件、我的判断、来源。
+- ${moatMode ? "用户问的是护城河/竞争优势。只围绕护城河回答，段落用：结论、护城河拆解、商业模式、我的判断、风险 / 证伪、下一步看什么、来源。不要输出完整行情模板。" : "必须包含这些段落，顺序固定：结论、事实、推断、估值 / 风险、动作、证伪条件、我的判断、来源。"}
 - “事实”尽量编号，引用当前可用数据；不能编造具体数值。若某项缺失，写“当前未核到/来源缺失”，但继续给推断。
 - “推断”要把模型自己的商业判断讲出来：商业模式、利润质量、现金流、行业竞争、估值叙事。
 - 对“赚不赚钱”，必须先回答赚钱机制和盈利质量：是否有收入来源、利润是否稳定、现金流是否支撑。

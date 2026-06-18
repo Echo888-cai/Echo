@@ -16,6 +16,24 @@ const statusLabels = {
   out_of_scope: "不在研究范围"
 };
 
+const companyAliases = [
+  { pattern: /腾讯控股|腾讯|Tencent/i, ticker: "0700.HK" },
+  { pattern: /阿里巴巴|阿里(?!健康|影业)|Alibaba|BABA/i, ticker: "9988.HK" },
+  { pattern: /阿里健康/i, ticker: "0241.HK" },
+  { pattern: /阿里影业/i, ticker: "1060.HK" },
+  { pattern: /美团/i, ticker: "3690.HK" },
+  { pattern: /小米/i, ticker: "1810.HK" },
+  { pattern: /比亚迪/i, ticker: "1211.HK" },
+  { pattern: /京东/i, ticker: "9618.HK" },
+  { pattern: /百度/i, ticker: "9888.HK" },
+  { pattern: /快手/i, ticker: "1024.HK" },
+  { pattern: /网易/i, ticker: "9999.HK" },
+  { pattern: /联想/i, ticker: "0992.HK" },
+  { pattern: /耐世特/i, ticker: "1316.HK" },
+  { pattern: /地平线/i, ticker: "9660.HK" },
+  { pattern: /港交所|香港交易所/i, ticker: "0388.HK" }
+];
+
 let apiStatus = null;
 let isBusy = false;
 let busyStartedAt = 0;
@@ -194,12 +212,32 @@ function extractTicker(text = "") {
   return `${hk[1].padStart(4, "0")}.HK`;
 }
 
-async function resolveCompany(query) {
+function extractAliasTicker(text = "") {
+  const hit = companyAliases.find((item) => item.pattern.test(text));
+  return hit?.ticker || "";
+}
+
+function companySearchCandidates(query = "") {
   const ticker = extractTicker(query);
-  const search = ticker || query;
-  const data = await api(`/api/companies/search?q=${encodeURIComponent(search)}`);
-  const company = data.companies?.[0] || null;
-  if (!company && ticker) return { ticker, nameZh: ticker, industry: "待补充" };
+  const aliasTicker = extractAliasTicker(query);
+  const cleaned = String(query)
+    .replace(/[？?！!，,。；;：:]/g, " ")
+    .replace(/最近|怎么样|怎么|分析|看看|帮我|一下|护城河|赚钱|不赚钱|主要风险|风险|利润|估值|值得|研究|持续|能不能|是什么/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return [...new Set([ticker, aliasTicker, cleaned, query].filter(Boolean))];
+}
+
+async function resolveCompany(query) {
+  const candidates = companySearchCandidates(query);
+  let company = null;
+  for (const search of candidates) {
+    const data = await api(`/api/companies/search?q=${encodeURIComponent(search)}`);
+    company = data.companies?.[0] || null;
+    if (company) break;
+  }
+  const fallbackTicker = candidates.find((candidate) => /^\d{4,5}\.HK$/.test(candidate));
+  if (!company && fallbackTicker) return { ticker: fallbackTicker, nameZh: fallbackTicker, industry: "待补充" };
   if (!company) return null;
   return {
     ticker: company.ticker,
@@ -241,7 +279,7 @@ function clearResearch() {
 
 async function sendChat(question) {
   let company = getCompany();
-  const shouldResolve = !company || extractTicker(question) || /腾讯|耐世特|阿里|美团|小米|比亚迪|吉利|联想|地平线/.test(question);
+  const shouldResolve = !company || extractTicker(question) || extractAliasTicker(question);
   if (shouldResolve) {
     const resolved = await resolveCompany(question);
     if (resolved) {
