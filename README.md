@@ -39,7 +39,7 @@ npm run seed
 npm test
 ```
 
-共 54 个测试用例（smoke 13 + reliability 34 + phase2 20），覆盖：
+当前测试覆盖 smoke、reliability、phase2、report 等核心链路，覆盖：
 - ticker 标准化
 - 用户持仓自然语言解析
 - JSON Schema 校验（拒绝 买入/持有/卖出 等违规字段）
@@ -149,3 +149,4 @@ src/data/hkStocks.js  ──→  npm run seed  ──→  luvio.db (SQLite)
 - [产品需求](docs/PRD.md)
 - [平台对标](docs/PLATFORM_BENCHMARK.md)
 - [AI 集成](docs/AI_INTEGRATION.md)
+- [GitHub 工作流](docs/GITHUB_WORKFLOW.md)
