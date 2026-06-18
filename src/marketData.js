@@ -1,0 +1,265 @@
+import { normalizeTicker } from "./data.js";
+
+function env(name) {
+  return process.env[name] || "";
+}
+
+function toHongKongSymbol(ticker) {
+  return normalizeTicker(ticker).replace(".HK", "");
+}
+
+function toYahooSymbol(ticker) {
+  return normalizeTicker(ticker);
+}
+
+function toAlphaVantageSymbol(ticker) {
+  return `${toHongKongSymbol(ticker)}.HKG`;
+}
+
+function toTwelveDataSymbol(ticker) {
+  return `${toHongKongSymbol(ticker)}:HKEX`;
+}
+
+function toTencentHongKongSymbol(ticker) {
+  return `hk${toHongKongSymbol(ticker).padStart(5, "0")}`;
+}
+
+function numberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function compactNumber(value) {
+  const number = numberOrNull(value);
+  if (number === null) return null;
+  if (Math.abs(number) >= 1e12) return `${(number / 1e12).toFixed(2)} 万亿`;
+  if (Math.abs(number) >= 1e8) return `${(number / 1e8).toFixed(2)} 亿`;
+  if (Math.abs(number) >= 1e4) return `${(number / 1e4).toFixed(2)} 万`;
+  return `${number.toFixed(2)}`;
+}
+
+function buildSnapshot(source, ticker, data) {
+  return {
+    source,
+    ticker: normalizeTicker(ticker),
+    currency: data.currency || "HKD",
+    price: numberOrNull(data.price),
+    previousClose: numberOrNull(data.previousClose),
+    change: numberOrNull(data.change),
+    changePercent: numberOrNull(data.changePercent),
+    open: numberOrNull(data.open),
+    high: numberOrNull(data.high),
+    low: numberOrNull(data.low),
+    volume: numberOrNull(data.volume),
+    marketCap: data.marketCap ? compactNumber(data.marketCap) : null,
+    pe: numberOrNull(data.pe),
+    dividendYield: numberOrNull(data.dividendYield),
+    week52High: numberOrNull(data.week52High),
+    week52Low: numberOrNull(data.week52Low),
+    asOf: data.asOf || new Date().toISOString(),
+    providerStatus: "ok"
+  };
+}
+
+async function fetchJson(url, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs || 4500);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Luvio/0.1 research data adapter",
+        Accept: "application/json",
+        ...(options.headers || {})
+      }
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`${response.status} ${text.slice(0, 160)}`);
+    }
+    return JSON.parse(text);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchText(url, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs || 4500);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 Luvio/0.1",
+        Accept: "text/plain,*/*",
+        ...(options.headers || {})
+      }
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`${response.status} ${text.slice(0, 160)}`);
+    }
+    return text;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchTencentQuote(ticker) {
+  const symbol = toTencentHongKongSymbol(ticker);
+  const text = await fetchText(`https://qt.gtimg.cn/q=${symbol}`);
+  const match = text.match(/="(.+)";?\s*$/);
+  if (!match) throw new Error("Tencent quote 没有返回报价");
+  const fields = match[1].split("~");
+  const price = numberOrNull(fields[3]);
+  if (!price) throw new Error("Tencent quote 缺少价格");
+  return buildSnapshot("Tencent Finance", ticker, {
+    currency: "HKD",
+    price,
+    previousClose: fields[4],
+    open: fields[5],
+    volume: fields[36] || fields[6],
+    change: fields[31],
+    changePercent: fields[32],
+    high: fields[33],
+    low: fields[34],
+    pe: fields[39],
+    marketCap: fields[44] ? Number(fields[44]) * 100000000 : null,
+    week52High: fields[48],
+    week52Low: fields[49],
+    asOf: fields[30] ? `${fields[30].replaceAll("/", "-").replace(" ", "T")}+08:00` : undefined
+  });
+}
+
+async function fetchAlphaVantage(ticker) {
+  const apiKey = env("ALPHAVANTAGE_API_KEY");
+  if (!apiKey) throw new Error("missing ALPHAVANTAGE_API_KEY");
+  const symbol = toAlphaVantageSymbol(ticker);
+  const quote = await fetchJson(
+    `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(symbol)}&apikey=${apiKey}`
+  );
+  const row = quote["Global Quote"];
+  if (!row || Object.keys(row).length === 0) throw new Error("Alpha Vantage 没有返回报价");
+  return buildSnapshot("Alpha Vantage", ticker, {
+    price: row["05. price"],
+    previousClose: row["08. previous close"],
+    change: row["09. change"],
+    changePercent: String(row["10. change percent"] || "").replace("%", ""),
+    open: row["02. open"],
+    high: row["03. high"],
+    low: row["04. low"],
+    volume: row["06. volume"],
+    asOf: row["07. latest trading day"] ? `${row["07. latest trading day"]}T16:00:00+08:00` : undefined
+  });
+}
+
+async function fetchTwelveData(ticker) {
+  const apiKey = env("TWELVEDATA_API_KEY");
+  if (!apiKey) throw new Error("missing TWELVEDATA_API_KEY");
+  const symbol = toTwelveDataSymbol(ticker);
+  const quote = await fetchJson(
+    `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbol)}&apikey=${apiKey}`
+  );
+  if (quote.status === "error") throw new Error(quote.message || "Twelve Data 报错");
+  return buildSnapshot("Twelve Data", ticker, {
+    currency: quote.currency,
+    price: quote.close,
+    previousClose: quote.previous_close,
+    change: quote.change,
+    changePercent: quote.percent_change,
+    open: quote.open,
+    high: quote.high,
+    low: quote.low,
+    volume: quote.volume,
+    asOf: quote.datetime ? `${quote.datetime}T16:00:00+08:00` : undefined
+  });
+}
+
+async function fetchFinnhub(ticker) {
+  const apiKey = env("FINNHUB_API_KEY");
+  if (!apiKey) throw new Error("missing FINNHUB_API_KEY");
+  const symbol = `HK.${toHongKongSymbol(ticker)}`;
+  const quote = await fetchJson(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${apiKey}`);
+  if (!quote || quote.c === 0) throw new Error("Finnhub 没有返回报价");
+  return buildSnapshot("Finnhub", ticker, {
+    price: quote.c,
+    previousClose: quote.pc,
+    change: quote.d,
+    changePercent: quote.dp,
+    open: quote.o,
+    high: quote.h,
+    low: quote.l,
+    asOf: quote.t ? new Date(quote.t * 1000).toISOString() : undefined
+  });
+}
+
+async function fetchYahooChart(ticker) {
+  const symbol = toYahooSymbol(ticker);
+  const chart = await fetchJson(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=5d&interval=1d`);
+  const result = chart.chart?.result?.[0];
+  if (!result) throw new Error(chart.chart?.error?.description || "Yahoo 没有返回图表");
+  const meta = result.meta || {};
+  const quote = result.indicators?.quote?.[0] || {};
+  const lastIndex = (result.timestamp || []).length - 1;
+  return buildSnapshot("Yahoo Finance", ticker, {
+    currency: meta.currency,
+    price: meta.regularMarketPrice,
+    previousClose: meta.chartPreviousClose || meta.previousClose,
+    open: quote.open?.[lastIndex],
+    high: quote.high?.[lastIndex],
+    low: quote.low?.[lastIndex],
+    volume: quote.volume?.[lastIndex],
+    asOf: meta.regularMarketTime ? new Date(meta.regularMarketTime * 1000).toISOString() : undefined
+  });
+}
+
+export async function getMarketSnapshot(ticker) {
+  const providers = [fetchTencentQuote, fetchFinnhub, fetchAlphaVantage, fetchTwelveData, fetchYahooChart];
+  const errors = [];
+  for (const provider of providers) {
+    try {
+      return await provider(ticker);
+    } catch (error) {
+      errors.push(error.message);
+    }
+  }
+  return {
+    source: "未接入",
+    ticker: normalizeTicker(ticker),
+    currency: "HKD",
+    price: null,
+    previousClose: null,
+    change: null,
+    changePercent: null,
+    open: null,
+    high: null,
+    low: null,
+    volume: null,
+    marketCap: null,
+    pe: null,
+    dividendYield: null,
+    week52High: null,
+    week52Low: null,
+    asOf: new Date().toISOString(),
+    providerStatus: "missing",
+    errors
+  };
+}
+
+export function marketSnapshotToMarkdown(snapshot) {
+  if (!snapshot || snapshot.providerStatus !== "ok") {
+    return "实时行情：尚未接入可用行情源。";
+  }
+  return [
+    `实时行情来源：${snapshot.source}`,
+    `时间：${snapshot.asOf}`,
+    `价格：${snapshot.price ?? "缺失"} ${snapshot.currency}`,
+    `涨跌：${snapshot.change ?? "缺失"} / ${snapshot.changePercent ?? "缺失"}%`,
+    `成交量：${snapshot.volume ?? "缺失"}`,
+    `市值：${snapshot.marketCap ?? "缺失"}`,
+    `PE：${snapshot.pe ?? "缺失"}`,
+    `股息率：${snapshot.dividendYield ?? "缺失"}`
+  ].join("\n");
+}

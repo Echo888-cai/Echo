@@ -1,0 +1,8 @@
+.env
+.DS_Store
+node_modules/
+luvio.db
+luvio.db-*
+*.log
+dist/
+coverage/
