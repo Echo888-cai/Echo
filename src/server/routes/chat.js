@@ -51,6 +51,63 @@ function backendGapLines(panel, dataSources = {}) {
   return gaps.length ? gaps : ["当前关键数据源基本可用，下一步主要是提高来源覆盖和交叉校验。"];
 }
 
+function sentenceJoin(items = [], fallback = "") {
+  const clean = items.map((item) => String(item || "").replace(/[。；;,\s]+$/g, "").trim()).filter(Boolean);
+  if (!clean.length) return fallback;
+  return clean.join("；") + "。";
+}
+
+function metricsText(profile) {
+  if (!Array.isArray(profile?.metrics) || !profile.metrics.length) return "";
+  return profile.metrics
+    .slice(0, 4)
+    .map((metric) => {
+      const [name, value, note] = metric;
+      return `${name}偏${value}${note ? `，需要跟踪${note}` : ""}`;
+    })
+    .join("；") + "。";
+}
+
+function buildInferenceSection({ panel, question, dataSources }) {
+  const profile = companyByTicker(panel?.ticker) || {};
+  const name = panel?.companyName || profile.nameZh || panel?.ticker || "这家公司";
+  const business = sentenceJoin(
+    profile.businessModel || [],
+    `${name} 的商业模式需要从收入来源、利润池、客户粘性和资本开支强度拆开看。`
+  );
+  const moat = sentenceJoin(
+    (profile.moat || []).slice(0, 5).map((item) => `${item}是核心壁垒之一`),
+    "目前只能先从规模效应、客户关系、品牌和渠道判断壁垒。"
+  );
+  const risks = sentenceJoin(
+    (profile.risks || []).slice(0, 5).map((item) => `${item}会削弱这个逻辑`),
+    "主要证伪点在竞争、监管、利润率和现金流。"
+  );
+  const metrics = metricsText(profile);
+  const questionHint = /赚|盈利|利润|现金流/.test(question)
+    ? "所以问它赚不赚钱，不能只看净利润，而要看高毛利业务占比、经营现金流、资本开支和股东回报是不是同向。"
+    : "所以问它最近怎么样，重点不是短期涨跌，而是这些利润池有没有继续兑现、风险有没有收敛。";
+  const financialGap = dataSources.financials?.status !== "ok";
+  const filingsGap = dataSources.filings?.status !== "ok";
+  const gapText = financialGap || filingsGap
+    ? "本轮财报三表或公告口径还没补齐，所以我不能把这个推断写成确定结论；但商业逻辑本身仍然可以先判断。"
+    : "这轮数据源能支撑更强判断，下一步是把结论和最新财报逐项对齐。";
+
+  return [
+    `${name} 的判断不能停在“数据不足”。我会先按商业逻辑做推断，再用财报和公告去验证。`,
+    `第一层是赚钱机制：${business}${questionHint}`,
+    `第二层是护城河：${moat}护城河真正有价值的地方，不是听起来强，而是能不能带来更低获客成本、更高留存、更稳利润率和更强自由现金流。`,
+    metrics ? `第三层是财务兑现：${metrics}如果这些指标不能同步改善，商业模式再好也会变成估值故事。` : `第三层是财务兑现：目前缺少完整三表，我会先看收入质量、利润率、自由现金流和回购/分红四个方向。`,
+    `第四层是重估变量：市场愿不愿意给它更高估值，取决于增长叙事是否重新成立，以及利润和现金流能否证明投入不是无底洞。${risks}`,
+    `${gapText} 换句话说，现在最有价值的不是给一个硬结论，而是把“什么会让逻辑变好/变坏”先讲清楚。`
+  ].join("\n\n");
+}
+
+function thesisLine(prefix, items, fallback) {
+  const text = sentenceJoin(items || [], fallback).replace(/。$/g, "");
+  return `${prefix}：${text}。`;
+}
+
 function sourceLines(panel, dataSources = {}) {
   const explicit = Array.isArray(panel?.sources)
     ? panel.sources
@@ -124,6 +181,7 @@ function researchReplyFromPanel(panel, question = "", dataSources = {}) {
   const risk = driver(panel, "风险信号");
   const shareholder = driver(panel, "股东回报");
   const name = panel.companyName || panel.ticker || "这家公司";
+  const profile = companyByTicker(panel.ticker) || {};
   const fundamentalText = usefulSummary(
     fundamental,
     "结构化财务字段还不完整，先按商业模式、行业位置和后续财报验证做低置信度判断"
@@ -158,12 +216,12 @@ function researchReplyFromPanel(panel, question = "", dataSources = {}) {
     `5. 风险：${humanStatus(risk?.status)}。${riskText}。`,
     "",
     "推断",
-    `${name} 的投资判断要拆成两层：第一层是商业模式有没有赚钱机制，第二层是利润和现金流能不能稳定兑现。${/赚|盈利|利润|现金流/.test(question) ? "如果只是问“赚不赚钱”，我会先看收入质量、毛利率、经营利润率、自由现金流和资本开支，而不是只看净利润。" : "如果只是看短期涨跌，容易忽略真正驱动股价重估的是基本面兑现和风险收敛。"}`,
+    buildInferenceSection({ panel, question, dataSources }),
     "",
     "估值 / 风险",
-    "Bull Thesis：如果后续财报证明收入恢复、利润率稳定、自由现金流没有继续恶化，同时估值口径补齐后仍有安全边际，市场会重新给它研究价值。",
-    "Bear Thesis：如果竞争、监管、投入周期或客户需求继续压低利润和现金流，所谓便宜可能只是逻辑重估，而不是赔率改善。",
-    `Base Case：在数据完整度 ${panel.dataCompleteness ?? 0}% 的情况下，我会把它放在观察/补充材料区间，先验证关键指标，再谈更强结论。`,
+    thesisLine("Bull Thesis", profile.bull, "如果后续财报证明收入恢复、利润率稳定、自由现金流没有继续恶化，同时估值口径补齐后仍有安全边际，市场会重新给它研究价值"),
+    thesisLine("Bear Thesis", profile.bear, "如果竞争、监管、投入周期或客户需求继续压低利润和现金流，所谓便宜可能只是逻辑重估，而不是赔率改善"),
+    `Base Case：我会把它先放在观察池，而不是给硬判断。观察重点是：${(profile.monitors || ["收入增速", "利润率", "自由现金流", "回购/分红", "监管和竞争"]).slice(0, 5).join("、")}。这些指标改善，赔率才会变好；如果同步恶化，低估值也可能是价值陷阱。`,
     "",
     "动作",
     "以下内容仅供分析参考，不构成投资建议。",
@@ -180,7 +238,7 @@ function researchReplyFromPanel(panel, question = "", dataSources = {}) {
     `3. ${valuation?.summary ? "估值修复没有基本面支撑" : "估值口径补齐后发现并不便宜"}。`,
     `4. ${missing.length ? `关键缺口长期补不上：${missing.slice(0, 4).join("、")}` : "新增公告出现与当前判断相反的信息"}。`,
     "",
-    `我的判断：${name} 现在是“${status}、置信度${panel.confidence || "低"}、需要用下一组财报和公告验证”的标的。关键不是赌一个反弹，而是确认业务增长、利润质量和现金流能不能穿透当前风险。`,
+    `我的判断：${name} 现在不能只看价格，也不能因为缺几项数据就放弃判断。更准确的说法是：商业逻辑先成立一部分，但最终要靠利润质量、自由现金流和股东回报来兑现。关键不是赌一个反弹，而是确认业务增长、利润质量和现金流能不能穿透当前风险。`,
     "",
     "来源：",
     ...sourceLines(panel, dataSources),
@@ -283,6 +341,12 @@ function buildChatPrompt(question, panel, dataSources = {}) {
   const profile = companyByTicker(panel.ticker);
   const moat = profile?.moat?.join("、") || "本地档案暂缺";
   const businessModel = profile?.businessModel?.join("；") || "本地档案暂缺";
+  const profileMetrics = Array.isArray(profile?.metrics)
+    ? profile.metrics.map((m) => `${m[0]}=${m[1]}（${m[2] || "待验证"}）`).join("；")
+    : "本地档案暂缺";
+  const bull = profile?.bull?.join("；") || "本地档案暂缺";
+  const bear = profile?.bear?.join("；") || "本地档案暂缺";
+  const monitors = profile?.monitors?.join("、") || "收入增速、利润率、自由现金流、回购/分红";
   const moatMode = isMoatQuestion(question);
   return `用户问题：${question}
 
@@ -304,6 +368,10 @@ ${sources}
 本地公司档案：
 - 护城河：${moat}
 - 商业模式：${businessModel}
+- 财务观察：${profileMetrics}
+- Bull：${bull}
+- Bear：${bear}
+- 监控项：${monitors}
 
 回答规则：
 - 输出中文纯文本，可以用短标题，但不要 Markdown 表格。
@@ -313,7 +381,7 @@ ${sources}
 - “事实”尽量编号，引用当前可用数据；不能编造具体数值。若某项缺失，写“当前未核到/来源缺失”，但继续给推断。
 - 不要使用“暂不评分”“完整度xx%”“需要补充材料”这种产品状态词，改成研究语言：当前未核到、置信度下降、后台应接入某类源。
 - “还缺什么”必须说清楚后台该补什么数据源，例如财报三表、HKEX 公告、公司 IR、web 搜索证据、一致预期。
-- “推断”要把模型自己的商业判断讲出来：商业模式、利润质量、现金流、行业竞争、估值叙事。
+- “推断”必须是全回答的信息密度最高部分，不能少于 4 个自然段；必须依次讲：赚钱机制、护城河是否能转成利润、财务兑现路径、估值重估变量。必须使用上面的本地公司档案，不能只写“第一层/第二层”的空框架。
 - 对“赚不赚钱”，必须先回答赚钱机制和盈利质量：是否有收入来源、利润是否稳定、现金流是否支撑。
 - 不允许只说数据不足；数据不足只能作为置信度和证伪条件的一部分。
 - 禁止买入/卖出/持有建议，使用“观察、补充验证、赔率改善、逻辑重估”等研究语言。
