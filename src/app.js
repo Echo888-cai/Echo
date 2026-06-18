@@ -5,7 +5,8 @@ const storeKeys = {
   thread: "luvio.v3.thread",
   company: "luvio.v3.company",
   panel: "luvio.v3.panel",
-  documents: "luvio.v3.documents"
+  documents: "luvio.v3.documents",
+  sessionId: "luvio.v3.sessionId"
 };
 
 const statusLabels = {
@@ -39,6 +40,8 @@ let isBusy = false;
 let busyStartedAt = 0;
 let busyLabel = "模型思考中";
 let busyTimer = null;
+let recentSessions = [];
+let sessionsLoaded = false;
 
 function readStore(key, fallback) {
   try {
@@ -50,6 +53,10 @@ function readStore(key, fallback) {
 
 function writeStore(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
+}
+
+function clearStore(key) {
+  localStorage.removeItem(key);
 }
 
 function esc(value = "") {
@@ -102,6 +109,15 @@ function getDocuments() {
 
 function setDocuments(documents) {
   writeStore(storeKeys.documents, documents.slice(-12));
+}
+
+function getSessionId() {
+  return readStore(storeKeys.sessionId, null);
+}
+
+function setSessionId(id) {
+  if (id) writeStore(storeKeys.sessionId, id);
+  else clearStore(storeKeys.sessionId);
 }
 
 function statusLabel(status) {
@@ -257,6 +273,17 @@ async function refreshStatus() {
   }
 }
 
+async function refreshSessions() {
+  try {
+    const data = await api("/api/research/sessions?limit=30");
+    recentSessions = data.sessions || [];
+  } catch {
+    recentSessions = [];
+  } finally {
+    sessionsLoaded = true;
+  }
+}
+
 function appendMessage(role, content, meta = {}) {
   const message = { id: uid("msg"), role, content, meta, createdAt: new Date().toISOString() };
   setThread([...getThread(), message]);
@@ -272,9 +299,57 @@ function clearResearch() {
   setThread([]);
   setPanel(null);
   setCompany(null);
+  setDocuments([]);
+  setSessionId(null);
   toast("已新建研究。");
   location.hash = "#/";
   render();
+}
+
+function apiHistory(question = "") {
+  const thread = getThread();
+  const last = thread[thread.length - 1];
+  const samePendingQuestion = last?.role === "user" && String(last.content || "").trim() === String(question || "").trim();
+  return (samePendingQuestion ? thread.slice(0, -1) : thread)
+    .slice(-16)
+    .map((m) => ({ role: m.role, content: m.content, meta: m.meta || {}, createdAt: m.createdAt }));
+}
+
+function sessionTitle(fallbackQuestion = "") {
+  const firstUser = getThread().find((message) => message.role === "user");
+  return String(firstUser?.content || fallbackQuestion || "新研究").slice(0, 80);
+}
+
+function fallbackThreadFromSession(session) {
+  const thread = Array.isArray(session.thread) ? session.thread.filter((m) => m?.role && m?.content) : [];
+  if (thread.length) return thread.slice(-80);
+  const restored = [];
+  if (session.question) restored.push({ id: uid("msg"), role: "user", content: session.question, createdAt: session.createdAt });
+  const content = session.reportMarkdown || session.fullResearch || "";
+  if (content) restored.push({ id: uid("msg"), role: "assistant", content, createdAt: session.updatedAt });
+  return restored;
+}
+
+async function loadSession(id) {
+  if (!id || isBusy) return;
+  try {
+    const data = await api(`/api/research/sessions/${encodeURIComponent(id)}`);
+    const session = data.session;
+    if (!session) throw new Error("未找到研究会话");
+    const panel = session.decisionPanel || null;
+    let company = null;
+    if (session.ticker) company = await resolveCompany(session.ticker);
+    if (!company && panel?.ticker) company = { ticker: panel.ticker, nameZh: panel.companyName || panel.ticker };
+    setSessionId(session.id);
+    setCompany(company);
+    setPanel(panel);
+    setThread(fallbackThreadFromSession(session));
+    location.hash = "#/";
+    toast("已恢复历史研究。");
+    render();
+  } catch (error) {
+    toast(error.message || "恢复历史失败。");
+  }
 }
 
 async function sendChat(question) {
@@ -297,13 +372,18 @@ async function sendChat(question) {
     body: JSON.stringify({
       question,
       company,
-      history: getThread().slice(-16).map((m) => ({ role: m.role, content: m.content })),
+      sessionId: getSessionId(),
+      sessionTitle: sessionTitle(question),
+      history: apiHistory(question),
       documents: getDocuments(),
       memory: {}
     })
   });
+  if (result.sessionId) setSessionId(result.sessionId);
   if (result.decisionPanel) setPanel(result.decisionPanel);
   appendMessage("assistant", result.content || "本轮没有生成有效回复。", { mode: result.mode });
+  await refreshSessions();
+  render();
 }
 
 async function generateDeepResearch() {
@@ -324,17 +404,21 @@ async function generateDeepResearch() {
       body: JSON.stringify({
         question: lastQuestion,
         company,
+        sessionId: getSessionId(),
+        sessionTitle: sessionTitle(lastQuestion),
         documents: getDocuments(),
         history: thread.slice(-16).map((m) => ({ role: m.role, content: m.content })),
         memory: {}
       })
     });
+    if (result.sessionId) setSessionId(result.sessionId);
     if (result.decisionPanel) setPanel(result.decisionPanel);
     appendMessage("assistant", result.markdown || "深度研究没有生成有效内容。", {
       type: "deep_research",
       mode: result.mode,
       model: result.model
     });
+    await refreshSessions();
   } catch (error) {
     appendMessage("assistant", `深度研究失败：${error.message || "未知错误"}。`);
   } finally {
@@ -396,30 +480,27 @@ function renderResearch() {
   const health = sourceHealth(panel);
   const docs = getDocuments();
   const lastUser = [...thread].reverse().find((message) => message.role === "user");
+  const activeSessionId = getSessionId();
 
   shell(`
     <section class="workspace">
       <aside class="sidebar">
-        <div class="sidebar-hero">
-          <strong>LUVIO</strong>
-          <span>Open Financial Console</span>
-        </div>
         <button class="primary wide" data-action="new">新建研究</button>
         <section class="research-snapshot">
-          <p>当前研究</p>
+          <p>当前会话</p>
           <h2>${esc(panel?.companyName || company?.nameZh || "未选择公司")}</h2>
           <span>${esc(company?.ticker || panel?.ticker || "输入公司名或港股代码开始")}</span>
           <div class="snapshot-meta">
             <strong>${esc(statusLabel(panel?.researchStatus))}</strong>
             <em>完整度 ${health.completeness}%</em>
           </div>
+          <div class="session-facts">
+            <span>当前问题</span><strong>${esc(lastUser?.content?.slice(0, 34) || "暂无")}</strong>
+            <span>对话轮次</span><strong>${Math.ceil(thread.filter((m) => m.role === "user").length)}</strong>
+            <span>资料</span><strong>${docs.length} 份</strong>
+          </div>
         </section>
-        <section class="side-block">
-          <h3>上下文</h3>
-          <div class="context-row"><span>当前问题</span><strong>${esc(lastUser?.content?.slice(0, 34) || "暂无")}</strong></div>
-          <div class="context-row"><span>对话轮次</span><strong>${Math.ceil(thread.length / 2)}</strong></div>
-          <div class="context-row"><span>资料</span><strong>${docs.length} 份</strong></div>
-        </section>
+        ${renderSessionHistory(activeSessionId)}
       </aside>
 
       <section class="desk">
@@ -431,7 +512,7 @@ function renderResearch() {
           </div>
           <div class="desk-status">
             <strong>${esc(statusLabel(panel?.researchStatus))}</strong>
-            <span>${health.connected.length} 项数据已接入</span>
+            <span>${activeSessionId ? "已保存到 SQLite" : `${health.connected.length} 项数据已接入`}</span>
           </div>
         </div>
         <div class="conversation">
@@ -441,6 +522,44 @@ function renderResearch() {
         ${renderComposer(company, health)}
       </section>
     </section>`);
+}
+
+function renderSessionHistory(activeSessionId) {
+  const body = !sessionsLoaded
+    ? `<div class="history-empty">正在读取历史...</div>`
+    : recentSessions.length
+      ? `<div class="session-list">${recentSessions.map((session) => renderSessionItem(session, activeSessionId)).join("")}</div>`
+      : `<div class="history-empty">还没有历史研究。完成第一轮回答后会自动保存。</div>`;
+  return `<section class="history-panel">
+    <div class="side-title"><h3>历史研究</h3><span>${recentSessions.length || 0}</span></div>
+    ${body}
+  </section>`;
+}
+
+function renderSessionItem(session, activeSessionId) {
+  const active = session.id === activeSessionId;
+  const title = session.title || session.question || session.companyName || session.ticker || "未命名研究";
+  const company = session.companyName || session.company_name || session.ticker || "研究对象";
+  const turns = session.turnCount || session.turn_count || 1;
+  return `<button class="session-item ${active ? "is-active" : ""}" type="button" data-action="load-session" data-id="${esc(session.id)}">
+    <strong>${esc(title)}</strong>
+    <span>${esc(company)} · ${turns} 轮 · ${esc(formatSessionTime(session.updated_at || session.updatedAt))}</span>
+  </button>`;
+}
+
+function formatSessionTime(value) {
+  if (!value) return "刚刚";
+  const normalized = String(value).includes("T") ? String(value) : `${String(value).replace(" ", "T")}Z`;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 16);
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(date);
 }
 
 function renderWaitingCard() {
@@ -523,6 +642,13 @@ function renderSettings() {
       <article class="settings-card"><h2>前台策略</h2>
         <p>报告页、关注页、最近报告、逐轮最近对话已从前台移除。当前产品只保留一个连续研究对话流。</p>
       </article>
+      <article class="settings-card"><h2>后台数据策略</h2>
+        <p>用户不需要自己接 API。行情、财报、公告、新闻和 web 搜索由部署后台统一接入，agent 只展示证据和缺口。</p>
+        <div class="setting-row"><span>会话存储</span><strong>SQLite research_sessions</strong></div>
+        <div class="setting-row"><span>财报数学</span><strong>FMP / EODHD / Finnhub</strong></div>
+        <div class="setting-row"><span>公开证据</span><strong>HKEX + Web Search</strong></div>
+        <a class="doc-link" href="/docs/DATA_SOURCE_STRATEGY.md" target="_blank" rel="noopener noreferrer">查看接入策略</a>
+      </article>
     </div>
   </section>`);
 }
@@ -558,6 +684,7 @@ document.addEventListener("click", async (event) => {
   if (!target) return;
   const action = target.dataset.action;
   if (action === "new") clearResearch();
+  if (action === "load-session") await loadSession(target.dataset.id);
   if (action === "settings") location.hash = "#/settings";
   if (action === "quick") {
     const input = document.querySelector(".composer textarea");
@@ -585,5 +712,5 @@ document.addEventListener("keydown", (event) => {
 
 window.addEventListener("hashchange", render);
 
-await refreshStatus();
+await Promise.all([refreshStatus(), refreshSessions()]);
 render();

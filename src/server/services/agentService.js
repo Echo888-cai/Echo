@@ -161,7 +161,17 @@ function memoryToMarkdown(memory = {}) {
  *   }
  */
 export async function runAgent(input) {
-  const { question = "", company, filings = [], marketSnapshot: suppliedMarketSnapshot = null, history = [], memory = {}, documents = [] } = input || {};
+  const {
+    question = "",
+    company,
+    filings = [],
+    marketSnapshot: suppliedMarketSnapshot = null,
+    history = [],
+    memory = {},
+    documents = [],
+    sessionId = null,
+    sessionTitle = ""
+  } = input || {};
   if (!company?.ticker) {
     const err = new Error("缺少公司上下文");
     err.statusCode = 400;
@@ -182,7 +192,8 @@ export async function runAgent(input) {
     return assembleLocal({
       question, company, filings, marketSnapshot: data.marketSnapshot, newsSnapshot: data.newsSnapshot,
       financialsData: data.financialsData, filingsData: data.filingsData, estimatesData: data.estimatesData,
-      documents, memory: effectiveMemory, userContext, mode: "model_key_missing", dataSources: data
+      documents, memory: effectiveMemory, userContext, mode: "model_key_missing", dataSources: data,
+      history, sessionId, sessionTitle
     });
   }
 
@@ -272,11 +283,18 @@ export async function runAgent(input) {
     dataSources: summarizeDataSources(data)
   };
 
-  persistSession(result, profile, question, userContext, repaired);
+  result.sessionId = persistSession(result, profile, {
+    question,
+    userContext,
+    repaired,
+    sessionId,
+    sessionTitle,
+    history
+  });
   return result;
 }
 
-function assembleLocal({ question, company, filings, marketSnapshot, newsSnapshot, financialsData, filingsData, estimatesData, documents, memory, userContext, mode, dataSources }) {
+function assembleLocal({ question, company, filings, marketSnapshot, newsSnapshot, financialsData, filingsData, estimatesData, documents, memory, userContext, mode, dataSources, history = [], sessionId = null, sessionTitle = "" }) {
   const profile = companyByTicker(company.ticker) || company;
   const localContent = buildLocalContent({
     question, company: profile, filings,
@@ -298,7 +316,14 @@ function assembleLocal({ question, company, filings, marketSnapshot, newsSnapsho
     dataSources: summarizeDataSources(dataSources)
   };
 
-  persistSession(result, profile, question, userContext, false);
+  result.sessionId = persistSession(result, profile, {
+    question,
+    userContext,
+    repaired: false,
+    sessionId,
+    sessionTitle,
+    history
+  });
   return result;
 }
 
@@ -312,10 +337,22 @@ function summarizeDataSources({ marketSnapshot, newsSnapshot, financialsData, fi
   };
 }
 
-function persistSession(result, profile, question, userContext, repaired) {
+function sessionThread(history = [], question = "", content = "") {
+  const thread = Array.isArray(history) ? [...history] : [];
+  const last = thread[thread.length - 1];
+  if (!(last?.role === "user" && String(last.content || "").trim() === String(question || "").trim())) {
+    thread.push({ role: "user", content: question, createdAt: new Date().toISOString() });
+  }
+  if (content) thread.push({ role: "assistant", content, createdAt: new Date().toISOString() });
+  return thread;
+}
+
+function persistSession(result, profile, { question, userContext, repaired, sessionId, sessionTitle, history }) {
   try {
-    saveResearchSession({
+    const saved = saveResearchSession({
+      id: sessionId || undefined,
       ticker: profile.ticker,
+      title: sessionTitle || question,
       question,
       status: result.mode === "model" ? "completed" : "completed",
       decisionPanel: result.decisionPanel,
@@ -323,11 +360,14 @@ function persistSession(result, profile, question, userContext, repaired) {
       reportMarkdown: result.content,
       dataSources: result.dataSources,
       researchStatus: result.decisionPanel?.researchStatus,
-      confidence: result.decisionPanel?.confidence
+      confidence: result.decisionPanel?.confidence,
+      thread: sessionThread(history, question, result.content)
     });
+    return saved.id;
   } catch (err) {
     // Persistence is best-effort. Don't break the response.
     console.warn("research_sessions 持久化失败:", err?.message || err);
+    return sessionId || null;
   }
 }
 

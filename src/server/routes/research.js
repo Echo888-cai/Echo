@@ -18,7 +18,10 @@ export async function handleSessionList(req, res) {
     const sessions = listResearchSessions({ ticker, limit });
     const withPreview = sessions.map(s => ({
       ...s,
+      title: s.title || s.question || s.company_name || s.ticker,
       preview: s.question ? String(s.question).slice(0, 120) : "",
+      companyName: s.company_name || s.ticker,
+      turnCount: s.turn_count || 0,
       // The decision panel and full research are not included in list
     }));
     sendOk(res, { sessions: withPreview, count: withPreview.length });

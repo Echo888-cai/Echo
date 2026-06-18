@@ -81,11 +81,17 @@ Indexed on `(ticker, as_of)`.
 |--------|------|-------|
 | `id` | TEXT PK | UUID-style session ID |
 | `ticker` | TEXT FK → companies | |
-| `question` | TEXT | Original research question |
+| `title` | TEXT | Sidebar/history title, usually the first user question |
+| `question` | TEXT | Latest research question in the session |
 | `status` | TEXT | `draft`, `in_progress`, `completed` |
 | `report_markdown` | TEXT | Full research report |
 | `rating` | TEXT | Investment rating |
 | `confidence` | TEXT | High / Medium / Low |
+| `decision_panel` | TEXT | Serialized structured research panel |
+| `full_research` | TEXT | Latest assistant answer / long-form research |
+| `data_sources` | TEXT | Serialized source health snapshot |
+| `thread_json` | TEXT | Serialized conversation messages for restore |
+| `turn_count` | INTEGER | Number of user turns in the session |
 | `created_at` / `updated_at` | TEXT | |
 
 Indexed on `(ticker)`.
@@ -131,21 +137,32 @@ saveMarketSnapshot({
 ### Research sessions
 
 ```js
-import { saveSession, getRecentSessions } from "./src/db/index.js";
+import { saveResearchSession, listResearchSessions, getResearchSession } from "./src/server/repositories/researchSessions.js";
 
-// Save after agent run
-saveSession({
+// Save or update after an agent run. Passing the same id updates the same conversation.
+saveResearchSession({
   id: "session_abc123",
   ticker: "0700.HK",
+  title: "腾讯最近怎么样？",
   question: "腾讯的护城河是什么？",
   status: "completed",
   reportMarkdown: "# 研究结论\n...",
-  rating: "买入",
-  confidence: "中"
+  researchStatus: "watch",
+  confidence: "中",
+  thread: [
+    { role: "user", content: "腾讯最近怎么样？" },
+    { role: "assistant", content: "北京时间..." },
+    { role: "user", content: "护城河怎么样？" },
+    { role: "assistant", content: "结论..." }
+  ]
 });
 
 // Get recent 10 sessions
-const recent = getRecentSessions(10);
+const recent = listResearchSessions({ limit: 10 });
+
+// Restore one conversation
+const session = getResearchSession("session_abc123");
+console.log(session.thread);
 ```
 
 ## Managing the company universe

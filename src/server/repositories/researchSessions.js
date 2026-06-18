@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 const SCHEMA = {
   id: "TEXT PRIMARY KEY",
   ticker: "TEXT",
+  title: "TEXT",
   question: "TEXT",
   status: "TEXT NOT NULL DEFAULT 'draft'",
   report_markdown: "TEXT",
@@ -22,6 +23,8 @@ const SCHEMA = {
   decision_panel: "TEXT",
   full_research: "TEXT",
   data_sources: "TEXT",
+  thread_json: "TEXT",
+  turn_count: "INTEGER",
   created_at: "TEXT NOT NULL DEFAULT (datetime('now'))",
   updated_at: "TEXT NOT NULL DEFAULT (datetime('now'))"
 };
@@ -51,15 +54,17 @@ export function saveResearchSession(payload) {
   if (!payload?.ticker) throw new Error("research_sessions 需要 ticker");
   ensureColumns();
   const db = getDb();
-  const id = payload.id || `s_${randomUUID()}`;
+  const id = payload.id || payload.sessionId || `s_${randomUUID()}`;
+  const thread = Array.isArray(payload.thread) ? payload.thread.slice(-80) : null;
   const stmt = db.prepare(`
     INSERT INTO research_sessions
-      (id, ticker, question, status, report_markdown, rating, confidence, decision_panel, full_research, data_sources, updated_at)
+      (id, ticker, title, question, status, report_markdown, rating, confidence, decision_panel, full_research, data_sources, thread_json, turn_count, updated_at)
     VALUES
-      (@id, @ticker, @question, @status, @reportMarkdown, @rating, @confidence, @decisionPanel, @fullResearch, @dataSources, datetime('now'))
+      (@id, @ticker, @title, @question, @status, @reportMarkdown, @rating, @confidence, @decisionPanel, @fullResearch, @dataSources, @threadJson, @turnCount, datetime('now'))
     ON CONFLICT(id) DO UPDATE SET
       ticker = excluded.ticker,
-      question = excluded.question,
+      title = COALESCE(NULLIF(excluded.title, ''), research_sessions.title, excluded.question),
+      question = COALESCE(NULLIF(excluded.question, ''), research_sessions.question),
       status = excluded.status,
       report_markdown = excluded.report_markdown,
       rating = excluded.rating,
@@ -67,11 +72,14 @@ export function saveResearchSession(payload) {
       decision_panel = excluded.decision_panel,
       full_research = excluded.full_research,
       data_sources = excluded.data_sources,
+      thread_json = COALESCE(excluded.thread_json, research_sessions.thread_json),
+      turn_count = COALESCE(excluded.turn_count, research_sessions.turn_count),
       updated_at = datetime('now')
   `);
   stmt.run({
     id,
     ticker: payload.ticker,
+    title: payload.title || payload.sessionTitle || payload.question || "",
     question: payload.question || "",
     status: payload.status || "completed",
     reportMarkdown: payload.reportMarkdown || null,
@@ -79,7 +87,13 @@ export function saveResearchSession(payload) {
     confidence: payload.confidence || null,
     decisionPanel: payload.decisionPanel ? JSON.stringify(payload.decisionPanel) : null,
     fullResearch: payload.fullResearch || null,
-    dataSources: payload.dataSources ? JSON.stringify(payload.dataSources) : null
+    dataSources: payload.dataSources ? JSON.stringify(payload.dataSources) : null,
+    threadJson: thread ? JSON.stringify(thread) : null,
+    turnCount: Number.isFinite(payload.turnCount)
+      ? payload.turnCount
+      : thread
+        ? thread.filter((message) => message?.role === "user").length
+        : null
   });
   return { id };
 }
@@ -92,6 +106,7 @@ export function getResearchSession(id) {
   return {
     id: row.id,
     ticker: row.ticker,
+    title: row.title || row.question,
     question: row.question,
     status: row.status,
     reportMarkdown: row.report_markdown,
@@ -100,6 +115,8 @@ export function getResearchSession(id) {
     decisionPanel: row.decision_panel ? safeParse(row.decision_panel) : null,
     fullResearch: row.full_research,
     dataSources: row.data_sources ? safeParse(row.data_sources) : null,
+    thread: row.thread_json ? safeParse(row.thread_json) : null,
+    turnCount: row.turn_count || 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -109,8 +126,23 @@ export function listResearchSessions({ limit = 20, ticker } = {}) {
   ensureColumns();
   const db = getDb();
   const rows = ticker
-    ? db.prepare("SELECT id, ticker, question, status, rating, confidence, created_at, updated_at FROM research_sessions WHERE ticker = ? ORDER BY updated_at DESC LIMIT ?").all(ticker, limit)
-    : db.prepare("SELECT id, ticker, question, status, rating, confidence, created_at, updated_at FROM research_sessions ORDER BY updated_at DESC LIMIT ?").all(limit);
+    ? db.prepare(`
+        SELECT s.id, s.ticker, s.title, s.question, s.status, s.rating, s.confidence,
+               s.turn_count, s.created_at, s.updated_at, c.name_zh AS company_name
+        FROM research_sessions s
+        LEFT JOIN companies c ON c.ticker = s.ticker
+        WHERE s.ticker = ?
+        ORDER BY s.updated_at DESC
+        LIMIT ?
+      `).all(ticker, limit)
+    : db.prepare(`
+        SELECT s.id, s.ticker, s.title, s.question, s.status, s.rating, s.confidence,
+               s.turn_count, s.created_at, s.updated_at, c.name_zh AS company_name
+        FROM research_sessions s
+        LEFT JOIN companies c ON c.ticker = s.ticker
+        ORDER BY s.updated_at DESC
+        LIMIT ?
+      `).all(limit);
   return rows;
 }
 

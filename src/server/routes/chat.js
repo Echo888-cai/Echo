@@ -4,6 +4,7 @@ import { RESEARCH_STATUS_LABELS } from "../schemas/agentPanel.js";
 import { callModel, getProviderStatus } from "../services/modelGateway.js";
 import { withTimeout } from "../utils/async.js";
 import { companyByTicker } from "../../data.js";
+import { saveResearchSession } from "../repositories/researchSessions.js";
 
 function formatBeijingMinute(date = new Date()) {
   const parts = new Intl.DateTimeFormat("zh-CN", {
@@ -182,10 +183,12 @@ export async function handleChatApi(req, res) {
       if (chatModel?.content && chatModel.content.length < 9000) content = chatModel.content;
     }
     content = normalizeResearchAnswer(content, result.decisionPanel, result.dataSources);
+    const sessionId = persistFinalChatSession(payload, result, content);
     sendJson(res, 200, {
       mode: chatModel?.content ? "chat_model" : "chat_local",
       provider: chatModel?.provider || result.provider,
       model: chatModel?.model || result.model,
+      sessionId,
       content,
       decisionPanel: result.decisionPanel,
       userContext: result.userContext,
@@ -197,6 +200,44 @@ export async function handleChatApi(req, res) {
     const status = error.statusCode || 500;
     sendJson(res, status, { error: error.message || "聊天失败" });
   }
+}
+
+function persistFinalChatSession(payload, result, content) {
+  const panel = result.decisionPanel;
+  const ticker = panel?.ticker || payload.company?.ticker;
+  if (!ticker) return payload.sessionId || result.sessionId || null;
+  const thread = buildFinalThread(payload.history, payload.question, content);
+  try {
+    const saved = saveResearchSession({
+      id: payload.sessionId || result.sessionId || undefined,
+      ticker,
+      title: payload.sessionTitle || payload.question || panel?.companyName || ticker,
+      question: payload.question || "",
+      status: "completed",
+      decisionPanel: panel,
+      fullResearch: content,
+      reportMarkdown: content,
+      dataSources: result.dataSources,
+      researchStatus: panel?.researchStatus,
+      confidence: panel?.confidence,
+      thread
+    });
+    return saved.id;
+  } catch (error) {
+    console.warn("chat session 持久化失败:", error?.message || error);
+    return payload.sessionId || result.sessionId || null;
+  }
+}
+
+function buildFinalThread(history = [], question = "", assistantContent = "") {
+  const thread = Array.isArray(history) ? [...history] : [];
+  const normalizedQuestion = String(question || "").trim();
+  const last = thread[thread.length - 1];
+  if (!(last?.role === "user" && String(last.content || "").trim() === normalizedQuestion)) {
+    thread.push({ role: "user", content: question, createdAt: new Date().toISOString() });
+  }
+  if (assistantContent) thread.push({ role: "assistant", content: assistantContent, createdAt: new Date().toISOString() });
+  return thread.slice(-80);
 }
 
 function normalizeResearchAnswer(content, panel, dataSources = {}) {
