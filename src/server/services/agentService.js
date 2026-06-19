@@ -248,7 +248,8 @@ export async function runAgent(input) {
       question, company, filings,
       marketSnapshot: data.marketSnapshot, newsSnapshot: data.newsSnapshot,
       financialsData: data.financialsData, filingsData: data.filingsData, estimatesData: data.estimatesData,
-      documents, memory: effectiveMemory, userContext, mode: "repair_failed", dataSources: data
+      documents, memory: effectiveMemory, userContext, mode: "repair_failed", dataSources: data,
+      history, sessionId, sessionTitle
     });
   }
 
