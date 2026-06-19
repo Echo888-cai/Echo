@@ -511,6 +511,7 @@ function renderResearch() {
   const panel = getPanel();
   const thread = getThread();
   const activeSessionId = getSessionId();
+  const hasResearch = Boolean(company || thread.length);
 
   shell(`
     <section class="workspace">
@@ -525,14 +526,14 @@ function renderResearch() {
       </aside>
 
       <section class="desk">
-        <div class="desk-head">
+        ${hasResearch ? `<div class="desk-head">
           <div>
             <p>Luvio Research</p>
             <h1>${company ? `${esc(company.nameZh)} ${esc(company.ticker)}` : "输入公司，开始判断"}</h1>
             <span>${company ? esc(company.industry || company.sector || "待补充") : "问一句就开始，复杂研究再沉到底层。"} </span>
           </div>
-        </div>
-        <div class="conversation">
+        </div>` : ""}
+        <div class="conversation ${hasResearch ? "" : "is-empty"}">
           ${thread.length ? thread.map(renderMessage).join("") : renderEmptyState()}
           ${isBusy ? renderWaitingCard() : ""}
         </div>

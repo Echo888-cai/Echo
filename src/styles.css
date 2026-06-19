@@ -350,6 +350,13 @@ button:disabled {
   padding: 28px 0 180px;
 }
 
+.conversation.is-empty {
+  display: grid;
+  align-items: center;
+  padding-top: 0;
+  padding-bottom: 220px;
+}
+
 .message {
   display: flex;
   margin-bottom: 22px;
@@ -509,14 +516,14 @@ button:disabled {
   display: grid;
   align-content: center;
   gap: 10px;
-  min-height: 360px;
-  padding: 42px 6px;
+  min-height: 280px;
+  padding: 18px 6px;
   color: var(--ink);
 }
 
 .empty-chat h2 {
   margin: 0;
-  font-size: 34px;
+  font-size: 36px;
   line-height: 1.08;
 }
 
@@ -821,6 +828,14 @@ button:disabled {
   .desk-head h1,
   .page-head h1 {
     font-size: 22px;
+  }
+
+  .conversation.is-empty {
+    padding-bottom: 180px;
+  }
+
+  .empty-chat h2 {
+    font-size: 30px;
   }
 
   .bubble {
