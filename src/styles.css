@@ -735,9 +735,143 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
-.answer-meta span:first-child {
-  color: var(--blue-ink);
-  background: var(--blue-soft);
+/* Confidence chip — colour-coded by level */
+.conf {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.conf::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.conf-high { color: #1c8a4d !important; background: rgba(28, 138, 77, 0.1) !important; }
+.conf-mid  { color: #b8770a !important; background: rgba(245, 166, 35, 0.12) !important; }
+.conf-low  { color: #c23934 !important; background: rgba(255, 59, 48, 0.1) !important; }
+
+/* Evidence provenance cards */
+.evidence-block {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--hairline);
+}
+
+.evidence-head {
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.evidence-cards {
+  display: grid;
+  gap: 8px;
+}
+
+.evidence-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 11px;
+  padding: 11px 13px;
+  border: 1px solid var(--hairline);
+  border-radius: 13px;
+  background: var(--panel-glass-strong);
+  cursor: pointer;
+  transition: transform 0.16s var(--ease), border-color 0.16s var(--ease-soft), box-shadow 0.16s var(--ease);
+}
+
+.evidence-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(0, 113, 227, 0.26);
+  box-shadow: var(--sh-2);
+}
+
+.evidence-badge {
+  grid-row: span 2;
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  padding: 0 9px;
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--panel-soft);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.evidence-badge.type-official { color: #1c8a4d; background: rgba(28, 138, 77, 0.1); }
+.evidence-badge.type-industry_research { color: #6936c4; background: rgba(105, 54, 196, 0.1); }
+.evidence-badge.type-financial_media,
+.evidence-badge.type-cn_financial_media { color: var(--blue-ink); background: var(--blue-soft); }
+
+.evidence-name {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidence-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.cred-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+.cred-dot.high { background: #1c8a4d; }
+.cred-dot.mid  { background: var(--amber); }
+.cred-dot.low  { background: var(--muted-2); }
+
+/* Sidebar snapshot extras */
+.snapshot-confidence {
+  margin-top: 12px;
+}
+
+.snapshot-confidence .conf {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.snapshot-export {
+  width: 100%;
+  margin-top: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.16s var(--ease), border-color 0.16s var(--ease-soft), background 0.16s var(--ease-soft);
+}
+
+.snapshot-export:hover {
+  transform: translateY(-1px);
+  border-color: var(--line-strong);
+  background: var(--panel-soft);
 }
 
 /* Waiting / thinking card */

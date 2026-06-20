@@ -318,6 +318,39 @@ async function copyMessage(id) {
   toast("已复制回答。");
 }
 
+function exportResearch() {
+  const thread = getThread();
+  if (!thread.length) {
+    toast("还没有可导出的研究。");
+    return;
+  }
+  const company = getCompany();
+  const panel = getPanel();
+  const heading = company ? `${company.nameZh || ""} ${company.ticker || ""}`.trim() : panel?.companyName || "Luvio 研究";
+  const lines = [`# ${heading} · 研究记录`, ""];
+  if (panel?.confidence) {
+    lines.push(`> 研究状态：${panel.researchStatus || "持续观察"} · 置信度：${panel.confidence}`, "");
+  }
+  for (const message of thread) {
+    lines.push(message.role === "user" ? `## 提问\n\n${message.content}` : `## Luvio\n\n${message.content}`, "");
+  }
+  const sources = Array.isArray(panel?.sources) ? panel.sources.filter((s) => s.url) : [];
+  if (sources.length) {
+    lines.push("## 来源", "", ...sources.map((s) => `- ${s.label || s.type || "来源"}：${s.url}`), "");
+  }
+  lines.push("---", "> 由 Luvio 生成，仅供研究学习，不构成投资建议。");
+  const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${(company?.ticker || panel?.ticker || "luvio").replace(/[^\w.-]/g, "")}-research.md`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+  toast("已导出 Markdown 研究记录。");
+}
+
 function clearResearch() {
   stopBusy();
   setThread([]);
@@ -452,7 +485,16 @@ async function sendChat(question) {
   appendMessage("assistant", result.content || "本轮没有生成有效回复。", {
     mode: result.mode,
     webCount: result.webEvidence?.evidence?.length ?? 0,
-    sources: dataSourceLabels(result.dataSources)
+    sources: dataSourceLabels(result.dataSources),
+    confidence: result.decisionPanel?.confidence || null,
+    evidence: (result.webEvidence?.evidence || []).slice(0, 6).map((e) => ({
+      title: e.title || e.source || "网页证据",
+      url: e.url,
+      source: e.source || e.sourceType || "web",
+      type: e.sourceType || "web",
+      cred: e.credibilityScore ?? null,
+      date: e.publishedAt || ""
+    }))
   });
   await refreshSessions();
   render();
@@ -567,6 +609,8 @@ function renderResearch() {
           <p>研究公司</p>
           <h2>${esc(panel?.companyName || company?.nameZh || "未选择公司")}</h2>
           <span>${esc(company?.ticker || panel?.ticker || "输入公司名或港股代码开始")}</span>
+          ${panel?.confidence ? `<div class="snapshot-confidence"><span class="conf conf-${panel.confidence === "高" ? "high" : panel.confidence === "低" ? "low" : "mid"}">置信度 ${esc(panel.confidence)}</span></div>` : ""}
+          ${thread.length ? `<button class="snapshot-export" type="button" data-action="export">导出研究 ↓</button>` : ""}
         </section>
         ${renderSessionHistory(activeSessionId)}
       </aside>
@@ -698,18 +742,57 @@ function renderEmptyState() {
   </div>`;
 }
 
+const SOURCE_TYPE_LABEL = {
+  official: "官方",
+  industry_research: "行研",
+  financial_media: "财经媒体",
+  cn_financial_media: "国内财经",
+  web: "网页"
+};
+
+function credLevel(score) {
+  if (typeof score !== "number") return "mid";
+  if (score >= 0.7) return "high";
+  if (score >= 0.45) return "mid";
+  return "low";
+}
+
+function renderEvidenceBlock(evidence) {
+  if (!Array.isArray(evidence) || !evidence.length) return "";
+  const cards = evidence
+    .filter((item) => item.url)
+    .map(
+      (item) => `<a class="evidence-card" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">
+      <span class="evidence-badge type-${esc(item.type || "web")}">${esc(SOURCE_TYPE_LABEL[item.type] || "网页")}</span>
+      <span class="evidence-name">${esc(item.title)}</span>
+      <span class="evidence-foot"><i class="cred-dot ${credLevel(item.cred)}"></i>${esc(item.source || "")}${item.date ? ` · ${esc(item.date)}` : ""}</span>
+    </a>`
+    )
+    .join("");
+  if (!cards) return "";
+  return `<div class="evidence-block">
+    <div class="evidence-head">证据来源 · ${evidence.filter((e) => e.url).length}</div>
+    <div class="evidence-cards">${cards}</div>
+  </div>`;
+}
+
+function renderAnswerMeta(meta = {}) {
+  const spans = [];
+  if (meta.confidence) {
+    const lvl = meta.confidence === "高" ? "high" : meta.confidence === "低" ? "low" : "mid";
+    spans.push(`<span class="conf conf-${lvl}">置信度 ${esc(meta.confidence)}</span>`);
+  }
+  if (meta.mode) spans.push(`<span>${/model/.test(meta.mode) ? "模型生成" : "本地兜底"}</span>`);
+  if (typeof meta.webCount === "number") spans.push(`<span>网页证据 ${meta.webCount} 条</span>`);
+  if (Array.isArray(meta.sources) && meta.sources.length) spans.push(`<span>数据源：${esc(meta.sources.join("/"))}</span>`);
+  return spans.length ? `<div class="answer-meta">${spans.join("")}</div>` : "";
+}
+
 function renderMessage(message) {
   if (message.role === "assistant") {
     const meta = message.meta || {};
     const title = meta.type === "deep_research" ? "DEEP RESEARCH" : "LUVIO";
     const messageId = message.id || "";
-    const statusBits = [];
-    if (meta.mode) statusBits.push(/model/.test(meta.mode) ? "模型生成" : "本地兜底");
-    if (typeof meta.webCount === "number") statusBits.push(`网页证据 ${meta.webCount} 条`);
-    if (Array.isArray(meta.sources) && meta.sources.length) statusBits.push(`数据源：${meta.sources.join("/")}`);
-    const metaRow = statusBits.length
-      ? `<div class="answer-meta">${statusBits.map((bit) => `<span>${esc(bit)}</span>`).join("")}</div>`
-      : "";
     return `<article class="message assistant">
       <div class="bubble answer-card">
         <div class="answer-brand">
@@ -717,7 +800,8 @@ function renderMessage(message) {
           <button class="copy-answer" type="button" data-action="copy-message" data-id="${esc(messageId)}">复制</button>
         </div>
         ${markdownToHtml(message.content)}
-        ${metaRow}
+        ${renderEvidenceBlock(meta.evidence)}
+        ${renderAnswerMeta(meta)}
       </div>
     </article>`;
   }
@@ -782,6 +866,7 @@ document.addEventListener("click", async (event) => {
   if (!target) return;
   const action = target.dataset.action;
   if (action === "new") clearResearch();
+  if (action === "export") exportResearch();
   if (action === "load-session") await loadSession(target.dataset.id);
   if (action === "delete-session") await deleteSession(target.dataset.id);
   if (action === "clear-sessions") await clearAllSessions();

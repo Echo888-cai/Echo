@@ -4,7 +4,7 @@ import { callModel, getProviderStatus } from "../services/modelGateway.js";
 import { companyByTicker } from "../../data.js";
 import { classifyResearchIntent } from "../services/intentClassifier.js";
 import { researchWebEvidence } from "../services/webEvidenceService.js";
-import { buildReportPrompt } from "../services/answerComposer.js";
+import { buildReportPrompt, mergeEvidenceIntoPanel } from "../services/answerComposer.js";
 import { composeReport, reportPreview } from "../services/reportComposer.js";
 import { saveResearchSession } from "../repositories/researchSessions.js";
 
@@ -55,6 +55,7 @@ export async function handleReportGenerateApi(req, res) {
     }
 
     result.webEvidence = webEvidence;
+    mergeEvidenceIntoPanel(panel, webEvidence);
     const sessionId = persistFinalReportSession(payload, result, markdown);
     sendJson(res, 200, {
       mode: model?.content ? "report_model" : "report_local",

@@ -5,7 +5,7 @@ import { companyByTicker } from "../../data.js";
 import { saveResearchSession } from "../repositories/researchSessions.js";
 import { classifyResearchIntent } from "../services/intentClassifier.js";
 import { researchWebEvidence } from "../services/webEvidenceService.js";
-import { researchReplyFromPanel, normalizeResearchAnswer, buildChatPrompt } from "../services/answerComposer.js";
+import { researchReplyFromPanel, normalizeResearchAnswer, buildChatPrompt, mergeEvidenceIntoPanel } from "../services/answerComposer.js";
 
 export async function handleChatApi(req, res) {
   try {
@@ -46,6 +46,7 @@ export async function handleChatApi(req, res) {
     }
     content = normalizeResearchAnswer(content, result.decisionPanel, result.dataSources);
     result.webEvidence = webEvidence;
+    mergeEvidenceIntoPanel(result.decisionPanel, webEvidence);
     const sessionId = persistFinalChatSession(payload, result, content);
     sendJson(res, 200, {
       mode: chatModel?.content ? "chat_model" : "chat_local",

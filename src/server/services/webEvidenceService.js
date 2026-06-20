@@ -405,6 +405,36 @@ async function searchOneQuery(query) {
   return { results, errors };
 }
 
+/** Readability-lite: pull the main article text out of a raw HTML page. */
+function extractMainText(html = "") {
+  let body = String(html)
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<(nav|header|footer|aside|form)[\s\S]*?<\/\1>/gi, " ");
+  const paras = [...body.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)]
+    .map((m) => decodeXml(m[1]))
+    .filter((t) => t && t.length >= 40);
+  const text = (paras.length ? paras.join(" ") : decodeXml(body)).replace(/\s+/g, " ").trim();
+  return text.slice(0, 700);
+}
+
+/** Best-effort: fetch the top evidence pages and attach an extracted excerpt. */
+async function enrichWithExcerpts(items = [], { limit = 3, timeoutMs = 4000 } = {}) {
+  await Promise.all(
+    items.slice(0, limit).map(async (item) => {
+      if (item.excerpt) return;
+      try {
+        const html = await fetchWithTimeout(item.url, {}, timeoutMs);
+        const excerpt = extractMainText(html);
+        if (excerpt && excerpt.length > (item.snippet || "").length) item.excerpt = excerpt;
+      } catch {
+        /* best-effort — snippet stays as-is */
+      }
+    })
+  );
+  return items;
+}
+
 export async function researchWebEvidence({ company, question = "", intent = classifyResearchIntent(question), maxAgeHours = 24, forceRefresh = false } = {}) {
   if (!company?.ticker) {
     return { intent, queries: [], evidence: [], gaps: ["缺少公司上下文，无法检索公开证据。"], provider: "none", searchedAt: nowIso() };
@@ -451,6 +481,8 @@ export async function researchWebEvidence({ company, question = "", intent = cla
 
   // Only keep links that actually resolve — the user must never click a 404.
   const evidence = await keepLiveEvidence(ranked, { limit: 8 });
+  // Pull main-body text for the top few so the model can quote real content.
+  await enrichWithExcerpts(evidence, { limit: 3 });
 
   saveWebEvidence(evidence);
 
@@ -474,8 +506,9 @@ export function webEvidenceToPrompt(webEvidence = {}) {
   if (!evidence.length) return "Web Evidence：本轮未抓到可用公开网页证据。";
   const lines = evidence.slice(0, 8).map((item, index) => {
     const date = item.publishedAt ? `，${item.publishedAt}` : "";
-    const snippet = item.snippet ? `：${item.snippet.slice(0, 180)}` : "";
-    return `${index + 1}. ${item.title || item.url}（${item.source || item.sourceType}${date}）${snippet}\n   链接：${item.url}`;
+    const body = (item.excerpt || item.snippet || "").slice(0, 220);
+    const text = body ? `：${body}` : "";
+    return `${index + 1}. ${item.title || item.url}（${item.source || item.sourceType}${date}）${text}\n   链接：${item.url}`;
   });
   return `Web Evidence（${webEvidence.provider || "web"}，${webEvidence.summary || ""}）：\n${lines.join("\n")}`;
 }

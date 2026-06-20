@@ -644,6 +644,33 @@ ${webEvidencePrompt}
 }
 
 /**
+ * Merge validated web evidence into the decision panel so it persists with the
+ * session and powers the clickable provenance UI. Evidence is appended to
+ * panel.sources (deduped) with its source type, date and credibility.
+ */
+export function mergeEvidenceIntoPanel(panel, webEvidence) {
+  if (!panel) return panel;
+  const evidence = Array.isArray(webEvidence?.evidence) ? webEvidence.evidence : [];
+  if (!evidence.length) return panel;
+  const sources = Array.isArray(panel.sources) ? [...panel.sources] : [];
+  const seen = new Set(sources.map((s) => s.url).filter(Boolean));
+  for (const item of evidence.slice(0, 6)) {
+    if (!item.url || seen.has(item.url)) continue;
+    seen.add(item.url);
+    sources.push({
+      label: item.title || item.source || "网页证据",
+      url: item.url,
+      type: item.sourceType || "web",
+      timestamp: item.publishedAt || null,
+      credibility: item.credibilityScore ?? null,
+      origin: "web_evidence"
+    });
+  }
+  panel.sources = sources.slice(0, 12);
+  return panel;
+}
+
+/**
  * Deep-research report prompt — judgment-first, research-grade. Unlike the
  * chat prompt, this asks for a full structured report, but keeps data-gap talk
  * minimal and never exposes backend/vendor language to the reader.
