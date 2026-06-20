@@ -45,6 +45,7 @@ const INTENT_SIGNAL_WORDS = {
   financial_quality: /收入|利润|毛利|现金流|财报|业绩|revenue|profit|margin|cash flow|earnings/i,
   valuation: /估值|市盈率|目标价|回购|分红|PE|valuation|target price|buyback|dividend/i,
   risk_event: /下跌|上涨|监管|风险|处罚|竞争|股价|fall|rise|risk|regulation|probe|competition/i,
+  falsify: /风险|证伪|看空|监管|下滑|放缓|利润率|竞争|risk|bear|decline|slowing|margin|regulation|competition/i,
   company_status: /业绩|财报|股价|新闻|展望|earnings|results|stock|outlook|news/i
 };
 

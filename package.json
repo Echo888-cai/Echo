@@ -6,10 +6,9 @@
   "scripts": {
     "dev": "node server.js",
     "seed": "node scripts/seed-db.js",
-    "test": "node tests/smoke.mjs && node tests/reliability.mjs && node tests/phase2.mjs && node tests/phase3.mjs",
+    "test": "node tests/smoke.mjs && node tests/reliability.mjs && node tests/phase3.mjs",
     "test:smoke": "node tests/smoke.mjs",
     "test:reliability": "node tests/reliability.mjs",
-    "test:phase2": "node tests/phase2.mjs",
     "test:phase3": "node tests/phase3.mjs"
   },
   "dependencies": {

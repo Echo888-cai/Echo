@@ -160,7 +160,11 @@ function memoryToMarkdown(memory = {}) {
  *     repaired (bool)
  *   }
  */
-export async function runAgent(input) {
+export async function runAgent(input, options = {}) {
+  // persist: write the session to SQLite here. Chat route persists once itself, so it passes persist:false.
+  // useModelPanel: call the model to produce the structured JSON panel. Chat builds a deterministic
+  //   local panel and uses a single model call for the prose instead, so it passes useModelPanel:false.
+  const { persist = true, useModelPanel = true } = options;
   const {
     question = "",
     company,
@@ -186,14 +190,15 @@ export async function runAgent(input) {
   // 2. Collect data sources with timeouts.
   const data = await collectDataSources({ company, suppliedMarketSnapshot });
 
-  // 3. Local fallback path (no key or model output unusable).
+  // 3. Local-panel path: no key, or the caller (chat) wants a deterministic panel + its own single model call.
   const providerStatus = getProviderStatus();
-  if (!providerStatus.configured) {
+  if (!useModelPanel || !providerStatus.configured) {
     return assembleLocal({
       question, company, filings, marketSnapshot: data.marketSnapshot, newsSnapshot: data.newsSnapshot,
       financialsData: data.financialsData, filingsData: data.filingsData, estimatesData: data.estimatesData,
-      documents, memory: effectiveMemory, userContext, mode: "model_key_missing", dataSources: data,
-      history, sessionId, sessionTitle
+      documents, memory: effectiveMemory, userContext,
+      mode: providerStatus.configured ? "local_panel" : "model_key_missing", dataSources: data,
+      history, sessionId, sessionTitle, persist
     });
   }
 
@@ -249,7 +254,7 @@ export async function runAgent(input) {
       marketSnapshot: data.marketSnapshot, newsSnapshot: data.newsSnapshot,
       financialsData: data.financialsData, filingsData: data.filingsData, estimatesData: data.estimatesData,
       documents, memory: effectiveMemory, userContext, mode: "repair_failed", dataSources: data,
-      history, sessionId, sessionTitle
+      history, sessionId, sessionTitle, persist
     });
   }
 
@@ -284,18 +289,13 @@ export async function runAgent(input) {
     dataSources: summarizeDataSources(data)
   };
 
-  result.sessionId = persistSession(result, profile, {
-    question,
-    userContext,
-    repaired,
-    sessionId,
-    sessionTitle,
-    history
-  });
+  result.sessionId = persist
+    ? persistSession(result, profile, { question, userContext, repaired, sessionId, sessionTitle, history })
+    : (sessionId || null);
   return result;
 }
 
-function assembleLocal({ question, company, filings, marketSnapshot, newsSnapshot, financialsData, filingsData, estimatesData, documents, memory, userContext, mode, dataSources, history = [], sessionId = null, sessionTitle = "" }) {
+function assembleLocal({ question, company, filings, marketSnapshot, newsSnapshot, financialsData, filingsData, estimatesData, documents, memory, userContext, mode, dataSources, history = [], sessionId = null, sessionTitle = "", persist = true }) {
   const profile = companyByTicker(company.ticker) || company;
   const localContent = buildLocalContent({
     question, company: profile, filings,
@@ -317,14 +317,9 @@ function assembleLocal({ question, company, filings, marketSnapshot, newsSnapsho
     dataSources: summarizeDataSources(dataSources)
   };
 
-  result.sessionId = persistSession(result, profile, {
-    question,
-    userContext,
-    repaired: false,
-    sessionId,
-    sessionTitle,
-    history
-  });
+  result.sessionId = persist
+    ? persistSession(result, profile, { question, userContext, repaired: false, sessionId, sessionTitle, history })
+    : (sessionId || null);
   return result;
 }
 

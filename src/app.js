@@ -34,6 +34,7 @@ let busyLabel = "模型思考中";
 let busyTimer = null;
 let recentSessions = [];
 let sessionsLoaded = false;
+let historyOpen = false;
 
 function readStore(key, fallback) {
   try {
@@ -444,9 +445,20 @@ async function sendChat(question) {
   });
   if (result.sessionId) setSessionId(result.sessionId);
   if (result.decisionPanel) setPanel(result.decisionPanel);
-  appendMessage("assistant", result.content || "本轮没有生成有效回复。", { mode: result.mode });
+  appendMessage("assistant", result.content || "本轮没有生成有效回复。", {
+    mode: result.mode,
+    webCount: result.webEvidence?.evidence?.length ?? 0,
+    sources: dataSourceLabels(result.dataSources)
+  });
   await refreshSessions();
   render();
+}
+
+function dataSourceLabels(dataSources = {}) {
+  const map = { market: "行情", financials: "财报", filings: "公告", news: "新闻", estimates: "预期" };
+  return Object.entries(map)
+    .filter(([key]) => dataSources?.[key]?.status === "ok")
+    .map(([, label]) => label);
 }
 
 async function generateDeepResearch() {
@@ -573,16 +585,22 @@ function renderResearch() {
 }
 
 function renderSessionHistory(activeSessionId) {
+  const count = recentSessions.length;
+  const toggle = `<button class="history-toggle ${historyOpen ? "is-open" : ""}" type="button" data-action="toggle-history" aria-expanded="${historyOpen}">
+      <span>历史研究${count ? ` · ${count}` : ""}</span>
+      <i>${historyOpen ? "收起" : "展开"}</i>
+    </button>`;
+  if (!historyOpen) {
+    return `<section class="history-panel collapsed">${toggle}</section>`;
+  }
   const body = !sessionsLoaded
     ? `<div class="history-empty">正在读取历史...</div>`
-    : recentSessions.length
+    : count
       ? `<div class="session-list">${recentSessions.map((session) => renderSessionItem(session, activeSessionId)).join("")}</div>`
       : `<div class="history-empty">还没有历史研究。完成第一轮回答后会自动保存。</div>`;
   return `<section class="history-panel">
-    <div class="side-title">
-      <h3>历史研究</h3>
-      ${recentSessions.length ? `<button type="button" data-action="clear-sessions">清空</button>` : ""}
-    </div>
+    ${toggle}
+    ${count ? `<div class="history-actions"><button type="button" data-action="clear-sessions">清空全部</button></div>` : ""}
     ${body}
   </section>`;
 }
@@ -645,17 +663,41 @@ function renderComposer(company) {
 }
 
 function renderEmptyState() {
+  const examples = [
+    { label: "腾讯 0700.HK", q: "腾讯最近怎么样？" },
+    { label: "阿里巴巴 9988.HK", q: "阿里巴巴赚钱吗？" },
+    { label: "美团 3690.HK", q: "美团靠什么赚钱？" },
+    { label: "比亚迪 1211.HK", q: "比亚迪的护城河在哪？" }
+  ];
   return `<div class="empty-chat">
-    <p>OPEN FINANCIAL CONSOLE</p>
-    <h2>问一家公司。</h2>
-    <span>普通问题直接回答；需要完整证据链时，再生成深度研究。</span>
+    <p>LUVIO RESEARCH</p>
+    <h2>像研究员一样，<br>聊懂一家港股公司。</h2>
+    <span>问一句就开始——赚不赚钱、护城河、竞争格局、估值、什么会证伪。普通追问给精炼短答；需要完整证据链时，再生成深度研究。</span>
+    <div class="example-grid">
+      ${examples
+        .map(
+          (item) => `<button class="example-card" type="button" data-action="example" data-query="${esc(item.q)}">
+        <strong>${esc(item.label)}</strong>
+        <span>${esc(item.q)}</span>
+      </button>`
+        )
+        .join("")}
+    </div>
   </div>`;
 }
 
 function renderMessage(message) {
   if (message.role === "assistant") {
-    const title = message.meta?.type === "deep_research" ? "DEEP RESEARCH" : "LUVIO";
+    const meta = message.meta || {};
+    const title = meta.type === "deep_research" ? "DEEP RESEARCH" : "LUVIO";
     const messageId = message.id || "";
+    const statusBits = [];
+    if (meta.mode) statusBits.push(/model/.test(meta.mode) ? "模型生成" : "本地兜底");
+    if (typeof meta.webCount === "number") statusBits.push(`网页证据 ${meta.webCount} 条`);
+    if (Array.isArray(meta.sources) && meta.sources.length) statusBits.push(`数据源：${meta.sources.join("/")}`);
+    const metaRow = statusBits.length
+      ? `<div class="answer-meta">${statusBits.map((bit) => `<span>${esc(bit)}</span>`).join("")}</div>`
+      : "";
     return `<article class="message assistant">
       <div class="bubble answer-card">
         <div class="answer-brand">
@@ -663,6 +705,7 @@ function renderMessage(message) {
           <button class="copy-answer" type="button" data-action="copy-message" data-id="${esc(messageId)}">复制</button>
         </div>
         ${markdownToHtml(message.content)}
+        ${metaRow}
       </div>
     </article>`;
   }
@@ -674,7 +717,6 @@ function renderMessage(message) {
 function renderSettings() {
   const sources = apiStatus?.sources || [];
   const providers = apiStatus?.ai?.providers || [];
-  const backlog = apiStatus?.evidenceBacklog || [];
   shell(`<section class="simple-page settings-page">
     <div class="page-head"><p class="eyebrow">Settings</p><h1>后台设置与状态</h1><span>模型、数据源、隐藏功能都放在这里，不打扰研究主流程。</span></div>
     <div class="settings-grid">
@@ -688,15 +730,10 @@ function renderSettings() {
       <article class="settings-card"><h2>前台策略</h2>
         <p>报告页、关注页、最近报告、逐轮最近对话已从前台移除。当前产品只保留一个连续研究对话流。</p>
       </article>
-      <article class="settings-card"><h2>后台数据策略</h2>
-        <p>用户不需要自己接 API。行情、财报、公告、新闻和 web 搜索由部署后台统一接入，agent 只展示证据和缺口。</p>
-        <div class="setting-row"><span>会话存储</span><strong>SQLite research_sessions</strong></div>
-        <div class="setting-row"><span>财报数学</span><strong>FMP / EODHD / Finnhub</strong></div>
-        <div class="setting-row"><span>公开证据</span><strong>HKEX + Web Search</strong></div>
-        <a class="doc-link" href="/docs/DATA_SOURCE_STRATEGY.md" target="_blank" rel="noopener noreferrer">查看接入策略</a>
-      </article>
-      <article class="settings-card"><h2>补源队列</h2>
-        ${backlog.map((item) => `<div class="setting-row"><span>${esc(item.label)}</span><strong>${esc(item.priority)} · ${esc((item.providers || []).join(" / "))}</strong></div>`).join("") || `<p>暂无补源队列。</p>`}
+      <article class="settings-card"><h2>数据怎么来的</h2>
+        <p>你不需要自己接任何接口。行情、财报、公告、新闻和网页证据都由平台统一接入，回答里会标注本轮用到了哪些来源、有没有上网。</p>
+        <div class="setting-row"><span>研究会话</span><strong>本地自动保存</strong></div>
+        <div class="setting-row"><span>证据来源</span><strong>行情 / 财报 / 公告 / 网页</strong></div>
       </article>
     </div>
   </section>`);
@@ -736,12 +773,25 @@ document.addEventListener("click", async (event) => {
   if (action === "load-session") await loadSession(target.dataset.id);
   if (action === "delete-session") await deleteSession(target.dataset.id);
   if (action === "clear-sessions") await clearAllSessions();
+  if (action === "toggle-history") {
+    historyOpen = !historyOpen;
+    render();
+  }
   if (action === "settings") location.hash = "#/settings";
   if (action === "quick") {
     const input = document.querySelector(".composer textarea");
     if (input) {
       input.value = target.dataset.query || "";
       input.focus();
+    }
+  }
+  if (action === "example") {
+    if (isBusy) return;
+    const input = document.querySelector(".composer textarea");
+    if (input) {
+      input.value = target.dataset.query || "";
+      input.focus();
+      input.closest("form")?.requestSubmit();
     }
   }
   if (action === "copy-message") await copyMessage(target.dataset.id);

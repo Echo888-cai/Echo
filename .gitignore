@@ -6,3 +6,6 @@ luvio.db-*
 *.log
 dist/
 coverage/
+
+# local preview config
+.claude/
