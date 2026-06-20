@@ -767,46 +767,43 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
-.wait-steps {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 18px 0 12px;
-}
-
-.wait-steps span {
-  padding: 6px 11px;
-  border: 1px solid var(--hairline);
-  border-radius: 999px;
-  color: var(--muted-2);
-  background: var(--panel-soft);
-  font-size: 12px;
-  font-weight: 600;
-  transition: color 0.3s var(--ease-soft), background 0.3s var(--ease-soft), border-color 0.3s var(--ease-soft);
-}
-
-.wait-steps span.is-active {
-  color: var(--blue-ink);
-  border-color: rgba(0, 113, 227, 0.2);
-  background: var(--blue-soft);
-}
-
-.wait-card p {
-  font-size: 13.5px;
+.wait-phase {
+  margin: 16px 0 2px;
+  font-size: 14px;
+  font-weight: 500;
   background: linear-gradient(90deg, var(--muted-2) 0%, var(--ink) 30%, var(--muted-2) 60%);
-  background-size: 460px 100%;
+  background-size: 480px 100%;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: shimmer 2.2s linear infinite;
+  animation: shimmer 2.4s linear infinite;
+  transition: opacity 0.3s var(--ease-out);
 }
 
-.thinking-dot {
-  width: 9px;
-  height: 9px;
+/* Breathing research orb — calm, honest, no fake progress steps */
+.wait-orb {
+  position: relative;
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
   border-radius: 999px;
-  background: var(--amber);
-  animation: pulseDot 1.4s var(--ease-soft) infinite;
+  background: radial-gradient(circle at 35% 30%, #ffd591, var(--amber) 60%, #e0890a);
+  box-shadow: 0 0 0 0 rgba(245, 166, 35, 0.4);
+  animation: pulseDot 1.6s var(--ease-soft) infinite;
+}
+
+.wait-orb::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(245, 166, 35, 0.28);
+  animation: orbRing 1.6s var(--ease-out) infinite;
+}
+
+@keyframes orbRing {
+  0%   { transform: scale(0.7); opacity: 0.8; }
+  100% { transform: scale(1.5); opacity: 0; }
 }
 
 /* ── Empty / welcome ──────────────────────────────────── */

@@ -1,25 +1,73 @@
-import { readJsonBody, sendJson } from "../utils/async.js";
+import { readJsonBody, sendJson, withTimeout } from "../utils/async.js";
 import { runAgent } from "../services/agentService.js";
+import { callModel, getProviderStatus } from "../services/modelGateway.js";
+import { companyByTicker } from "../../data.js";
+import { classifyResearchIntent } from "../services/intentClassifier.js";
+import { researchWebEvidence } from "../services/webEvidenceService.js";
+import { buildReportPrompt } from "../services/answerComposer.js";
 import { composeReport, reportPreview } from "../services/reportComposer.js";
 import { saveResearchSession } from "../repositories/researchSessions.js";
+
+const DISCLAIMER =
+  "\n\n---\n> 本报告仅供研究学习，不构成投资建议。请用公司原始公告核验关键数据，独立做出决定。";
 
 export async function handleReportGenerateApi(req, res) {
   try {
     const payload = await readJsonBody(req);
-    const result = await runAgent(payload);
-    const report = composeReport(result.decisionPanel);
-    const sessionId = persistFinalReportSession(payload, result, report.markdown);
+    const question = payload.question || "";
+    const companyForEvidence = companyByTicker(payload.company?.ticker) || payload.company || {};
+    const intent = classifyResearchIntent(question);
+
+    // Data + deterministic local panel (no model panel, no persist here) and web
+    // evidence run in parallel — same single-pass pipeline as the chat route.
+    const [result, webEvidence] = await Promise.all([
+      runAgent(payload, { persist: false, useModelPanel: false }),
+      withTimeout(
+        researchWebEvidence({ company: companyForEvidence, question, intent }),
+        9000,
+        { intent, queries: [], evidence: [], gaps: [], provider: "timeout", searchedAt: new Date().toISOString() }
+      )
+    ]);
+
+    const panel = result.decisionPanel;
+    const context = {
+      newsSnapshot: result.newsSnapshot,
+      webEvidence,
+      financialsData: result.financialsData,
+      marketSnapshot: result.marketSnapshot
+    };
+
+    // One model round-trip for the full report. Generous budget; on failure we
+    // fall back to a cleaned structured template (no backend/vendor language).
+    let markdown = null;
+    let model = null;
+    if (getProviderStatus().configured && panel) {
+      model = await withTimeout(callModel({
+        system: "你是 Luvio 的港股研究负责人，写资深买方研究员风格的深度研究报告：判断优先、克制、可证伪。绝不暴露后台/产品/厂商词，绝不给买卖指令。",
+        user: buildReportPrompt(question, panel, result.dataSources, context)
+      }), 42000, null);
+      if (model?.content && model.content.trim().length > 200) {
+        markdown = model.content.trim() + DISCLAIMER;
+      }
+    }
+    if (!markdown) {
+      markdown = composeReport(panel).markdown;
+    }
+
+    result.webEvidence = webEvidence;
+    const sessionId = persistFinalReportSession(payload, result, markdown);
     sendJson(res, 200, {
-      mode: result.mode === "model" ? "report_model" : "report_local",
-      provider: result.provider,
-      model: result.model,
+      mode: model?.content ? "report_model" : "report_local",
+      provider: model?.provider || result.provider,
+      model: model?.model || result.model,
       sessionId,
-      decisionPanel: result.decisionPanel,
-      markdown: report.markdown,
-      preview: reportPreview(result.decisionPanel),
+      decisionPanel: panel,
+      markdown,
+      preview: reportPreview(panel),
       dataSources: result.dataSources,
       marketSnapshot: result.marketSnapshot,
-      newsSnapshot: result.newsSnapshot
+      newsSnapshot: result.newsSnapshot,
+      webEvidence
     });
   } catch (error) {
     const status = error.statusCode || 500;

@@ -1,173 +1,137 @@
 /**
- * reportComposer — generates a structured, source-audited investment research
- * report from a decisionPanel (the canonical schema that comes out of
- * /api/agent). Never fabricates data; all claims reference evidence IDs.
+ * reportComposer — judgment-first deep-research report built deterministically
+ * from a decisionPanel + the local company profile.
  *
- * The output is a long-form Chinese Markdown report ready for
- * saving/exporting, plus a structured JSON summary.
+ * This is the fallback used when the report model call is unavailable or times
+ * out, so it must read like a research note on its own: lead with the
+ * judgment, never expose backend / vendor / "data completeness %" language.
  */
 
-import { RESEARCH_STATUS_LABELS, KEY_DRIVER_NAMES } from "../schemas/agentPanel.js";
-import { missing } from "../utils/format.js";
+import { RESEARCH_STATUS_LABELS } from "../schemas/agentPanel.js";
+import { companyByTicker } from "../../data.js";
 
 const DISCLAIMER =
-  "\n\n---\n> **免责声明**：Luvio 不提供投资顾问服务。本报告仅用于研究和学习，请用公司原始公告核验全部数据，并独立做出投资决定。报告中的研究状态描述不构成买卖建议。";
+  "\n\n---\n> 本报告仅供研究学习，不构成投资建议。请用公司原始公告核验关键数据，独立做出决定。";
+
+function beijingNow() {
+  try {
+    const parts = new Intl.DateTimeFormat("zh-CN", {
+      timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hour12: false
+    }).formatToParts(new Date());
+    const pick = (t) => parts.find((p) => p.type === t)?.value || "";
+    return `${pick("year")}-${pick("month")}-${pick("day")} ${pick("hour")}:${pick("minute")}`;
+  } catch {
+    return "";
+  }
+}
+
+function clean(value) {
+  return String(value || "").replace(/[。；;,\s]+$/g, "").trim();
+}
+
+function driverSummary(panel, name, fallback) {
+  const d = (panel?.keyDrivers || []).find((item) => item.name === name);
+  const text = clean(d?.summary || "");
+  if (!text || /暂不评分|未接入|缺失|不可用|新闻源/.test(text)) return fallback;
+  return text;
+}
+
+function sourceLines(panel) {
+  const seen = new Set();
+  const lines = [];
+  for (const s of Array.isArray(panel?.sources) ? panel.sources : []) {
+    if (!s?.label && !s?.url) continue;
+    if (s.url) { if (seen.has(s.url)) continue; seen.add(s.url); }
+    lines.push(`- ${s.label || s.type || "来源"}${s.timestamp ? `（${s.timestamp}）` : ""}${s.url ? `：${s.url}` : ""}`);
+    if (lines.length >= 7) break;
+  }
+  if (!lines.length) {
+    const price = panel?.price?.value && panel.price.value !== "暂不可用" ? panel.price.value : "公开行情";
+    lines.push(`- 行情：${panel?.price?.source || "公开行情"}（${price}）`);
+    lines.push("- 公司档案：Luvio 本地研究档案");
+  }
+  return lines;
+}
 
 /**
- * Accept a decisionPanel (from agentService) and produce a structured report.
- *
- * @param {object} panel - the decisionPanel output from agentService
+ * Accept a decisionPanel and produce a clean, judgment-first markdown report.
+ * @param {object} panel
  * @returns {{ markdown: string, sections: string[] }}
  */
 export function composeReport(panel) {
   if (!panel) {
-    return {
-      markdown: `# 研究报告\n\n**数据不足，无法生成报告。**${DISCLAIMER}`,
-      sections: []
-    };
+    return { markdown: `# 研究报告\n\n暂时拿不到足够上下文，先告诉我公司名称或港股代码。${DISCLAIMER}`, sections: [] };
   }
 
-  const { ticker, companyName, researchStatus, confidence, dataCompleteness, oneLineView,
-    action, userContext, price, keyDrivers, connectedData, missingData,
-    riskTriggers, sources, evidence, details, fullResearch } = panel;
+  const profile = companyByTicker(panel.ticker) || {};
+  const name = panel.companyName || profile.nameZh || panel.ticker || "这家公司";
+  const statusLabel = RESEARCH_STATUS_LABELS[panel.researchStatus] || panel.researchStatus || "持续观察";
+  const business = (profile.businessModel || []).map(clean).filter(Boolean);
+  const moat = (profile.moat || []).map(clean).filter(Boolean);
+  const risks = (profile.risks || []).map(clean).filter(Boolean);
+  const monitors = (profile.monitors || ["收入增速", "利润率", "自由现金流", "回购/分红", "监管与竞争"]).slice(0, 5);
+  const bull = (profile.bull || []).map(clean).filter(Boolean);
+  const bear = (profile.bear || []).map(clean).filter(Boolean);
+  const price = panel.price?.value && panel.price.value !== "暂不可用" ? panel.price.value : null;
 
-  const statusLabel = RESEARCH_STATUS_LABELS[researchStatus] || researchStatus || "未设置";
   const sections = [];
 
-  // ── Section 0: Summary ──────────────────────────────
-  const s0 = [
-    `## 0. 结论摘要`,
-    `- **研究状态**：${statusLabel}`,
-    `- **置信度**：${confidence || "低"}`,
-    `- **数据完整度**：${dataCompleteness ?? 0}%`,
-    `- **一句话判断**：${oneLineView || "数据不足，无法形成判断。"}`,
-    `- **当前建议动作**：${action || "补充关键数据后再判断。"}`,
-    !researchStatus || researchStatus === "data_missing" || researchStatus === "research_more" ? `- **本轮不能形成完整结论的原因**：关键证据缺失（缺失项：${(missingData || []).join("、") || "无"}）。` : ""
-  ].filter(Boolean).join("\n");
-  sections.push(s0);
+  sections.push([
+    `# ${name}（${panel.ticker || ""}）深度研究`,
+    `> 北京时间 ${beijingNow()} · 研究状态：${statusLabel} · 置信度：${panel.confidence || "中"}`
+  ].join("\n"));
 
-  // ── Section 1: User context ─────────────────────────
-  const s1 = [
-    `## 1. 用户问题与持仓上下文`,
-    userContext && (userContext.cost || userContext.shares)
-      ? `- **成本价**：${missing(userContext.cost)}   **持股数**：${missing(userContext.shares)}   **投资周期**：${missing(userContext.horizon)}`
-      : "- **用户未录入持仓。** 添加成本价和仓位后，可生成分批和止错计划。",
-    userContext?.note ? `- 用户偏好：${userContext.note}` : ""
-  ].filter(Boolean).join("\n");
-  sections.push(s1);
+  sections.push([
+    `## 核心判断`,
+    clean(panel.oneLineView) ? `${clean(panel.oneLineView)}。` : `${name} 的价值要看赚钱机制、利润质量和现金流能否同向兑现。`,
+    `它现在的核心矛盾不是“有没有收入”，而是${business[0] ? `「${business[0]}」这类利润池能否持续放大` : "高质量利润能否持续"}；最大的赌点是${bull[0] || "核心业务重新加速、利润率与现金流改善"}；最大的风险是${bear[0] || risks[0] || "竞争或监管压低利润与现金流"}。${price ? `当前价格口径 ${price}，只反映市场状态，不等于公司价值。` : ""}`
+  ].join("\n\n"));
 
-  // ── Section 2: Data source status ───────────────────
-  const s2 = [
-    `## 2. 数据源状态`,
-    `- **行情**：${price?.source || "缺失"}${price?.timestamp ? `（${price.timestamp}）` : ""}${price?.stale ? " ⚠ 此数据为缓存的旧数据" : ""}`,
-    ...(connectedData || []).map(d => `- **已接入**：${d}`),
-    ...(missingData || []).map(d => `- **缺失**：${d} —— 本次不参与评分`),
-    `- **数据完整度**：${dataCompleteness ?? 0}%（${connectedData?.length || 0}/${(connectedData?.length || 0) + (missingData?.length || 0)} 项）`
-  ].join("\n");
-  sections.push(s2);
+  sections.push([
+    `## 赚钱机制与护城河`,
+    business.length ? business.slice(0, 5).map((b, i) => `${i + 1}. ${b}。`).join("\n") : "核心收入来源需要用最新财报拆分，先从主业收入、利润率和现金流判断。",
+    `护城河：${moat.length ? moat.slice(0, 5).join("、") : "规模效应、客户关系、品牌与渠道"}。真正的壁垒不是“听起来强”，而是能不能转成更低获客成本、更高留存、更稳利润率和更强自由现金流。`
+  ].join("\n\n"));
 
-  // ── Section 3: Company overview ─────────────────────
-  const s3 = [
-    `## 3. 公司与业务概览`,
-    `**${companyName || "待确定"}（${ticker || ""}）**`,
-    details?.overview?.length ? details.overview.map(l => `- ${l}`).join("\n") : "- 本地档案数据不足，依赖实时数据。"
-  ].join("\n");
-  sections.push(s3);
+  sections.push([
+    `## 财务质量`,
+    `- 基本面：${driverSummary(panel, "基本面", "完整三表还没核到，先看高毛利业务占比是否提升、利润率是否稳定")}。`,
+    `- 股东回报：${driverSummary(panel, "股东回报", "重点看回购、分红和自由现金流是否可持续")}。`,
+    `判断它“赚不赚钱”，不能只看一次性净利润，而要看高毛利业务占比、经营现金流和股东回报是不是同向。`
+  ].join("\n\n"));
 
-  // ── Section 4: Financial quality ────────────────────
-  const finCards = (keyDrivers || []).filter(d => d.name === "基本面" || d.name === "股东回报");
-  const s4 = [
-    `## 4. 财务质量`,
-    ...finCards.map(card =>
-      `- **${card.name}**：${card.summary || "暂不评分"}`
-    ),
-    details?.financials?.length ? "" : "",
-    ...(details?.financials || ["财报解析未接入，收入、利润率、FCF 暂不评分。"]).map(l => `- ${l}`),
-    "**缺失数据说明**：",
-    ...(missingData || []).map(d => `- ${d}：暂不评分 —— 数据缺失。`)
-  ].join("\n");
-  sections.push(s4);
+  sections.push([
+    `## 估值与赔率`,
+    `- 估值状态：${driverSummary(panel, "估值", "当前未核到 Forward PE、FCF 收益率和可比区间，暂不锁定目标价")}。`,
+    `- Bull：${bull.length ? bull.slice(0, 3).join("；") : "收入恢复、利润率稳定、自由现金流改善，且估值仍有安全边际"}。`,
+    `- Bear：${bear.length ? bear.slice(0, 3).join("；") : "竞争、监管或投入周期继续压低利润与现金流，所谓便宜只是逻辑重估"}。`
+  ].join("\n\n"));
 
-  // ── Section 5: Valuation framework ──────────────────
-  const valCards = (keyDrivers || []).filter(d => d.name === "估值");
-  const s5 = [
-    `## 5. 估值框架`,
-    ...valCards.map(card =>
-      `- **当前估值状态**：${card.summary || "无法估值"}`
-    ),
-    ...(details?.valuation || ["缺 Forward PE、FCF 收益率和可比公司区间，暂不给目标价。"]).map(l => `- ${l}`),
-    "- **什么数据会改变估值判断**：配置 FMP_API_KEY 获取 Forward PE 与 FCF 数据，或上传年报补全现金流。"
-  ].join("\n");
-  sections.push(s5);
+  sections.push([
+    `## 风险与证伪条件`,
+    (risks.length ? risks.slice(0, 5) : ["利润率下滑", "竞争加剧", "现金流转弱", "监管或商业模式变化"]).map((r, i) => `${i + 1}. ${r}。`).join("\n"),
+    `证伪：一旦${bear[0] || "收入/利润率/现金流持续走弱"}真实发生并改变利润池，就不该再用“便宜/被低估”自我安慰，而要按逻辑重估。`
+  ].join("\n\n"));
 
-  // ── Section 6: Risk radar ───────────────────────────
-  const riskCards = (keyDrivers || []).filter(d => d.name === "风险信号");
-  const risks = Array.isArray(riskTriggers) ? riskTriggers : [];
-  const s6 = [
-    `## 6. 风险雷达`,
-    ...riskCards.map(card =>
-      `- **舆论/风险信号**：${card.summary || "新闻源不可用"}`
-    ),
-    ...risks.slice(0, 5).map(r => {
-      const label = typeof r === "string" ? r : (r.label || "");
-      const evidenceIds = r.evidence?.map(e => e.missingReason).filter(Boolean).slice(0, 2).join("；") || "";
-      return `- **${label}**${evidenceIds ? `（证据：${evidenceIds}）` : ""}`;
-    }),
-    risks.length === 0 ? "- 当前无风险触发器数据。" : ""
-  ].filter(Boolean).join("\n");
-  sections.push(s6);
+  sections.push([
+    `## 关键监控与下一步`,
+    monitors.map((m, i) => `${i + 1}. ${m}：作为先行指标盯趋势，而不是等财报盖棺。`).join("\n"),
+    `还缺什么：完整财报三表、最新公告和一致预期核到后，可把财务与估值从方向判断升级为区间判断——这只影响置信度，不影响当前方向。`
+  ].join("\n\n"));
 
-  // ── Section 7: Bull / Bear debate ───────────────────
-  const s7 = [
-    `## 7. 多空辩论`,
-    details?.overview?.length ? details.overview.join("\n") : "- 数据不足，无法展开多空辩论。",
-    "> 判断均来自结构化数据。如需更完整的多空辩论，请上传更多公告和年报。"
-  ].join("\n");
-  sections.push(s7);
+  sections.push([`## 来源`, ...sourceLines(panel)].join("\n"));
 
-  // ── Section 8: Next actions ─────────────────────────
-  const s8 = [
-    `## 8. 下一步研究动作`,
-    `- **当前建议**：${action || "继续收集数据。"}`,
-    ...(missingData || []).map(d => `- **需要补充**：${d}`),
-    "- **上传材料**：上传年报、业绩公告或管理层电话会纪要可补全缺项。",
-    "- **下次复盘**：当关键数据项状态从 missing 变为 ok 时触发。",
-    "- **监控项**：加入 Watchlist 后系统会在下次研究中自动带入上下文。"
-  ].join("\n");
-  sections.push(s8);
-
-  // ── Section 9: Source audit ─────────────────────────
-  const s9 = [
-    `## 9. 来源审计`,
-    ...(Array.isArray(sources) ? sources.map((s, i) => {
-      const label = s.label || "未命名来源";
-      const url = s.url ? `｜${s.url}` : "";
-      const type = s.type ? `（${s.type}）` : "";
-      const ts = s.timestamp ? `｜${s.timestamp}` : "";
-      return `${i + 1}. ${label}${type}${ts}${url}`;
-    }) : []),
-    "",
-    ...(Array.isArray(evidence) ? evidence.slice(0, 8).map((e, i) =>
-      `- 证据 #${i + 1}：${e.source || "无来源"}${e.asOf ? `｜${e.asOf}` : ""}${e.confidence ? `｜可信度 ${e.confidence}` : ""}${e.missingReason && e.missingReason !== "无" ? `｜${e.missingReason}` : ""}`
-    ) : []),
-    evidence?.length === 0 ? "- 暂无可引用的可信证据。" : ""
-  ].filter(Boolean).join("\n");
-  sections.push(s9);
-
-  // ── Section 10: Full research markdown ──────────────
-  if (fullResearch && fullResearch.length > 50) {
-    sections.push(`## 10. 研究材料\n\n${fullResearch}`);
+  // Optional: append model long-form research if it exists and is substantial.
+  if (panel.fullResearch && panel.fullResearch.length > 120 && !/^北京时间/.test(panel.fullResearch.trim())) {
+    sections.push(`## 研究材料\n\n${panel.fullResearch}`);
   }
 
-  const markdown = sections.join("\n\n") + DISCLAIMER;
-  return { markdown, sections };
+  return { markdown: sections.join("\n\n") + DISCLAIMER, sections };
 }
 
-/**
- * Build a plain-text summary (first 200 chars) for search results / session list.
- */
+/** Plain-text summary for session lists / search previews. */
 export function reportPreview(panel) {
   if (!panel) return "";
-  const text = panel.oneLineView || panel.action || "";
-  return String(text).slice(0, 200);
+  return String(panel.oneLineView || panel.action || "").slice(0, 200);
 }

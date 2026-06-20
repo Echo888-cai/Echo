@@ -134,6 +134,10 @@ function updateBusyClock() {
   document.querySelectorAll("[data-busy-seconds]").forEach((node) => {
     node.textContent = seconds;
   });
+  const phase = waitPhase();
+  document.querySelectorAll("[data-busy-phase]").forEach((node) => {
+    if (node.textContent !== phase) node.textContent = phase;
+  });
 }
 
 function startBusy(label = "模型思考中") {
@@ -618,23 +622,31 @@ function renderSessionItem(session, activeSessionId) {
   </div>`;
 }
 
+const WAIT_PHASES = [
+  "正在读取行情与公司档案",
+  "正在检索公开网页证据",
+  "正在校验来源、剔除失效链接",
+  "正在综合判断与证据置信度"
+];
+
+function waitPhase() {
+  return WAIT_PHASES[Math.min(WAIT_PHASES.length - 1, Math.floor(busyElapsedSeconds() / 5))];
+}
+
 function renderWaitingCard() {
-  const steps = ["生成检索任务", "检索公开资料", "筛选可信来源", "综合研究判断"];
-  const activeStep = Math.min(steps.length - 1, Math.floor(busyElapsedSeconds() / 4));
-  return `<div class="message assistant">
-    <div class="bubble answer-card loading wait-card">
-      <div class="answer-brand"><i></i><span>LUVIO</span></div>
+  return `<article class="message assistant">
+    <div class="bubble answer-card wait-card">
+      <div class="answer-brand">
+        <div class="answer-mark"><i></i><span>LUVIO</span></div>
+      </div>
       <div class="wait-row">
-        <span class="thinking-dot"></span>
+        <span class="wait-orb" aria-hidden="true"></span>
         <strong>${esc(busyLabel)}</strong>
         <em>已等待 <span data-busy-seconds>${busyElapsedSeconds()}</span>s</em>
       </div>
-      <div class="wait-steps">
-        ${steps.map((step, index) => `<span class="${index <= activeStep ? "is-active" : ""}">${esc(step)}</span>`).join("")}
-      </div>
-      <p>正在核对数据、公开来源和证据缺口。长回答会慢一点，但不会让你盲等。</p>
+      <p class="wait-phase" data-busy-phase>${esc(waitPhase())}</p>
     </div>
-  </div>`;
+  </article>`;
 }
 
 function renderComposer(company) {

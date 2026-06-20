@@ -133,19 +133,34 @@ function thesisLine(prefix, items, fallback) {
   return `${prefix}：${text}。`;
 }
 
-function sourceLines(panel, dataSources = {}) {
-  const explicit = Array.isArray(panel?.sources)
-    ? panel.sources
-        .filter((source) => source?.label || source?.url)
-        .slice(0, 6)
-        .map((source) => `- ${source.label || source.type || "来源"}${source.timestamp ? `（${source.timestamp}）` : ""}${source.url ? `：${source.url}` : ""}`)
-    : [];
-  if (explicit.length) return explicit;
+function sourceLines(panel, dataSources = {}, webEvidence = null) {
+  const seenUrl = new Set();
+  const lines = [];
+  // 1. Curated panel sources (official IR / HKEX / market — real, working links).
+  if (Array.isArray(panel?.sources)) {
+    for (const source of panel.sources) {
+      if (!source?.label && !source?.url) continue;
+      if (source.url) {
+        if (seenUrl.has(source.url)) continue;
+        seenUrl.add(source.url);
+      }
+      lines.push(`- ${source.label || source.type || "来源"}${source.timestamp ? `（${source.timestamp}）` : ""}${source.url ? `：${source.url}` : ""}`);
+      if (lines.length >= 5) break;
+    }
+  }
+  // 2. Validated web evidence (already liveness-checked upstream — no dead links).
+  const evidence = Array.isArray(webEvidence?.evidence) ? webEvidence.evidence : [];
+  for (const item of evidence) {
+    if (!item.url || seenUrl.has(item.url)) continue;
+    seenUrl.add(item.url);
+    lines.push(`- ${item.title || item.source || item.sourceType || "Web"}：${item.url}`);
+    if (lines.length >= 7) break;
+  }
+  if (lines.length) return lines;
+  // 3. Fallback: data-source providers (only when nothing citable exists).
   return [
-    `- 行情：${dataSources.market?.provider || panel?.price?.source || "未接入"}${dataSources.market?.asOf ? `（${dataSources.market.asOf}）` : ""}`,
-    `- 财务：${dataSources.financials?.provider || "未接入"}${dataSources.financials?.asOf ? `（${dataSources.financials.asOf}）` : ""}`,
-    `- 公告：${dataSources.filings?.provider || "未接入"}${dataSources.filings?.asOf ? `（${dataSources.filings.asOf}）` : ""}`,
-    `- 新闻：${dataSources.news?.provider || "未接入"}${Number.isFinite(dataSources.news?.count) ? `（${dataSources.news.count} 条）` : ""}`
+    `- 行情：${dataSources.market?.provider || panel?.price?.source || "公开行情"}${dataSources.market?.asOf ? `（${dataSources.market.asOf}）` : ""}`,
+    `- 公司档案：Luvio 本地研究档案`
   ];
 }
 
@@ -265,12 +280,11 @@ function competitorReplyFromPanel(panel, question = "", dataSources = {}, contex
     ...(evidenceSignals.length
       ? ["已抓到的外部信号", ...evidenceSignals, ""]
       : []),
-    "证据缺口",
-    `1. 还缺最新市场份额、分业务收入和同业利润率对比；后台应接入公司公告、IDC/Gartner/Canalys 等行业数据或可信 web 搜索证据。`,
-    `2. 当前回答使用本地公司档案${evidenceSignals.length ? "、新闻/网页信号" : ""}和可用来源做阶段判断；后台下一步应优先核验“市场份额、出货量、云/服务器订单、价格竞争”这些事实。`,
+    "还缺什么",
+    `还缺最新市场份额、分业务收入和同业利润率的硬数据；下一步重点核验“份额、出货量、云/服务器订单、价格竞争”这几个事实，再把结论从阶段判断升级。`,
     "",
     "来源：",
-    ...sourceLines(panel, dataSources)
+    ...sourceLines(panel, dataSources, context.webEvidence)
   ].join("\n");
 }
 
@@ -419,7 +433,7 @@ function financialQualityReplyFromPanel(panel, question = "", dataSources = {}, 
     ...monitors.map((item, index) => `${index + 1}. ${item}。`),
     "",
     "来源：",
-    ...sourceLines(panel, dataSources),
+    ...sourceLines(panel, dataSources, context.webEvidence),
     ...(quality.missing?.length ? [`\n还缺什么（不影响当前判断）：${quality.missing.slice(0, 6).join("、")}，补齐后可把财务质量从低置信度升到中高。`] : [])
   ];
   return lines.filter((line) => line !== null && line !== undefined).join("\n");
@@ -451,7 +465,7 @@ function falsifyReplyFromPanel(panel, question = "", dataSources = {}, context =
     ...monitors.map((item, index) => `${index + 1}. ${item}：作为先行指标盯住趋势，而不是等财报盖棺。`),
     "",
     "来源：",
-    ...sourceLines(panel, dataSources)
+    ...sourceLines(panel, dataSources, context.webEvidence)
   ];
   return lines.filter((line) => line !== null && line !== undefined).join("\n");
 }
@@ -466,7 +480,6 @@ export function researchReplyFromPanel(panel, question = "", dataSources = {}, c
 
   const status = RESEARCH_STATUS_LABELS[panel.researchStatus] || panel.researchStatus || "待判断";
   const missing = Array.isArray(panel.missingData) ? panel.missingData : [];
-  const connected = Array.isArray(panel.connectedData) ? panel.connectedData : [];
   const price = panel.price?.value && panel.price.value !== "暂不可用" ? panel.price.value : "暂不可用";
   const priceTime = panel.price?.timestamp || dataSources.market?.asOf || "时间待核";
   const fundamental = driver(panel, "基本面");
@@ -531,13 +544,10 @@ export function researchReplyFromPanel(panel, question = "", dataSources = {}, c
     `我的判断：${name} 现在不能只看价格，也不能因为缺几项数据就放弃判断。更准确的说法是：商业逻辑先成立一部分，但最终要靠利润质量、自由现金流和股东回报来兑现。关键不是赌一个反弹，而是确认业务增长、利润质量和现金流能不能穿透当前风险。`,
     "",
     "还缺什么（不影响当前判断，只影响置信度）",
-    ...backendGapLines(panel, dataSources).map((line, index) => `${index + 1}. ${line}`),
+    backendGapLines(panel, dataSources)[0] || "关键证据基本到位，下一步主要做交叉校验。",
     "",
     "来源：",
-    ...sourceLines(panel, dataSources),
-    ...(context.webEvidence?.evidence?.length ? context.webEvidence.evidence.slice(0, 4).map((item) => `- ${item.source || item.sourceType || "Web"}：${item.url}`) : []),
-    connected.length ? `\n已接入：${connected.slice(0, 6).join("、")}` : "",
-    missing.length ? `证据缺口：${missing.slice(0, 6).join("、")}` : ""
+    ...sourceLines(panel, dataSources, context.webEvidence)
   ];
 
   return lines.filter((line) => line !== null && line !== undefined).join("\n");
@@ -631,4 +641,59 @@ ${webEvidencePrompt}
 - 不允许只说数据不足；数据不足只能作为置信度和证伪条件的一部分。
 - 禁止买入/卖出/持有建议，使用“观察、补充验证、赔率改善、逻辑重估”等研究语言。
 - 长度控制在 900-1800 字，信息密度优先。`;
+}
+
+/**
+ * Deep-research report prompt — judgment-first, research-grade. Unlike the
+ * chat prompt, this asks for a full structured report, but keeps data-gap talk
+ * minimal and never exposes backend/vendor language to the reader.
+ */
+export function buildReportPrompt(question, panel, dataSources = {}, context = {}) {
+  const profile = companyByTicker(panel.ticker) || {};
+  const name = panel.companyName || profile.nameZh || panel.ticker;
+  const moat = profile?.moat?.join("、") || "本地档案暂缺";
+  const businessModel = profile?.businessModel?.join("；") || "本地档案暂缺";
+  const bull = profile?.bull?.join("；") || "本地档案暂缺";
+  const bear = profile?.bear?.join("；") || "本地档案暂缺";
+  const monitors = profile?.monitors?.join("、") || "收入增速、利润率、自由现金流、回购/分红";
+  const fq = computeFinancialQuality(context.financialsData || null, {
+    marketCap: context.marketSnapshot?.marketCap,
+    pe: context.marketSnapshot?.pe
+  });
+  const liveFinancials = Array.isArray(fq.metrics) && fq.metrics.length
+    ? fq.metrics.map((m) => `${m.name}=${m.display}`).join("；")
+    : "完整三表暂未核到（以本地档案与商业逻辑为主）";
+  const competitorCandidates = competitorSetFor(profile || { ticker: panel.ticker })
+    .map((item) => `- ${item.name}${item.ticker ? `（${item.ticker}）` : ""}：${item.angle}`)
+    .join("\n") || "本地档案暂缺";
+  const webEvidencePrompt = webEvidenceToPrompt(context.webEvidence);
+  const price = panel.price?.value && panel.price.value !== "暂不可用" ? panel.price.value : "暂不可用";
+
+  return `请基于以下材料，为 ${name}（${panel.ticker}）写一份资深买方研究员风格的深度研究报告。
+用户问题：${question || `${name} 值不值得研究`}
+北京时间：${formatBeijingMinute()}
+当前价格口径：${price}（来源 ${panel.price?.source || dataSources.market?.provider || "公开行情"}）
+一句话判断（参考，可改写）：${panel.oneLineView || ""}
+
+公司档案：
+- 护城河：${moat}
+- 商业模式：${businessModel}
+- 已核到的实时财务口径：${liveFinancials}
+- Bull：${bull}
+- Bear：${bear}
+- 监控项：${monitors}
+- 主要竞争对手：
+${competitorCandidates}
+- 公开网页证据（已校验可用链接）：
+${webEvidencePrompt}
+
+写作规则：
+- 输出中文 Markdown（可用 ## 小标题、有序/无序列表，但不要表格）。
+- 判断优先：开头第一段直接给“核心判断”——它现在赚不赚钱、质量如何、最大的赌点和最大的风险各是什么。不要用“我将分析/数据不足”开场。
+- 固定结构，依次：## 核心判断、## 赚钱机制与护城河、## 财务质量、## 估值与赔率、## 风险与证伪条件、## 关键监控与下一步、## 来源。
+- 财务/估值用上面“已核到的实时财务口径”，不能编造具体数值；缺某项就用研究语言说“当前未核到/置信度下降”，但仍要给方向性判断。
+- 严禁出现“数据完整度xx%、暂不评分、未接入、需要补充材料、配置 API_KEY、FMP/EODHD/Finnhub”等任何后台/产品/厂商词。缺口最多在“关键监控与下一步”里用一两句研究语言带过。
+- “## 来源”只列上面给出的可用链接与公司官方/行情来源，不要编造链接。
+- 不给买入/卖出/持有指令，用“观察、补充验证、赔率改善、逻辑重估”等研究语言。结尾不需要再写免责声明（系统会附加）。
+- 长度 1500-3000 字，信息密度优先。`;
 }
