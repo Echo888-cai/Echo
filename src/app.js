@@ -627,6 +627,7 @@ function renderComposer(company) {
         <div class="composer-left-tools">
           <label class="tool-chip icon-chip file-label" title="上传资料">+<input type="file" name="documents" multiple accept=".pdf,.txt,.md,.csv,.json,image/*"></label>
           <button class="tool-chip" type="button" data-action="quick" data-query="它主要靠什么赚钱？">赚钱方式</button>
+          <button class="tool-chip" type="button" data-action="quick" data-query="竞争对手有哪些？">竞争格局</button>
           <button class="tool-chip" type="button" data-action="quick" data-query="经营质量怎么样？">经营质量</button>
           <button class="tool-chip" type="button" data-action="quick" data-query="什么情况会证伪？">证伪条件</button>
           <button class="tool-chip emphasis" type="button" data-action="report" ${company ? "" : "disabled"}>深度研究</button>
