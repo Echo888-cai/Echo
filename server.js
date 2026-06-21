@@ -20,6 +20,9 @@ import { handleCompanySearch } from "./src/server/routes/companies.js";
 import { handleSessionList, handleSessionClear, handleSessionGet, handleSessionDelete } from "./src/server/routes/research.js";
 import { handleChatApi } from "./src/server/routes/chat.js";
 import { handleReportGenerateApi } from "./src/server/routes/reports.js";
+import { handleProfileList, handleProfileGet, handleProfileDelete } from "./src/server/routes/portraits.js";
+import { handleEventsDigest } from "./src/server/routes/events.js";
+import { handlePortfolioList, handlePortfolioDelete } from "./src/server/routes/portfolio.js";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 loadEnvFile(root);
@@ -60,6 +63,18 @@ const server = createServer(async (req, res) => {
   // ── Research conversation + deep report ────────────────
   if (method === "POST" && url.startsWith("/api/chat")) return handleChatApi(req, res);
   if (method === "POST" && url.startsWith("/api/report/generate")) return handleReportGenerateApi(req, res);
+
+  // ── Event engine digest ────────────────────────────────
+  if (method === "GET" && url.startsWith("/api/events/digest")) return handleEventsDigest(req, res);
+
+  // ── Portfolio (natural-language ledger) ────────────────
+  if (method === "GET" && url.startsWith("/api/portfolio")) return handlePortfolioList(req, res);
+  if (method === "DELETE" && url.startsWith("/api/portfolio")) return handlePortfolioDelete(req, res);
+
+  // ── Company portraits (long-term memory) ───────────────
+  if (method === "GET" && url.startsWith("/api/company/profiles")) return handleProfileList(req, res);
+  if (method === "GET" && url.startsWith("/api/company/profile")) return handleProfileGet(req, res);
+  if (method === "DELETE" && url.startsWith("/api/company/profile")) return handleProfileDelete(req, res);
 
   // ── Research sessions ──────────────────────────────────
   if (method === "GET" && url.startsWith("/api/research/sessions") && !url.includes("/api/research/sessions/")) return handleSessionList(req, res);

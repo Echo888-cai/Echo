@@ -239,7 +239,7 @@ function markdownToHtml(markdown = "") {
         html.push("<ul>");
         inList = true;
       }
-      html.push(`<li>${linkifyEscaped(esc(line.replace(/^[-*]\s+/, "")))}</li>`);
+      html.push(`<li>${linkifyEscaped(esc(line.replace(/^[-*]\s+/, ""))).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")}</li>`);
     } else if (/^\d+[.、]\s+/.test(line)) {
       if (inList) {
         html.push("</ul>");
@@ -392,6 +392,74 @@ function exportResearch() {
   anchor.remove();
   URL.revokeObjectURL(url);
   toast("已导出 Markdown 研究记录。");
+}
+
+async function showPortfolio() {
+  try {
+    const data = await api("/api/portfolio");
+    const positions = data.positions || [];
+    const lines = ["## 我的持仓"];
+    if (!positions.length) {
+      lines.push("", "还没有记账。在对话里说一句即可记录，例如：“耐世特 成本 4.9，持有 3000 股，止损 4.2，止盈 6.5”。");
+    } else {
+      lines.push("", ...positions.map((p) => {
+        const bits = [];
+        if (p.shares != null) bits.push(`${p.shares} 股`);
+        if (p.avgCost != null) bits.push(`成本 ${p.avgCost}`);
+        if (p.stopLoss != null) bits.push(`止损 ${p.stopLoss}`);
+        if (p.takeProfit != null) bits.push(`止盈 ${p.takeProfit}`);
+        return `- **${p.companyName || p.ticker}**（${p.ticker}）：${bits.join(" · ") || "已建仓"}`;
+      }));
+      lines.push("", "盘前事件会自动盯住这些持仓的止损/止盈线和大幅回撤。");
+    }
+    appendMessage("assistant", lines.join("\n"), { type: "portfolio" });
+  } catch (error) {
+    toast(error.message || "暂时无法读取持仓。");
+  }
+}
+
+async function showEventDigest() {
+  try {
+    const data = await api("/api/events/digest?slot=premarket");
+    const digest = data.digest || {};
+    const events = digest.events || [];
+    const lines = [`## 盘前事件提醒`, "", digest.summary || ""];
+    if (events.length) {
+      const tag = (s) => (s === "high" ? "🔴 重要" : s === "medium" ? "🟡 关注" : "⚪ 一般");
+      lines.push("", ...events.map((e) => {
+        const link = e.url ? ` ${e.url}` : "";
+        return `- ${tag(e.severity)} ${e.title}${link}`;
+      }));
+    } else {
+      lines.push("", "完成一轮研究后，系统会跟踪该公司的财报与重大新闻，盘前在这里汇总。");
+    }
+    appendMessage("assistant", lines.join("\n"), { type: "digest" });
+  } catch (error) {
+    toast(error.message || "暂时无法生成事件提醒。");
+  }
+}
+
+async function showPortrait() {
+  const company = getCompany();
+  const panel = getPanel();
+  const ticker = company?.ticker || panel?.ticker;
+  if (!ticker) {
+    toast("先选择一家公司。");
+    return;
+  }
+  try {
+    const data = await api(`/api/company/profile?ticker=${encodeURIComponent(ticker)}`);
+    // 剥掉 YAML frontmatter（仅用于存储识别，前端展示是噪音）。
+    const markdown = String(data.markdown || "").replace(/^---\n[\s\S]*?\n---\n+/, "");
+    if (!markdown.trim()) {
+      toast("这家公司还没有沉淀画像，完成一轮研究后会自动建立。");
+      return;
+    }
+    // 把画像作为一条特殊助手消息插入对话流，复用现有 Markdown 渲染与滚动。
+    appendMessage("assistant", markdown, { type: "portrait", turnCount: data.profile?.turnCount || 0 });
+  } catch (error) {
+    toast(error.message || "这家公司还没有画像。");
+  }
 }
 
 function clearResearch() {
@@ -552,6 +620,10 @@ async function sendChat(question) {
     valuation: result.valuation || null,
     evidence: provenanceFromPanel(result.decisionPanel)
   });
+  // 长期画像反馈：建档/判断变化时轻提示，让用户感知"研究在沉淀"。
+  if (result.positionSaved) toast(`已记账 ${company.nameZh || company.ticker} 的持仓信息。`);
+  else if (result.portrait?.created) toast(`已为 ${company.nameZh || company.ticker} 建立长期画像。`);
+  else if (result.portrait?.changed) toast(`已更新 ${company.nameZh || company.ticker} 的长期画像（判断有变化）。`);
   await refreshSessions();
   render();
 }
@@ -693,6 +765,9 @@ function renderResearch() {
           <h2>${esc(panel?.companyName || company?.nameZh || "未选择公司")}</h2>
           <span>${esc(company?.ticker || panel?.ticker || "输入公司名、港股或美股代码")}</span>
           ${panel?.confidence ? `<div class="snapshot-confidence"><span class="conf conf-${panel.confidence === "高" ? "high" : panel.confidence === "低" ? "low" : "mid"}">置信度 ${esc(panel.confidence)}</span></div>` : ""}
+          ${(company?.ticker || panel?.ticker) ? `<button class="snapshot-export" type="button" data-action="portrait">公司画像 ◆</button>` : ""}
+          <button class="snapshot-export" type="button" data-action="digest">盘前事件 ◷</button>
+          <button class="snapshot-export" type="button" data-action="portfolio-view">我的持仓 ▣</button>
           ${thread.length ? `<button class="snapshot-export" type="button" data-action="export">导出研究 ↓</button>` : ""}
         </section>
         ${renderSessionHistory(activeSessionId)}
@@ -928,7 +1003,7 @@ function renderAnswerMeta(meta = {}) {
 function renderMessage(message) {
   if (message.role === "assistant") {
     const meta = message.meta || {};
-    const title = meta.type === "deep_research" ? "DEEP RESEARCH" : "LUVIO";
+    const title = meta.type === "deep_research" ? "DEEP RESEARCH" : meta.type === "portrait" ? "公司画像" : meta.type === "digest" ? "事件提醒" : meta.type === "portfolio" ? "我的持仓" : "LUVIO";
     const messageId = message.id || "";
     return `<article class="message assistant">
       <div class="bubble answer-card">
@@ -1005,6 +1080,9 @@ document.addEventListener("click", async (event) => {
   const action = target.dataset.action;
   if (action === "new") clearResearch();
   if (action === "export") exportResearch();
+  if (action === "portrait") await showPortrait();
+  if (action === "digest") await showEventDigest();
+  if (action === "portfolio-view") await showPortfolio();
   if (action === "load-session") await loadSession(target.dataset.id);
   if (action === "delete-session") await deleteSession(target.dataset.id);
   if (action === "clear-sessions") await clearAllSessions();

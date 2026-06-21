@@ -43,6 +43,16 @@ function normalizeShares(raw) {
   return cleaned;
 }
 
+const STOP_LOSS_PATTERNS = [
+  /(?:止损|止蚀|止损价|stop[- ]?loss)[^\d]{0,8}(\d+(?:\.\d+)?)/i,
+  /(?:跌破|跌到)[^\d]{0,4}(\d+(?:\.\d+)?)[^\d]{0,6}(?:止损|清仓|卖)/i
+];
+
+const TAKE_PROFIT_PATTERNS = [
+  /(?:止盈|止赢|止盈价|take[- ]?profit|目标价)[^\d]{0,8}(\d+(?:\.\d+)?)/i,
+  /(?:涨到|涨破|到了)[^\d]{0,4}(\d+(?:\.\d+)?)[^\d]{0,6}(?:止盈|减仓|卖)/i
+];
+
 const HORIZON_KEYWORDS = [
   { pattern: /(长期|长期持有|3-5年|三到五年|三至五年|五到十年|5-10年|十年|5y|10y)/i, value: "长期（≥3 年）" },
   { pattern: /(三年|3年|3-year)/i, value: "3 年" },
@@ -73,7 +83,16 @@ function parseNumeric(raw) {
  */
 export function parseUserContext(question = "") {
   const text = String(question || "");
-  const result = { cost: null, shares: null, horizon: null, note: "" };
+  const result = { cost: null, shares: null, horizon: null, stopLoss: null, takeProfit: null, note: "" };
+
+  for (const pat of STOP_LOSS_PATTERNS) {
+    const match = text.match(pat);
+    if (match) { const v = parseNumeric(match[1]); if (v) { result.stopLoss = v; break; } }
+  }
+  for (const pat of TAKE_PROFIT_PATTERNS) {
+    const match = text.match(pat);
+    if (match) { const v = parseNumeric(match[1]); if (v) { result.takeProfit = v; break; } }
+  }
 
   for (const pat of COST_PATTERNS) {
     const match = text.match(pat);

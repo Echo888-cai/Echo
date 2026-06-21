@@ -596,8 +596,9 @@ export function buildChatPrompt(question, panel, dataSources = {}, context = {})
     .join("\n") || "本地档案暂缺";
   const newsSignals = [...evidenceSignalsFromWeb(context.webEvidence), ...evidenceSignalsFromNews(context.newsSnapshot)].slice(0, 8).join("\n") || "本轮没有抓到可直接使用的竞争/行业外部信号";
   const webEvidencePrompt = webEvidenceToPrompt(context.webEvidence);
+  const portraitBlock = context.portraitContext ? `\n${context.portraitContext}\n` : "";
   return `用户问题：${question}
-
+${portraitBlock}
 当前研究对象：${panel.companyName}（${panel.ticker}）
 研究状态：${RESEARCH_STATUS_LABELS[panel.researchStatus] || panel.researchStatus}
 数据完整度：${panel.dataCompleteness}%

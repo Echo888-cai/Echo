@@ -1,12 +1,16 @@
 import { readJsonBody, sendJson, withTimeout } from "../utils/async.js";
 import { runAgent } from "../services/agentService.js";
-import { callModel, getProviderStatus } from "../services/modelGateway.js";
+import { getProviderStatus } from "../services/modelGateway.js";
 import { companyByTicker } from "../../data.js";
 import { saveResearchSession } from "../repositories/researchSessions.js";
 import { classifyResearchIntent } from "../services/intentClassifier.js";
 import { researchWebEvidence } from "../services/webEvidenceService.js";
-import { researchReplyFromPanel, normalizeResearchAnswer, buildChatPrompt, mergeEvidenceIntoPanel } from "../services/answerComposer.js";
+import { researchReplyFromPanel, normalizeResearchAnswer, mergeEvidenceIntoPanel } from "../services/answerComposer.js";
 import { displayValuation } from "../services/valuationEngine.js";
+import { PROMPTS } from "../../prompts.js";
+import { loadPortraitContext, updatePortraitFromPanel } from "../services/companyPortrait.js";
+import { runTwoStageChat } from "../services/twoStageChat.js";
+import { upsertPosition } from "../repositories/portfolio.js";
 
 export async function handleChatApi(req, res) {
   try {
@@ -30,33 +34,71 @@ export async function handleChatApi(req, res) {
     // speak the same odds.
     const valuationProfile = companyByTicker(result.decisionPanel?.ticker || payload.company?.ticker) || payload.company;
     const valuation = displayValuation(valuationProfile, result.marketSnapshot, result.financialsData);
+    // 长期画像：研究同一公司时自动带上上次沉淀的投资主线/证伪条件，保持连贯。
+    const portraitTicker = result.decisionPanel?.ticker || payload.company?.ticker;
     const context = {
       newsSnapshot: result.newsSnapshot,
       webEvidence,
       financialsData: result.financialsData,
       marketSnapshot: result.marketSnapshot,
-      valuation: valuation.cannotValueReason ? null : valuation
+      valuation: valuation.cannotValueReason ? null : valuation,
+      portraitContext: portraitTicker ? loadPortraitContext(portraitTicker) : ""
     };
     const fallback = researchReplyFromPanel(result.decisionPanel, question, result.dataSources, context);
     let content = fallback;
     let chatModel = null;
-    // One model round-trip for every intent (the prompt carries an intent-specific instruction).
-    // Generous budget because this is now the only model call in the chat path; on timeout we fall
-    // back to the focused local reply, which is already intent-aware.
+    // Two-stage: search-triage agent produces a verified research note, then the
+    // answer agent writes from it. Falls back to single-stage / local reply on timeout.
     if (getProviderStatus().configured && result.decisionPanel) {
-      chatModel = await withTimeout(callModel({
-        system: "你是 Luvio 的港股研究助理，风格像资深买方研究员：直接、克制、可证伪。先给判断，再讲依据，最后才提缺口。普通追问给精炼短答，不要伪装成完整正式报告，不给买卖指令。即使公开数据不完整，也必须基于公司档案、商业模式、行业常识、当前可得行情/财务/公告和模型推理给阶段判断；缺数据只影响置信度。正文禁止出现“未接入/完整度xx%/需要补充材料”这类后台状态词。",
-        user: buildChatPrompt(question, result.decisionPanel, result.dataSources, context)
-      }), 30000, null);
+      chatModel = await runTwoStageChat({
+        question,
+        panel: result.decisionPanel,
+        dataSources: result.dataSources,
+        context,
+        system: PROMPTS.chat.system
+      });
       if (chatModel?.content && chatModel.content.length < 9000) content = chatModel.content;
     }
     content = normalizeResearchAnswer(content, result.decisionPanel, result.dataSources);
     result.webEvidence = webEvidence;
     mergeEvidenceIntoPanel(result.decisionPanel, webEvidence);
     if (result.decisionPanel && !valuation.cannotValueReason) result.decisionPanel.valuation = valuation;
+    // 自然语言记账：识别到成本/股数/止损/止盈就 upsert 到持仓账本（持久化）。
+    let positionSaved = false;
+    const uc = result.userContext || {};
+    if (portraitTicker && (uc.cost || uc.shares || uc.stopLoss || uc.takeProfit)) {
+      try {
+        upsertPosition(portraitTicker, {
+          companyName: result.decisionPanel?.companyName || payload.company?.nameZh,
+          shares: uc.shares != null ? Number(uc.shares) : undefined,
+          avgCost: uc.cost != null ? Number(uc.cost) : undefined,
+          stopLoss: uc.stopLoss != null ? Number(uc.stopLoss) : undefined,
+          takeProfit: uc.takeProfit != null ? Number(uc.takeProfit) : undefined
+        });
+        positionSaved = true;
+      } catch (err) {
+        console.warn("portfolio 记账失败:", err?.message || err);
+      }
+    }
+
+    // 回写长期画像：判断变化时追加事件日志，否则只累计研究轮次。
+    let portrait = null;
+    if (portraitTicker && result.decisionPanel) {
+      try {
+        portrait = updatePortraitFromPanel({
+          ticker: portraitTicker,
+          panel: result.decisionPanel,
+          valuation: valuation.cannotValueReason ? null : valuation,
+          question
+        });
+      } catch (err) {
+        console.warn("company_profile 回写失败:", err?.message || err);
+      }
+    }
     const sessionId = persistFinalChatSession(payload, result, content);
     sendJson(res, 200, {
       mode: chatModel?.content ? "chat_model" : "chat_local",
+      stages: chatModel?.stages || "none",
       intent,
       provider: chatModel?.provider || result.provider,
       model: chatModel?.model || result.model,
@@ -68,7 +110,11 @@ export async function handleChatApi(req, res) {
       marketSnapshot: result.marketSnapshot,
       newsSnapshot: result.newsSnapshot,
       valuation: valuation.cannotValueReason ? null : valuation,
-      webEvidence
+      webEvidence,
+      portrait: portrait
+        ? { ticker: portraitTicker, created: portrait.created, changed: portrait.changed, turnCount: portrait.profile?.turnCount || 0 }
+        : null,
+      positionSaved
     });
   } catch (error) {
     const status = error.statusCode || 500;

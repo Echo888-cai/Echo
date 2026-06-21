@@ -1,0 +1,105 @@
+/**
+ * portfolio repository — 持仓账本（对标 HoneClaw 的 portfolio）。
+ *
+ * 每个 ticker 一条持仓：股数、成本、止损线、止盈线、备注。
+ * 自然语言记账时 upsert；事件引擎读它来产出"触线提醒"。
+ */
+
+import { getDb } from "../../db/index.js";
+import { normalizeTicker } from "../../data.js";
+import { detectMarket } from "../../market.js";
+
+let ensured = false;
+function ensureTable() {
+  if (ensured) return;
+  const db = getDb();
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS portfolio_positions (
+      ticker       TEXT PRIMARY KEY,
+      company_name TEXT,
+      shares       REAL,
+      avg_cost     REAL,
+      stop_loss    REAL,
+      take_profit  REAL,
+      note         TEXT,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+  ensured = true;
+}
+
+function ensureCompanyRow(db, ticker, name) {
+  if (!ticker) return;
+  try {
+    const us = detectMarket(ticker) === "US";
+    db.prepare(
+      `INSERT OR IGNORE INTO companies (ticker, name_zh, name_en, exchange, currency, listing_status)
+       VALUES (?, ?, ?, ?, ?, 'active')`
+    ).run(ticker, name || ticker, us ? name || ticker : null, us ? "US" : "HKEX", us ? "USD" : "HKD");
+  } catch {
+    // best effort
+  }
+}
+
+function hydrate(row) {
+  if (!row) return null;
+  return {
+    ticker: row.ticker,
+    companyName: row.company_name || row.ticker,
+    shares: row.shares,
+    avgCost: row.avg_cost,
+    stopLoss: row.stop_loss,
+    takeProfit: row.take_profit,
+    note: row.note || "",
+    updatedAt: row.updated_at
+  };
+}
+
+export function getPosition(ticker) {
+  ensureTable();
+  const db = getDb();
+  return hydrate(db.prepare("SELECT * FROM portfolio_positions WHERE ticker = ?").get(normalizeTicker(ticker)));
+}
+
+export function listPositions() {
+  ensureTable();
+  const db = getDb();
+  return db.prepare("SELECT * FROM portfolio_positions ORDER BY updated_at DESC").all().map(hydrate);
+}
+
+/** Upsert a position. Only provided (non-null) fields overwrite existing ones. */
+export function upsertPosition(ticker, patch = {}) {
+  ensureTable();
+  const db = getDb();
+  const normalized = normalizeTicker(ticker);
+  ensureCompanyRow(db, normalized, patch.companyName);
+  const existing = getPosition(normalized);
+  const merged = {
+    companyName: patch.companyName ?? existing?.companyName ?? normalized,
+    shares: patch.shares ?? existing?.shares ?? null,
+    avgCost: patch.avgCost ?? existing?.avgCost ?? null,
+    stopLoss: patch.stopLoss ?? existing?.stopLoss ?? null,
+    takeProfit: patch.takeProfit ?? existing?.takeProfit ?? null,
+    note: patch.note ?? existing?.note ?? ""
+  };
+  db.prepare(`
+    INSERT INTO portfolio_positions (ticker, company_name, shares, avg_cost, stop_loss, take_profit, note, updated_at)
+    VALUES (@ticker, @companyName, @shares, @avgCost, @stopLoss, @takeProfit, @note, datetime('now'))
+    ON CONFLICT(ticker) DO UPDATE SET
+      company_name = excluded.company_name,
+      shares = excluded.shares,
+      avg_cost = excluded.avg_cost,
+      stop_loss = excluded.stop_loss,
+      take_profit = excluded.take_profit,
+      note = excluded.note,
+      updated_at = datetime('now')
+  `).run({ ticker: normalized, ...merged });
+  return getPosition(normalized);
+}
+
+export function deletePosition(ticker) {
+  ensureTable();
+  const db = getDb();
+  return db.prepare("DELETE FROM portfolio_positions WHERE ticker = ?").run(normalizeTicker(ticker)).changes > 0;
+}

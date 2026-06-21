@@ -30,6 +30,7 @@ import { analystEstimatesToMarkdown } from "../../financialData.js";
 import { newsSnapshotToMarkdown } from "../../newsData.js";
 import { PROMPTS } from "../../prompts.js";
 import { getProviderStatus } from "./modelGateway.js";
+import { beijingMinute } from "../utils/time.js";
 
 const REPAIR_TIMEOUT_MS = 8000;
 const MODEL_TIMEOUT_MS = 12000;
@@ -60,7 +61,9 @@ function buildUserPrompt(input) {
     ? `\n用户持仓：成本 ${userContext.cost || "未提供"}，持股 ${userContext.shares || "未提供"} 股，周期 ${userContext.horizon || "未提供"}。`
     : "\n用户未录入持仓。";
 
-  return `${buildPromptContext(profile, question, filings, financialsData)}
+  return `当前北京时间：${beijingMinute()}（涉及"今天/最新/盘前"等相对时间时，以此为锚点）
+
+${buildPromptContext(profile, question, filings, financialsData)}
 
 ${marketSnapshotToMarkdown(marketSnapshot)}
 

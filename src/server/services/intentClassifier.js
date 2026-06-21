@@ -1,3 +1,5 @@
+import { anchorQueryToDate, beijingYear } from "../utils/time.js";
+
 export const RESEARCH_INTENTS = {
   companyStatus: "company_status",
   businessModel: "business_model",
@@ -39,10 +41,11 @@ export function buildEvidenceQueries({ company = {}, question = "", intent = cla
   const en = company.nameEn || main;
   const zh = company.nameZh || main;
   const ticker = company.ticker || "";
+  const year = beijingYear();
   const base = [`"${en}" ${ticker}`.trim(), `"${zh}" ${ticker}`.trim()];
   const templates = {
     [RESEARCH_INTENTS.competitors]: [
-      `${en} competitors market share 2026`,
+      `${en} competitors market share ${year}`,
       `${en} industry competition market share shipments`,
       `${en} competitors IDC Gartner Canalys Counterpoint`,
       `site:canalys.com ${en} market share shipments`,
@@ -87,7 +90,7 @@ export function buildEvidenceQueries({ company = {}, question = "", intent = cla
       `${zh} 看空 逻辑 监管 增长放缓`
     ],
     [RESEARCH_INTENTS.companyStatus]: [
-      `${en} latest earnings stock news 2026`,
+      `${en} latest earnings stock news ${year}`,
       `${en} latest results revenue profit outlook`,
       `${zh} 最近怎么样 最新财报 股价 新闻`,
       `${zh} 业绩 展望 风险`
@@ -101,6 +104,8 @@ export function buildEvidenceQueries({ company = {}, question = "", intent = cla
   };
   return [...base, ...(templates[intent] || templates[RESEARCH_INTENTS.companyStatus])]
     .map((query) => query.replace(/\s+/g, " ").trim())
+    // 相对时间问题（今天/最新/盘前…）先把绝对日期锚进查询，避免拿模糊词原样搜。
+    .map((query) => anchorQueryToDate(query, question))
     .filter(Boolean)
     .filter((query, index, arr) => arr.indexOf(query) === index)
     .slice(0, 6);

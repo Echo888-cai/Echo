@@ -1,5 +1,6 @@
 import { normalizeTicker } from "./data.js";
 import { fmpSymbol, finnhubSymbol, tencentSymbol, hkCode } from "./market.js";
+import { fmpGet, FMP_TTL } from "./fmpClient.js";
 
 function env(name) {
   return process.env[name] || "";
@@ -51,15 +52,11 @@ function toFmpSymbol(ticker) {
 }
 
 async function fetchFmpFinancials(ticker) {
-  const apiKey = env("FMP_API_KEY");
-  if (!apiKey) throw new Error("missing FMP_API_KEY");
   const symbol = toFmpSymbol(ticker);
-
-  const sym = encodeURIComponent(symbol);
   const [incomeStmt, balanceSheet, cashFlow] = await Promise.all([
-    fetchJson(`https://financialmodelingprep.com/stable/income-statement?symbol=${sym}&limit=2&apikey=${apiKey}`, { timeoutMs: 10000 }),
-    fetchJson(`https://financialmodelingprep.com/stable/balance-sheet-statement?symbol=${sym}&limit=2&apikey=${apiKey}`, { timeoutMs: 10000 }),
-    fetchJson(`https://financialmodelingprep.com/stable/cash-flow-statement?symbol=${sym}&limit=2&apikey=${apiKey}`, { timeoutMs: 10000 })
+    fmpGet("/stable/income-statement", { symbol, limit: 2 }, { ttl: FMP_TTL.financials, timeoutMs: 10000 }),
+    fmpGet("/stable/balance-sheet-statement", { symbol, limit: 2 }, { ttl: FMP_TTL.financials, timeoutMs: 10000 }),
+    fmpGet("/stable/cash-flow-statement", { symbol, limit: 2 }, { ttl: FMP_TTL.financials, timeoutMs: 10000 })
   ]);
 
   if (!incomeStmt?.length) throw new Error("FMP 没有返回利润表数据");
@@ -105,11 +102,8 @@ async function fetchFmpFinancials(ticker) {
 }
 
 async function fetchFmpCompanyProfile(ticker) {
-  const apiKey = env("FMP_API_KEY");
-  if (!apiKey) throw new Error("missing FMP_API_KEY");
   const symbol = toFmpSymbol(ticker);
-
-  const profile = await fetchJson(`https://financialmodelingprep.com/stable/profile?symbol=${encodeURIComponent(symbol)}&apikey=${apiKey}`, { timeoutMs: 5000 });
+  const profile = await fmpGet("/stable/profile", { symbol }, { ttl: FMP_TTL.profile, timeoutMs: 5000 });
   if (!profile?.length) throw new Error("FMP 没有返回公司画像");
 
   const data = profile[0];
@@ -141,14 +135,10 @@ async function fetchFmpCompanyProfile(ticker) {
 }
 
 async function fetchFmpAnalystEstimates(ticker) {
-  const apiKey = env("FMP_API_KEY");
-  if (!apiKey) throw new Error("missing FMP_API_KEY");
   const symbol = toFmpSymbol(ticker);
-
-  const sym = encodeURIComponent(symbol);
   const [ratings, priceTarget] = await Promise.all([
-    fetchJson(`https://financialmodelingprep.com/stable/grades?symbol=${sym}&limit=5&apikey=${apiKey}`, { timeoutMs: 5000 }),
-    fetchJson(`https://financialmodelingprep.com/stable/price-target-consensus?symbol=${sym}&apikey=${apiKey}`, { timeoutMs: 5000 })
+    fmpGet("/stable/grades", { symbol, limit: 5 }, { ttl: FMP_TTL.estimates, timeoutMs: 5000 }),
+    fmpGet("/stable/price-target-consensus", { symbol }, { ttl: FMP_TTL.estimates, timeoutMs: 5000 })
   ]);
 
   const recentRatings = (ratings || []).slice(0, 5).map((r) => ({
@@ -175,11 +165,8 @@ async function fetchFmpAnalystEstimates(ticker) {
 }
 
 async function fetchFmpDividendHistory(ticker) {
-  const apiKey = env("FMP_API_KEY");
-  if (!apiKey) throw new Error("missing FMP_API_KEY");
   const symbol = toFmpSymbol(ticker);
-
-  const dividends = await fetchJson(`https://financialmodelingprep.com/stable/dividends?symbol=${encodeURIComponent(symbol)}&limit=8&apikey=${apiKey}`, { timeoutMs: 5000 });
+  const dividends = await fmpGet("/stable/dividends", { symbol, limit: 8 }, { ttl: FMP_TTL.dividends, timeoutMs: 5000 });
   const historical = (Array.isArray(dividends) ? dividends : dividends?.historical || []).slice(0, 8).map((d) => ({
     date: d.date || "",
     dividend: numberOrNull(d.dividend),
