@@ -56,6 +56,10 @@ export async function collectDataSources({ company, suppliedMarketSnapshot = nul
   if (!company?.ticker) throw new Error("缺少公司上下文");
   const errors = [];
 
+  // Fetch company profile in parallel only for unknown tickers (nameZh === ticker),
+  // so bare US tickers like RKLB get a real company name from FMP.
+  const needsProfileLookup = !company.nameZh || company.nameZh === company.ticker;
+
   const tasks = await Promise.allSettled([
     suppliedMarketSnapshot
       ? Promise.resolve(suppliedMarketSnapshot)
@@ -63,10 +67,13 @@ export async function collectDataSources({ company, suppliedMarketSnapshot = nul
     withTimeout(getNewsSnapshot(company), 3500, fallbackNewsSnapshot(company, "新闻请求超时")),
     withTimeout(getFinancials(company.ticker), 8000, { providerStatus: "missing", errors: ["财务数据请求超时"], asOf: new Date().toISOString() }),
     withTimeout(getRecentFilings(company.ticker), 5000, { providerStatus: "missing", errors: ["公告请求超时"], filings: [], asOf: new Date().toISOString() }),
-    withTimeout(getAnalystEstimates(company.ticker), 4000, { providerStatus: "missing", errors: ["评级请求超时"], asOf: new Date().toISOString() })
+    withTimeout(getAnalystEstimates(company.ticker), 4000, { providerStatus: "missing", errors: ["评级请求超时"], asOf: new Date().toISOString() }),
+    needsProfileLookup
+      ? withTimeout(getCompanyProfile(company.ticker), 4000, null)
+      : Promise.resolve(null)
   ]);
 
-  const [market, news, financials, filings, estimates] = tasks;
+  const [market, news, financials, filings, estimates, profileResult] = tasks;
   const marketSnapshot = market.status === "fulfilled" ? market.value : fallbackMarketSnapshot(company.ticker, market.reason?.message || "行情失败");
   // Cache successful snapshots
   if (marketSnapshot.providerStatus === "ok") {
@@ -78,6 +85,7 @@ export async function collectDataSources({ company, suppliedMarketSnapshot = nul
     financialsData: financials.status === "fulfilled" ? financials.value : { providerStatus: "missing", errors: [financials.reason?.message || "财务失败"] },
     filingsData: filings.status === "fulfilled" ? filings.value : { providerStatus: "missing", filings: [], errors: [filings.reason?.message || "公告失败"] },
     estimatesData: estimates.status === "fulfilled" ? estimates.value : { providerStatus: "missing", errors: [estimates.reason?.message || "评级失败"] },
+    companyProfile: profileResult?.status === "fulfilled" ? profileResult.value : null,
     errors
   };
 }

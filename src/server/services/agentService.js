@@ -190,11 +190,18 @@ export async function runAgent(input, options = {}) {
   // 2. Collect data sources with timeouts.
   const data = await collectDataSources({ company, suppliedMarketSnapshot });
 
+  // Enrich company name for bare tickers (e.g. "RKLB" → "Rocket Lab USA") using
+  // the FMP profile fetched in parallel by collectDataSources.
+  const resolvedName = data.companyProfile?.companyName;
+  const enrichedCompany = resolvedName && company.nameZh === company.ticker
+    ? { ...company, nameZh: resolvedName, nameEn: resolvedName }
+    : company;
+
   // 3. Local-panel path: no key, or the caller (chat) wants a deterministic panel + its own single model call.
   const providerStatus = getProviderStatus();
   if (!useModelPanel || !providerStatus.configured) {
     return assembleLocal({
-      question, company, filings, marketSnapshot: data.marketSnapshot, newsSnapshot: data.newsSnapshot,
+      question, company: enrichedCompany, filings, marketSnapshot: data.marketSnapshot, newsSnapshot: data.newsSnapshot,
       financialsData: data.financialsData, filingsData: data.filingsData, estimatesData: data.estimatesData,
       documents, memory: effectiveMemory, userContext,
       mode: providerStatus.configured ? "local_panel" : "model_key_missing", dataSources: data,
@@ -203,7 +210,7 @@ export async function runAgent(input, options = {}) {
   }
 
   // 4. First pass — call the model.
-  const profile = companyByTicker(company.ticker) || company;
+  const profile = companyByTicker(enrichedCompany.ticker) || enrichedCompany;
   const userPrompt = buildUserPrompt({
     company: profile,
     question, filings,
@@ -250,7 +257,7 @@ export async function runAgent(input, options = {}) {
   // 6. If both passes failed → local fallback (never leak dirty Markdown).
   if (!modelPanel) {
     return assembleLocal({
-      question, company, filings,
+      question, company: enrichedCompany, filings,
       marketSnapshot: data.marketSnapshot, newsSnapshot: data.newsSnapshot,
       financialsData: data.financialsData, filingsData: data.filingsData, estimatesData: data.estimatesData,
       documents, memory: effectiveMemory, userContext, mode: "repair_failed", dataSources: data,

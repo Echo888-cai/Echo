@@ -43,14 +43,26 @@ const usAliases = [
   { pattern: /\bBABA\b/i, ticker: "BABA", name: "阿里巴巴 ADR" }
 ];
 
-const US_STOPWORDS = new Set(["PE", "PB", "PS", "ROE", "ROI", "AI", "IPO", "GDP", "CEO", "US", "HK", "EPS", "FCF", "DCF", "ETF", "Q1", "Q2", "Q3", "Q4"]);
+const US_STOPWORDS = new Set([
+  "PE", "PB", "PS", "ROE", "ROI", "ROA", "ROC", "AI", "IPO", "GDP", "CEO",
+  "CFO", "COO", "CTO", "CMO", "US", "HK", "EPS", "FCF", "DCF", "ETF",
+  "Q1", "Q2", "Q3", "Q4", "YOY", "QOQ", "MOM", "TTM", "LTM", "MRQ",
+  "CPI", "PPI", "PMI", "GNP", "EV", "NAV", "AUM", "BPS", "DPS", "NIM",
+  "NYSE", "SEC", "SFC", "MSCI", "FTSE", "SPX", "SPY", "ESG", "SPAC"
+]);
 
 function resolveUsTicker(text = "") {
   const hit = usAliases.find((item) => item.pattern.test(text));
   if (hit) return { ticker: hit.ticker, name: hit.name };
-  const t = String(text).toUpperCase();
+  const t = String(text).toUpperCase().trim();
+  // $TICKER or TICKER.US (explicit notation)
   const m = t.match(/\$([A-Z]{1,5})\b/) || t.match(/\b([A-Z]{1,5})\.US\b/);
   if (m && !US_STOPWORDS.has(m[1])) return { ticker: m[1], name: m[1] };
+  // Bare uppercase: entire query is the ticker (e.g. "RKLB", "PLTR")
+  if (/^[A-Z]{1,5}$/.test(t) && !US_STOPWORDS.has(t)) return { ticker: t, name: t };
+  // Bare uppercase word embedded in mixed text (e.g. "分析 RKLB 的基本面")
+  const w = t.match(/(?:^|[\s,])([A-Z]{2,5})(?:[\s,.]|$)/);
+  if (w && !US_STOPWORDS.has(w[1])) return { ticker: w[1], name: w[1] };
   return null;
 }
 
@@ -525,6 +537,13 @@ async function sendChat(question) {
   });
   if (result.sessionId) setSessionId(result.sessionId);
   if (result.decisionPanel) setPanel(result.decisionPanel);
+  // Enrich bare-ticker companies (e.g. "RKLB" → "Rocket Lab USA") once the
+  // backend returns a real name from the FMP profile fetch.
+  const enrichedName = result.decisionPanel?.companyName;
+  if (enrichedName && company.nameZh === company.ticker && enrichedName !== company.ticker) {
+    company = { ...company, nameZh: enrichedName };
+    setCompany(company);
+  }
   appendMessage("assistant", result.content || "本轮没有生成有效回复。", {
     mode: result.mode,
     webCount: result.webEvidence?.evidence?.length ?? 0,
