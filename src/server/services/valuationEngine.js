@@ -50,7 +50,10 @@ export function displayValuation(company, marketSnapshot, financialsData) {
   if (coherent) return v;
 
   const p = marketSnapshot?.price ?? company?.price;
-  const pe = marketSnapshot?.pe ?? company?.pe;
+  // Prefer a quoted PE; otherwise derive it from real EPS (US data via FMP) so a
+  // self-consistent band still renders.
+  let pe = marketSnapshot?.pe ?? company?.pe;
+  if (!pe && financialsData?.eps && p) pe = p / financialsData.eps;
   if (p && pe) {
     const base = p;
     return {

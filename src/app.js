@@ -11,7 +11,7 @@ const storeKeys = {
 
 const companyAliases = [
   { pattern: /腾讯控股|腾讯|Tencent/i, ticker: "0700.HK" },
-  { pattern: /阿里巴巴|阿里(?!健康|影业)|Alibaba|BABA/i, ticker: "9988.HK" },
+  { pattern: /阿里巴巴|阿里(?!健康|影业)|Alibaba/i, ticker: "9988.HK" },
   { pattern: /阿里健康/i, ticker: "0241.HK" },
   { pattern: /阿里影业/i, ticker: "1060.HK" },
   { pattern: /美团/i, ticker: "3690.HK" },
@@ -26,6 +26,33 @@ const companyAliases = [
   { pattern: /地平线/i, ticker: "9660.HK" },
   { pattern: /港交所|香港交易所/i, ticker: "0388.HK" }
 ];
+
+// 美股别名（名称 + 代码）。其它美股可用 $代码 或 代码.US，例如 $PLTR、PLTR.US。
+const usAliases = [
+  { pattern: /苹果|Apple|\bAAPL\b/i, ticker: "AAPL", name: "苹果 Apple" },
+  { pattern: /英伟达|NVIDIA|\bNVDA\b/i, ticker: "NVDA", name: "英伟达 NVIDIA" },
+  { pattern: /特斯拉|Tesla|\bTSLA\b/i, ticker: "TSLA", name: "特斯拉 Tesla" },
+  { pattern: /微软|Microsoft|\bMSFT\b/i, ticker: "MSFT", name: "微软 Microsoft" },
+  { pattern: /谷歌|Google|Alphabet|\bGOOGL?\b/i, ticker: "GOOGL", name: "谷歌 Alphabet" },
+  { pattern: /亚马逊|Amazon|\bAMZN\b/i, ticker: "AMZN", name: "亚马逊 Amazon" },
+  { pattern: /\bMeta\b|Facebook|\bMETA\b/i, ticker: "META", name: "Meta" },
+  { pattern: /奈飞|网飞|Netflix|\bNFLX\b/i, ticker: "NFLX", name: "奈飞 Netflix" },
+  { pattern: /英特尔|Intel|\bINTC\b/i, ticker: "INTC", name: "英特尔 Intel" },
+  { pattern: /\bAMD\b|超威/i, ticker: "AMD", name: "AMD" },
+  { pattern: /台积电|TSMC|\bTSM\b/i, ticker: "TSM", name: "台积电 TSMC" },
+  { pattern: /\bBABA\b/i, ticker: "BABA", name: "阿里巴巴 ADR" }
+];
+
+const US_STOPWORDS = new Set(["PE", "PB", "PS", "ROE", "ROI", "AI", "IPO", "GDP", "CEO", "US", "HK", "EPS", "FCF", "DCF", "ETF", "Q1", "Q2", "Q3", "Q4"]);
+
+function resolveUsTicker(text = "") {
+  const hit = usAliases.find((item) => item.pattern.test(text));
+  if (hit) return { ticker: hit.ticker, name: hit.name };
+  const t = String(text).toUpperCase();
+  const m = t.match(/\$([A-Z]{1,5})\b/) || t.match(/\b([A-Z]{1,5})\.US\b/);
+  if (m && !US_STOPWORDS.has(m[1])) return { ticker: m[1], name: m[1] };
+  return null;
+}
 
 let apiStatus = null;
 let isBusy = false;
@@ -243,6 +270,7 @@ function companySearchCandidates(query = "") {
 }
 
 async function resolveCompany(query) {
+  const us = resolveUsTicker(query);
   const candidates = companySearchCandidates(query);
   let company = null;
   for (const search of candidates) {
@@ -250,6 +278,9 @@ async function resolveCompany(query) {
     company = data.companies?.[0] || null;
     if (company) break;
   }
+  // US tickers aren't in the HK searchable DB — build a minimal company so the
+  // research pipeline (live quote + FMP fundamentals) can run.
+  if (!company && us) return { ticker: us.ticker, nameZh: us.name, nameEn: us.name, industry: "美股" };
   const fallbackTicker = candidates.find((candidate) => /^\d{4,5}\.HK$/.test(candidate));
   if (!company && fallbackTicker) return { ticker: fallbackTicker, nameZh: fallbackTicker, industry: "待补充" };
   if (!company) return null;
@@ -455,7 +486,7 @@ async function clearAllSessions() {
 
 async function sendChat(question) {
   let company = getCompany();
-  const shouldResolve = !company || extractTicker(question) || extractAliasTicker(question);
+  const shouldResolve = !company || extractTicker(question) || extractAliasTicker(question) || resolveUsTicker(question);
   if (shouldResolve) {
     const resolved = await resolveCompany(question);
     if (resolved) {
@@ -464,7 +495,7 @@ async function sendChat(question) {
     }
   }
   if (!company) {
-    appendMessage("assistant", "我还没有识别出公司。请补充港股代码或公司名，例如 0700.HK 腾讯。");
+    appendMessage("assistant", "我还没有识别出公司。请补充公司名、港股代码或美股代码，例如 0700.HK 腾讯、AAPL 苹果。");
     return;
   }
 
@@ -630,7 +661,7 @@ function renderResearch() {
         <section class="research-snapshot">
           <p>研究公司</p>
           <h2>${esc(panel?.companyName || company?.nameZh || "未选择公司")}</h2>
-          <span>${esc(company?.ticker || panel?.ticker || "输入公司名或港股代码开始")}</span>
+          <span>${esc(company?.ticker || panel?.ticker || "输入公司名、港股或美股代码")}</span>
           ${panel?.confidence ? `<div class="snapshot-confidence"><span class="conf conf-${panel.confidence === "高" ? "high" : panel.confidence === "低" ? "low" : "mid"}">置信度 ${esc(panel.confidence)}</span></div>` : ""}
           ${thread.length ? `<button class="snapshot-export" type="button" data-action="export">导出研究 ↓</button>` : ""}
         </section>
@@ -720,10 +751,10 @@ function renderComposer(company) {
     ? `${esc(busyLabel)} · 已等待 <b data-busy-seconds>${busyElapsedSeconds()}</b>s`
     : company
       ? `${esc(company.nameZh || company.ticker)} · ${esc(company.ticker)}`
-      : "先输入公司名或港股代码";
+      : "先输入公司名、港股或美股代码";
   return `<form class="composer" data-form="chat">
     <div class="composer-panel">
-      <textarea name="query" rows="2" maxlength="1200" placeholder="${company ? "继续追问：利润、护城河、估值或证伪条件" : "输入公司名或代码，例如：阿里巴巴最近怎么样？"}"></textarea>
+      <textarea name="query" rows="2" maxlength="1200" placeholder="${company ? "继续追问：利润、护城河、估值或证伪条件" : "输入公司名、港股或美股代码，例如：阿里巴巴最近怎么样？AAPL 赚钱吗？"}"></textarea>
       <div class="composer-footer">
         <div class="composer-left-tools">
           <label class="tool-chip icon-chip file-label" title="上传资料">+<input type="file" name="documents" multiple accept=".pdf,.txt,.md,.csv,.json,image/*"></label>
@@ -743,14 +774,14 @@ function renderComposer(company) {
 function renderEmptyState() {
   const examples = [
     { label: "腾讯 0700.HK", q: "腾讯最近怎么样？" },
-    { label: "阿里巴巴 9988.HK", q: "阿里巴巴赚钱吗？" },
-    { label: "美团 3690.HK", q: "美团靠什么赚钱？" },
-    { label: "比亚迪 1211.HK", q: "比亚迪的护城河在哪？" }
+    { label: "苹果 AAPL", q: "苹果赚钱吗？" },
+    { label: "英伟达 NVDA", q: "英伟达的护城河在哪？" },
+    { label: "比亚迪 1211.HK", q: "比亚迪靠什么赚钱？" }
   ];
   return `<div class="empty-chat">
     <p>LUVIO RESEARCH</p>
-    <h2>像研究员一样，<br>聊懂一家港股公司。</h2>
-    <span>问一句就开始——赚不赚钱、护城河、竞争格局、估值、什么会证伪。普通追问给精炼短答；需要完整证据链时，再生成深度研究。</span>
+    <h2>像研究员一样，<br>聊懂一家港美股公司。</h2>
+    <span>港股、美股都能问——赚不赚钱、护城河、竞争格局、估值、什么会证伪。问一句就开始：输入公司名、港股代码或美股代码（如 AAPL、$NVDA）。普通追问给精炼短答，需要完整证据链时再生成深度研究。</span>
     <div class="example-grid">
       ${examples
         .map(
@@ -953,13 +984,13 @@ function renderCompare() {
     <div class="page-head">
       <p class="eyebrow">Compare</p>
       <h1>多公司对比</h1>
-      <span>并排比较估值赔率、利润质量、护城河与风险。输入 2–3 家公司，名称或港股代码都行。</span>
+      <span>并排比较估值赔率、利润质量、护城河与风险。输入 2–3 家公司，港股、美股、名称都行。</span>
     </div>
     <form class="compare-form" data-form="compare">
-      <input name="tickers" placeholder="例如：腾讯, 阿里巴巴, 美团 — 或 0700.HK, 9988.HK" value="${esc(compareInput)}" autocomplete="off">
+      <input name="tickers" placeholder="例如：腾讯, 苹果, 英伟达 — 或 0700.HK, AAPL, NVDA" value="${esc(compareInput)}" autocomplete="off">
       <button class="primary" type="submit" ${compareBusy ? "disabled" : ""}>${compareBusy ? "对比中…" : "开始对比"}</button>
     </form>
-    ${compareResult ? renderCompareTable(compareResult) : `<div class="compare-empty">输入公司名或港股代码，用逗号分隔，最多 3 家。<br>对比不调用大模型，几秒内出结果。</div>`}
+    ${compareResult ? renderCompareTable(compareResult) : `<div class="compare-empty">输入公司名、港股或美股代码，用逗号分隔，最多 3 家（如 0700.HK, AAPL, 比亚迪）。<br>对比不调用大模型，几秒内出结果。</div>`}
   </section>`);
 }
 

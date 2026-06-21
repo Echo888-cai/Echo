@@ -61,7 +61,7 @@ export async function collectDataSources({ company, suppliedMarketSnapshot = nul
       ? Promise.resolve(suppliedMarketSnapshot)
       : withTimeout(getMarketSnapshot(company.ticker), 3500, fallbackMarketSnapshot(company.ticker, "行情请求超时")),
     withTimeout(getNewsSnapshot(company), 3500, fallbackNewsSnapshot(company, "新闻请求超时")),
-    withTimeout(getFinancials(company.ticker), 5000, { providerStatus: "missing", errors: ["财务数据请求超时"], asOf: new Date().toISOString() }),
+    withTimeout(getFinancials(company.ticker), 8000, { providerStatus: "missing", errors: ["财务数据请求超时"], asOf: new Date().toISOString() }),
     withTimeout(getRecentFilings(company.ticker), 5000, { providerStatus: "missing", errors: ["公告请求超时"], filings: [], asOf: new Date().toISOString() }),
     withTimeout(getAnalystEstimates(company.ticker), 4000, { providerStatus: "missing", errors: ["评级请求超时"], asOf: new Date().toISOString() })
   ]);

@@ -1,11 +1,12 @@
 import { normalizeTicker } from "./data.js";
+import { fmpSymbol, finnhubSymbol, tencentSymbol, hkCode } from "./market.js";
 
 function env(name) {
   return process.env[name] || "";
 }
 
 function toHongKongSymbol(ticker) {
-  return normalizeTicker(ticker).replace(".HK", "");
+  return hkCode(ticker).replace(/^0+(?=\d)/, "");
 }
 
 function numberOrNull(value) {
@@ -46,8 +47,7 @@ async function fetchJson(url, options = {}) {
 // ─── Financial Modeling Prep ──────────────────────────────────────────
 
 function toFmpSymbol(ticker) {
-  const symbol = toHongKongSymbol(ticker);
-  return `${symbol}.HK`;
+  return fmpSymbol(ticker);
 }
 
 async function fetchFmpFinancials(ticker) {
@@ -57,9 +57,9 @@ async function fetchFmpFinancials(ticker) {
 
   const sym = encodeURIComponent(symbol);
   const [incomeStmt, balanceSheet, cashFlow] = await Promise.all([
-    fetchJson(`https://financialmodelingprep.com/stable/income-statement?symbol=${sym}&limit=2&apikey=${apiKey}`, { timeoutMs: 6000 }),
-    fetchJson(`https://financialmodelingprep.com/stable/balance-sheet-statement?symbol=${sym}&limit=2&apikey=${apiKey}`, { timeoutMs: 6000 }),
-    fetchJson(`https://financialmodelingprep.com/stable/cash-flow-statement?symbol=${sym}&limit=2&apikey=${apiKey}`, { timeoutMs: 6000 })
+    fetchJson(`https://financialmodelingprep.com/stable/income-statement?symbol=${sym}&limit=2&apikey=${apiKey}`, { timeoutMs: 10000 }),
+    fetchJson(`https://financialmodelingprep.com/stable/balance-sheet-statement?symbol=${sym}&limit=2&apikey=${apiKey}`, { timeoutMs: 10000 }),
+    fetchJson(`https://financialmodelingprep.com/stable/cash-flow-statement?symbol=${sym}&limit=2&apikey=${apiKey}`, { timeoutMs: 10000 })
   ]);
 
   if (!incomeStmt?.length) throw new Error("FMP 没有返回利润表数据");
@@ -87,6 +87,7 @@ async function fetchFmpFinancials(ticker) {
     netMargin: latest.revenue ? numberOrNull((latest.netIncome / latest.revenue) * 100) : null,
     profitGrowth: numberOrNull(profitGrowth),
     eps: numberOrNull(latest.eps),
+    sharesOutstanding: numberOrNull(latest.weightedAverageShsOutDil ?? latest.weightedAverageShsOut),
     totalAssets: numberOrNull(latestBs.totalAssets),
     totalLiabilities: numberOrNull(latestBs.totalLiabilities),
     totalDebt: numberOrNull(latestBs.totalDebt),
@@ -200,7 +201,7 @@ async function fetchFmpDividendHistory(ticker) {
 async function fetchFinnhubFinancials(ticker) {
   const apiKey = env("FINNHUB_API_KEY");
   if (!apiKey) throw new Error("missing FINNHUB_API_KEY");
-  const symbol = `HK.${toHongKongSymbol(ticker)}`;
+  const symbol = finnhubSymbol(ticker);
 
   const [financials, metrics] = await Promise.all([
     fetchJson(`https://finnhub.io/api/v1/stock/financials?symbol=${encodeURIComponent(symbol)}&statement=ic&freq=annually&token=${apiKey}`, { timeoutMs: 6000 }),
@@ -252,7 +253,7 @@ async function fetchFinnhubFinancials(ticker) {
 async function fetchFinnhubRecommendation(ticker) {
   const apiKey = env("FINNHUB_API_KEY");
   if (!apiKey) throw new Error("missing FINNHUB_API_KEY");
-  const symbol = `HK.${toHongKongSymbol(ticker)}`;
+  const symbol = finnhubSymbol(ticker);
 
   const data = await fetchJson(`https://finnhub.io/api/v1/stock/recommendation?symbol=${encodeURIComponent(symbol)}&token=${apiKey}`, { timeoutMs: 5000 });
   if (!data?.length) throw new Error("Finnhub 没有返回分析师推荐");

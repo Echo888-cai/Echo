@@ -1,27 +1,16 @@
 import { normalizeTicker } from "./data.js";
+import {
+  detectMarket,
+  marketCurrency,
+  tencentSymbol as toTencentHongKongSymbol,
+  finnhubSymbol,
+  alphaVantageSymbol as toAlphaVantageSymbol,
+  twelveDataSymbol as toTwelveDataSymbol,
+  yahooSymbol as toYahooSymbol
+} from "./market.js";
 
 function env(name) {
   return process.env[name] || "";
-}
-
-function toHongKongSymbol(ticker) {
-  return normalizeTicker(ticker).replace(".HK", "");
-}
-
-function toYahooSymbol(ticker) {
-  return normalizeTicker(ticker);
-}
-
-function toAlphaVantageSymbol(ticker) {
-  return `${toHongKongSymbol(ticker)}.HKG`;
-}
-
-function toTwelveDataSymbol(ticker) {
-  return `${toHongKongSymbol(ticker)}:HKEX`;
-}
-
-function toTencentHongKongSymbol(ticker) {
-  return `hk${toHongKongSymbol(ticker).padStart(5, "0")}`;
 }
 
 function numberOrNull(value) {
@@ -42,7 +31,7 @@ function buildSnapshot(source, ticker, data) {
   return {
     source,
     ticker: normalizeTicker(ticker),
-    currency: data.currency || "HKD",
+    currency: data.currency || marketCurrency(ticker),
     price: numberOrNull(data.price),
     previousClose: numberOrNull(data.previousClose),
     change: numberOrNull(data.change),
@@ -180,7 +169,7 @@ async function fetchTwelveData(ticker) {
 async function fetchFinnhub(ticker) {
   const apiKey = env("FINNHUB_API_KEY");
   if (!apiKey) throw new Error("missing FINNHUB_API_KEY");
-  const symbol = `HK.${toHongKongSymbol(ticker)}`;
+  const symbol = finnhubSymbol(ticker);
   const quote = await fetchJson(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${apiKey}`);
   if (!quote || quote.c === 0) throw new Error("Finnhub 没有返回报价");
   return buildSnapshot("Finnhub", ticker, {
@@ -216,7 +205,10 @@ async function fetchYahooChart(ticker) {
 }
 
 export async function getMarketSnapshot(ticker) {
-  const providers = [fetchTencentQuote, fetchFinnhub, fetchAlphaVantage, fetchTwelveData, fetchYahooChart];
+  // US: lead with US-native providers; HK: lead with Tencent (free, reliable for HK).
+  const providers = detectMarket(ticker) === "US"
+    ? [fetchFinnhub, fetchAlphaVantage, fetchTwelveData, fetchYahooChart]
+    : [fetchTencentQuote, fetchFinnhub, fetchAlphaVantage, fetchTwelveData, fetchYahooChart];
   const errors = [];
   for (const provider of providers) {
     try {
