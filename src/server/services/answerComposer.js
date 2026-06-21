@@ -618,6 +618,7 @@ ${sources}
 - 商业模式：${businessModel}
 - 财务观察（本地档案）：${profileMetrics}
 - 已核到的实时财务口径：${liveFinancials}
+- 估值区间（与前端可视化口径一致，回答涉及估值/赔率时必须对齐，禁止给出与之矛盾的目标价）：${valuationPromptLine(context.valuation)}
 - Bull：${bull}
 - Bear：${bear}
 - 监控项：${monitors}
@@ -648,6 +649,16 @@ ${webEvidencePrompt}
  * session and powers the clickable provenance UI. Evidence is appended to
  * panel.sources (deduped) with its source type, date and credibility.
  */
+/** One-line valuation summary for the model prompt, so prose matches the bar. */
+function valuationPromptLine(valuation) {
+  if (!valuation || valuation.cannotValueReason) return "暂无自洽估值口径（缺 EPS/FCF，待财报或 FMP 补齐）。";
+  const price = parseFloat(valuation.currentPrice);
+  const bull = parseFloat(valuation.bull);
+  const bear = parseFloat(valuation.bear);
+  const odds = price && bull && bear && price > bear ? ((bull - price) / (price - bear)).toFixed(1) : null;
+  return `方法 ${valuation.method}；看空 ${valuation.bear} / 中性 ${valuation.base} / 看多 ${valuation.bull}，现价 ${valuation.currentPrice}${odds ? `，回报:风险赔率约 ${odds}:1` : ""}。`;
+}
+
 export function mergeEvidenceIntoPanel(panel, webEvidence) {
   if (!panel) return panel;
   const evidence = Array.isArray(webEvidence?.evidence) ? webEvidence.evidence : [];
@@ -706,6 +717,7 @@ export function buildReportPrompt(question, panel, dataSources = {}, context = {
 - 护城河：${moat}
 - 商业模式：${businessModel}
 - 已核到的实时财务口径：${liveFinancials}
+- 估值区间（与前端可视化口径一致，回答涉及估值/赔率时必须对齐，禁止给出与之矛盾的目标价）：${valuationPromptLine(context.valuation)}
 - Bull：${bull}
 - Bear：${bear}
 - 监控项：${monitors}

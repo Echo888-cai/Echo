@@ -7,6 +7,7 @@
 
 import { sendJson } from "../utils/async.js";
 import { companyByTicker } from "../../data.js";
+import { getCompanyByTickerComplete } from "../repositories/companyRepository.js";
 import { collectDataSources } from "../services/dataSources.js";
 import { displayValuation } from "../services/valuationEngine.js";
 import { computeFinancialQuality } from "../services/financialQuality.js";
@@ -17,8 +18,17 @@ function num(value) {
 }
 
 async function buildCompareEntry(ticker) {
-  const profile = companyByTicker(ticker);
-  if (!profile) return { ticker, notFound: true };
+  // Searchable DB (654 companies) is the base; the curated data.js profile, when
+  // it exists, enriches moat/risks. Either one is enough to compare.
+  const base = getCompanyByTickerComplete(ticker);
+  const curated = companyByTicker(ticker);
+  if (!base && !curated) return { ticker, notFound: true };
+  // getCompanyByTickerComplete joins company_details with c.*, d.* — when a company
+  // has no details row, d.ticker (null) clobbers c.ticker. Pin the ticker explicitly.
+  const resolvedTicker = base?.ticker || curated?.ticker || ticker;
+  const profile = { ...(base || {}), ...(curated || {}), ticker: resolvedTicker };
+  const moat = (curated?.moat?.length ? curated.moat : base?.moat) || [];
+  const risks = (curated?.risks?.length ? curated.risks : base?.risks) || [];
 
   const data = await collectDataSources({ company: profile, suppliedMarketSnapshot: null });
   const market = data.marketSnapshot;
@@ -40,8 +50,8 @@ async function buildCompareEntry(ticker) {
   }
 
   return {
-    ticker: profile.ticker,
-    name: profile.nameZh || profile.nameEn || profile.ticker,
+    ticker: profile.ticker || ticker,
+    name: base?.nameZh || curated?.nameZh || profile.nameEn || profile.ticker || ticker,
     industry: profile.industry || profile.sector || "",
     price: market?.price ?? null,
     pe: market?.pe ?? profile.pe ?? null,
@@ -49,8 +59,8 @@ async function buildCompareEntry(ticker) {
     valuationMethod: valuation.cannotValueReason ? null : valuation.method,
     upside,
     odds,
-    moat: (profile.moat || []).slice(0, 3),
-    risks: (profile.risks || []).slice(0, 2)
+    moat: moat.slice(0, 3),
+    risks: risks.slice(0, 2)
   };
 }
 

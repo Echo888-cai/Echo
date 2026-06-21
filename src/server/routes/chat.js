@@ -26,11 +26,16 @@ export async function handleChatApi(req, res) {
       )
     ]);
 
+    // Compute valuation before the model call so the prose and the visual bar
+    // speak the same odds.
+    const valuationProfile = companyByTicker(result.decisionPanel?.ticker || payload.company?.ticker) || payload.company;
+    const valuation = displayValuation(valuationProfile, result.marketSnapshot, result.financialsData);
     const context = {
       newsSnapshot: result.newsSnapshot,
       webEvidence,
       financialsData: result.financialsData,
-      marketSnapshot: result.marketSnapshot
+      marketSnapshot: result.marketSnapshot,
+      valuation: valuation.cannotValueReason ? null : valuation
     };
     const fallback = researchReplyFromPanel(result.decisionPanel, question, result.dataSources, context);
     let content = fallback;
@@ -48,8 +53,6 @@ export async function handleChatApi(req, res) {
     content = normalizeResearchAnswer(content, result.decisionPanel, result.dataSources);
     result.webEvidence = webEvidence;
     mergeEvidenceIntoPanel(result.decisionPanel, webEvidence);
-    const valuationProfile = companyByTicker(result.decisionPanel?.ticker || payload.company?.ticker) || payload.company;
-    const valuation = displayValuation(valuationProfile, result.marketSnapshot, result.financialsData);
     if (result.decisionPanel && !valuation.cannotValueReason) result.decisionPanel.valuation = valuation;
     const sessionId = persistFinalChatSession(payload, result, content);
     sendJson(res, 200, {

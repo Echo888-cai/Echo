@@ -5,6 +5,7 @@ import { companyByTicker } from "../../data.js";
 import { classifyResearchIntent } from "../services/intentClassifier.js";
 import { researchWebEvidence } from "../services/webEvidenceService.js";
 import { buildReportPrompt, mergeEvidenceIntoPanel } from "../services/answerComposer.js";
+import { displayValuation } from "../services/valuationEngine.js";
 import { composeReport, reportPreview } from "../services/reportComposer.js";
 import { saveResearchSession } from "../repositories/researchSessions.js";
 
@@ -30,11 +31,15 @@ export async function handleReportGenerateApi(req, res) {
     ]);
 
     const panel = result.decisionPanel;
+    const valuationProfile = companyByTicker(panel?.ticker || payload.company?.ticker) || payload.company;
+    const valuation = displayValuation(valuationProfile, result.marketSnapshot, result.financialsData);
+    if (panel && !valuation.cannotValueReason) panel.valuation = valuation;
     const context = {
       newsSnapshot: result.newsSnapshot,
       webEvidence,
       financialsData: result.financialsData,
-      marketSnapshot: result.marketSnapshot
+      marketSnapshot: result.marketSnapshot,
+      valuation: valuation.cannotValueReason ? null : valuation
     };
 
     // One model round-trip for the full report. Generous budget; on failure we
