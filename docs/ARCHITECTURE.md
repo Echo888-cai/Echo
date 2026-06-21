@@ -18,7 +18,7 @@ luvio/
 ├── .env                       ← API Key（gitignored）
 │
 ├── src/
-│   ├── app.js                 ← 渲染、路由(研究室/对比/设置)、localStorage、交互
+│   ├── app.js                 ← 渲染、路由(研究室/设置)、localStorage、交互
 │   ├── styles.css             ← Apple 质感 UI（设计 token + 动效）
 │   ├── market.js              ← ★ 市场识别层：detectMarket(HK/US) + 各源 symbol 映射 + 币种
 │   ├── data.js                ← 港股精选档案 + ticker 归一 + 报告/备忘录模板
@@ -28,7 +28,7 @@ luvio/
 │   ├── data/hkStocks.js       ← 650+ 港股 universe（可搜索表 source of truth）
 │   ├── db/index.js            ← SQLite 连接 + schema
 │   └── server/
-│       ├── routes/            ← chat · reports · compare · companies · research · status · documents
+│       ├── routes/            ← chat · reports · companies · research · status · documents
 │       ├── services/          ← answerComposer · valuationEngine · financialQuality ·
 │       │                         webEvidenceService · agentService · decisionPanel ·
 │       │                         dataSources · modelGateway · intentClassifier · reportComposer …
@@ -89,7 +89,7 @@ SQLite luvio.db                         外部 API（按市场路由）
 
 ## 前端
 
-`src/app.js` 单文件：三个路由（研究室 / 对比 / 设置），事件委托(click/submit/change/keydown → action map)，localStorage 存研究状态。两栏工作台（侧栏 + 研究区），回答卡内联渲染**估值区间条、证据溯源卡、置信度芯片、状态标签**。不在浏览器保存模型密钥。
+`src/app.js` 单文件：两个路由（研究室 / 设置），事件委托(click/submit/change/keydown → action map)，localStorage 存研究状态。两栏工作台（侧栏 + 研究区），回答卡内联渲染**估值区间条、证据溯源卡、置信度芯片、状态标签**。不在浏览器保存模型密钥。
 
 ## 测试
 

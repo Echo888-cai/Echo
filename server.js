@@ -20,7 +20,6 @@ import { handleCompanySearch } from "./src/server/routes/companies.js";
 import { handleSessionList, handleSessionClear, handleSessionGet, handleSessionDelete } from "./src/server/routes/research.js";
 import { handleChatApi } from "./src/server/routes/chat.js";
 import { handleReportGenerateApi } from "./src/server/routes/reports.js";
-import { handleCompareApi } from "./src/server/routes/compare.js";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 loadEnvFile(root);
@@ -49,9 +48,8 @@ const server = createServer(async (req, res) => {
   const url = req.url || "/";
   const method = req.method || "GET";
 
-  // ── Company search & compare ───────────────────────────
+  // ── Company search ─────────────────────────────────────
   if (method === "GET" && url.startsWith("/api/companies/search")) return handleCompanySearch(req, res);
-  if (method === "GET" && url.startsWith("/api/compare")) return handleCompareApi(req, res);
 
   // ── Status ─────────────────────────────────────────────
   if (method === "GET" && url.startsWith("/api/status")) return handleStatusApi(req, res);

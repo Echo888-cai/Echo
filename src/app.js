@@ -61,7 +61,7 @@ let busyLabel = "模型思考中";
 let busyTimer = null;
 let recentSessions = [];
 let sessionsLoaded = false;
-let historyOpen = false;
+let historyOpen = true;
 
 function readStore(key, fallback) {
   try {
@@ -306,11 +306,11 @@ async function refreshSessions() {
   try {
     const data = await api("/api/research/sessions?limit=30");
     recentSessions = data.sessions || [];
-    if (!recentSessions.length && getSessionId()) {
-      setThread([]);
-      setPanel(null);
-      setCompany(null);
-      setDocuments([]);
+    // Only reset if our active session was explicitly deleted server-side (the DB
+    // has other sessions but not ours). Never wipe live research just because the
+    // list is empty — that would discard an in-progress thread.
+    const activeId = getSessionId();
+    if (activeId && recentSessions.length && !recentSessions.some((s) => s.id === activeId)) {
       setSessionId(null);
     }
   } catch {
@@ -485,19 +485,31 @@ async function clearAllSessions() {
 }
 
 async function sendChat(question) {
-  let company = getCompany();
+  const prevCompany = getCompany();
+  let company = prevCompany;
   const shouldResolve = !company || extractTicker(question) || extractAliasTicker(question) || resolveUsTicker(question);
   if (shouldResolve) {
     const resolved = await resolveCompany(question);
-    if (resolved) {
-      company = resolved;
-      setCompany(company);
-    }
+    if (resolved) company = resolved;
   }
   if (!company) {
     appendMessage("assistant", "我还没有识别出公司。请补充公司名、港股代码或美股代码，例如 0700.HK 腾讯、AAPL 苹果。");
     return;
   }
+
+  // Company switch → start a fresh research session. Each company keeps its own
+  // clean history entry, and context never bleeds from the previous company.
+  const switched = Boolean(prevCompany?.ticker && company.ticker && company.ticker !== prevCompany.ticker);
+  if (switched) {
+    const thread = getThread();
+    const pending = thread[thread.length - 1];
+    setSessionId(null);
+    setPanel(null);
+    setThread(pending?.role === "user" ? [pending] : []);
+    toast(`已切到 ${company.nameZh || company.ticker}，开新研究。`);
+  }
+  setCompany(company);
+  render();
 
   const result = await api("/api/chat", {
     method: "POST",
@@ -634,7 +646,6 @@ function shell(content) {
         <a class="brand" href="#/" aria-label="Luvio 首页"><span>L</span><strong>Luvio</strong><em>Research</em></a>
         <nav>
           ${nav("/", "研究室")}
-          ${nav("/compare", "对比")}
           ${nav("/settings", "设置")}
         </nav>
       </header>
@@ -918,82 +929,6 @@ function renderMessage(message) {
   </article>`;
 }
 
-let compareInput = "";
-let compareResult = null;
-let compareBusy = false;
-
-async function runCompare(rawInput) {
-  const parts = String(rawInput).split(/[,，、\s]+/).map((s) => s.trim()).filter(Boolean);
-  compareInput = rawInput;
-  if (parts.length < 2) {
-    toast("请至少输入 2 家公司。");
-    return;
-  }
-  compareBusy = true;
-  render();
-  try {
-    const tickers = [];
-    for (const part of parts.slice(0, 3)) {
-      const resolved = await resolveCompany(part);
-      if (resolved?.ticker && !tickers.includes(resolved.ticker)) tickers.push(resolved.ticker);
-    }
-    if (tickers.length < 2) {
-      toast("没能识别出至少 2 家公司，换个写法试试。");
-      return;
-    }
-    const data = await api(`/api/compare?tickers=${encodeURIComponent(tickers.join(","))}`);
-    compareResult = data.companies || [];
-  } catch (error) {
-    toast(error.message || "对比失败。");
-  } finally {
-    compareBusy = false;
-    render();
-  }
-}
-
-function renderCompareTable(companies) {
-  const valid = companies.filter((c) => !c.notFound);
-  const missing = companies.filter((c) => c.notFound);
-  if (!valid.length) return `<div class="compare-empty">没有识别到可对比的公司。</div>`;
-  const dims = [
-    ["现价 / PE", (c) => `${c.price ?? "—"}${c.pe ? ` · ${c.pe}x` : ""}`],
-    ["估值赔率", (c) => (c.odds != null ? `<b>${c.odds} : 1</b><small>${esc(c.valuationMethod || "PE")}${c.upside ? ` · 上行 ${esc(c.upside)}` : ""}</small>` : "<small>数据不足</small>")],
-    ["利润质量", (c) => (c.qualityScore != null ? `<b>${c.qualityScore}</b><small>/100</small>` : "<small>待财报核验</small>")],
-    ["护城河", (c) => (c.moat && c.moat.length ? c.moat.map((m) => `<span class="cmp-chip">${esc(m)}</span>`).join("") : "—")],
-    ["主要风险", (c) => (c.risks && c.risks.length ? c.risks.map((r) => `<span class="cmp-chip risk">${esc(r)}</span>`).join("") : "—")]
-  ];
-  const cols = `140px repeat(${valid.length}, minmax(0, 1fr))`;
-  const header = `<div class="cmp-row cmp-header" style="grid-template-columns:${cols}">
-    <div class="cmp-label"></div>
-    ${valid.map((c) => `<div class="cmp-co"><strong>${esc(c.name)}</strong><span>${esc(c.ticker)}${c.industry ? ` · ${esc(c.industry)}` : ""}</span></div>`).join("")}
-  </div>`;
-  const rows = dims
-    .map(
-      ([label, fn]) => `<div class="cmp-row" style="grid-template-columns:${cols}">
-      <div class="cmp-label">${esc(label)}</div>
-      ${valid.map((c) => `<div class="cmp-cell">${fn(c)}</div>`).join("")}
-    </div>`
-    )
-    .join("");
-  const note = missing.length ? `<div class="compare-empty">未收录：${missing.map((m) => esc(m.ticker)).join("、")}</div>` : "";
-  return `<div class="compare-grid">${header}${rows}</div>${note}`;
-}
-
-function renderCompare() {
-  shell(`<section class="simple-page compare-page">
-    <div class="page-head">
-      <p class="eyebrow">Compare</p>
-      <h1>多公司对比</h1>
-      <span>并排比较估值赔率、利润质量、护城河与风险。输入 2–3 家公司，港股、美股、名称都行。</span>
-    </div>
-    <form class="compare-form" data-form="compare">
-      <input name="tickers" placeholder="例如：腾讯, 苹果, 英伟达 — 或 0700.HK, AAPL, NVDA" value="${esc(compareInput)}" autocomplete="off">
-      <button class="primary" type="submit" ${compareBusy ? "disabled" : ""}>${compareBusy ? "对比中…" : "开始对比"}</button>
-    </form>
-    ${compareResult ? renderCompareTable(compareResult) : `<div class="compare-empty">输入公司名、港股或美股代码，用逗号分隔，最多 3 家（如 0700.HK, AAPL, 比亚迪）。<br>对比不调用大模型，几秒内出结果。</div>`}
-  </section>`);
-}
-
 function renderSettings() {
   const sources = apiStatus?.sources || [];
   const providers = apiStatus?.ai?.providers || [];
@@ -1021,18 +956,10 @@ function renderSettings() {
 
 function render() {
   if (currentRoute() === "/settings") renderSettings();
-  else if (currentRoute() === "/compare") renderCompare();
   else renderResearch();
 }
 
 document.addEventListener("submit", async (event) => {
-  const compareForm = event.target.closest("[data-form='compare']");
-  if (compareForm) {
-    event.preventDefault();
-    if (compareBusy) return;
-    await runCompare(compareForm.elements.tickers.value);
-    return;
-  }
   const form = event.target.closest("[data-form='chat']");
   if (!form) return;
   event.preventDefault();

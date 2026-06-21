@@ -10,6 +10,25 @@
 
 import { getDb } from "../../db/index.js";
 import { randomUUID } from "node:crypto";
+import { detectMarket } from "../../market.js";
+
+/**
+ * Ensure a minimal companies row exists so the research_sessions FK is satisfied.
+ * US (and any not-yet-seeded) tickers aren't in the seed DB — without this, saving
+ * their session fails with "FOREIGN KEY constraint failed" and the research is lost.
+ */
+function ensureCompanyRow(db, ticker, name) {
+  if (!ticker) return;
+  try {
+    const us = detectMarket(ticker) === "US";
+    db.prepare(
+      `INSERT OR IGNORE INTO companies (ticker, name_zh, name_en, exchange, currency, listing_status)
+       VALUES (?, ?, ?, ?, ?, 'active')`
+    ).run(ticker, name || ticker, us ? name || ticker : null, us ? "US" : "HKEX", us ? "USD" : "HKD");
+  } catch {
+    // best effort — never block persistence on this
+  }
+}
 
 const SCHEMA = {
   id: "TEXT PRIMARY KEY",
@@ -54,6 +73,7 @@ export function saveResearchSession(payload) {
   if (!payload?.ticker) throw new Error("research_sessions 需要 ticker");
   ensureColumns();
   const db = getDb();
+  ensureCompanyRow(db, payload.ticker, payload.companyName || payload.title);
   const id = payload.id || payload.sessionId || `s_${randomUUID()}`;
   const thread = Array.isArray(payload.thread) ? payload.thread.slice(-80) : null;
   const stmt = db.prepare(`

@@ -90,6 +90,7 @@ function persistFinalReportSession(payload, result, markdown) {
     const saved = saveResearchSession({
       id: payload.sessionId || result.sessionId || undefined,
       ticker,
+      companyName: panel?.companyName || payload.company?.nameZh || payload.company?.name || ticker,
       title: payload.sessionTitle || payload.question || panel?.companyName || ticker,
       question: payload.question || "",
       status: "completed",

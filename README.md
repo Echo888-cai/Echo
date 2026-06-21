@@ -48,8 +48,8 @@ Interaction principles:
 - **clickable evidence provenance cards** — source type, date, credibility dot
 - **confidence chips** and a **valuation range bar** (bear / base / bull + reward:risk odds)
 - honest "thinking" state — a calm indicator, no fake step-progress
-- **multi-company compare** — valuation odds, profit quality, moat, risk side by side
 - **export** a research session to Markdown
+- **smooth company switching** — mention a new company mid-chat and Luvio opens a fresh, clean session for it
 - research history stored locally in SQLite, collapsible so it never steals the screen
 
 ---
@@ -101,7 +101,7 @@ Luvio
 │   ├── market.js                  # HK/US detection + per-provider symbol mapping
 │   ├── data.js · marketData.js · financialData.js · newsData.js · filingData.js
 │   ├── server/
-│   │   ├── routes/                # chat, reports, compare, companies, research, status, documents
+│   │   ├── routes/                # chat, reports, companies, research, status, documents
 │   │   ├── services/              # answerComposer, valuationEngine, financialQuality,
 │   │   │                          #   webEvidenceService, agentService, decisionPanel, …
 │   │   └── repositories/          # SQLite access
@@ -156,7 +156,7 @@ SERPAPI_API_KEY=
 
 ## Status
 
-**Working:** HK + US research conversation · market-aware quotes & fundamentals · US real profit-quality scores · intent routing (incl. financial-quality & falsification) · evidence provenance with URL validation · confidence chips · valuation range + odds · multi-company compare · Markdown export · single-pass chat (one model call, one DB write) · SQLite history · Apple-grade UI.
+**Working:** HK + US research conversation · market-aware quotes & fundamentals · US real profit-quality scores · intent routing (incl. financial-quality & falsification) · evidence provenance with URL validation · confidence chips · valuation range + odds · Markdown export · smooth per-company sessions · single-pass chat (one model call, one DB write) · SQLite history · Apple-grade UI.
 
 **Next:** `TAVILY_API_KEY` for stable web coverage · paid/alternate HK fundamentals · HKEX & IR PDF ingestion · consensus estimates & comps · deploy-ready auth.
 

@@ -21,7 +21,6 @@
 ```http
 POST /api/chat                 # 研究对话
 POST /api/report/generate      # 深度研究报告（同管线，换报告 prompt）
-GET  /api/compare?tickers=...  # 多公司对比（无模型）
 GET  /api/companies/search?q=  # 公司检索
 GET  /api/status               # 数据源/模型状态
 ```

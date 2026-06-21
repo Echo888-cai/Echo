@@ -2,7 +2,7 @@
 
 `cleanup/pristine-refactor` → `main` · 9 commits · 39 files (+2.9k / −2.7k)
 
-Rebuilds Luvio from a HK-only prototype into a clean, **HK + US** AI research platform: trustworthy evidence, real US fundamentals, valuation/odds and multi-company compare — on an Apple-grade UI.
+Rebuilds Luvio from a HK-only prototype into a clean, **HK + US** AI research platform: trustworthy evidence, real US fundamentals and valuation/odds — on an Apple-grade UI, with smooth per-company sessions.
 
 ## Highlights
 
@@ -10,7 +10,7 @@ Rebuilds Luvio from a HK-only prototype into a clean, **HK + US** AI research pl
 - **Pristine codebase.** Deleted the dead `src/agent/` engine and unused routes (`agent`, `watchlist`, `web-research`, `market-data`, legacy `/api/report`); `server.js` now mounts only the 6 endpoint groups the UI uses. Split the 747-line `chat.js` into a thin route + `services/answerComposer.js` (117 lines).
 - **Single-pass chat.** One parallel data+evidence collection, **one model call**, one DB write (was two model calls racing tight timeouts → always fell back to local). Fixed intent routing (colloquial “赚钱吗” → `financial_quality`, new `falsify`) and wired the previously-dead `financialQuality` engine.
 - **Trustworthy evidence.** `webEvidenceService` now: Tavily/SerpAPI (or keyless DuckDuckGo/Yahoo/Bing) → **URL validation (drops only confirmed 404/410)** → junk/homepage filter → Readability-lite body extraction → credibility scoring → cache → merged into the decision panel. No more dead links or `qq.com` homepages.
-- **Trust & insight UI.** Clickable evidence provenance cards (source-type badge + credibility dot), confidence chips, a **valuation range bar + reward:risk odds** (with a self-consistent guard so it never misleads), **multi-company compare** (`/api/compare`, model-free), and Markdown export.
+- **Trust & insight UI.** Clickable evidence provenance cards (source-type badge + credibility dot), confidence chips, a **valuation range bar + reward:risk odds** (with a self-consistent guard so it never misleads), Markdown export, and **smooth company switching** — naming a new company mid-chat opens a fresh, isolated session for it.
 - **Honest UX.** Gap/backend language removed from answers (judgment first, “还缺什么” folded at the end); the fake 4-step waiting card replaced with a calm indicator; settings/status copy states real coverage limits.
 
 ## Validated
