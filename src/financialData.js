@@ -55,10 +55,11 @@ async function fetchFmpFinancials(ticker) {
   if (!apiKey) throw new Error("missing FMP_API_KEY");
   const symbol = toFmpSymbol(ticker);
 
+  const sym = encodeURIComponent(symbol);
   const [incomeStmt, balanceSheet, cashFlow] = await Promise.all([
-    fetchJson(`https://financialmodelingprep.com/api/v3/income-statement/${encodeURIComponent(symbol)}?limit=2&apikey=${apiKey}`, { timeoutMs: 6000 }),
-    fetchJson(`https://financialmodelingprep.com/api/v3/balance-sheet-statement/${encodeURIComponent(symbol)}?limit=2&apikey=${apiKey}`, { timeoutMs: 6000 }),
-    fetchJson(`https://financialmodelingprep.com/api/v3/cash-flow-statement/${encodeURIComponent(symbol)}?limit=2&apikey=${apiKey}`, { timeoutMs: 6000 })
+    fetchJson(`https://financialmodelingprep.com/stable/income-statement?symbol=${sym}&limit=2&apikey=${apiKey}`, { timeoutMs: 6000 }),
+    fetchJson(`https://financialmodelingprep.com/stable/balance-sheet-statement?symbol=${sym}&limit=2&apikey=${apiKey}`, { timeoutMs: 6000 }),
+    fetchJson(`https://financialmodelingprep.com/stable/cash-flow-statement?symbol=${sym}&limit=2&apikey=${apiKey}`, { timeoutMs: 6000 })
   ]);
 
   if (!incomeStmt?.length) throw new Error("FMP 没有返回利润表数据");
@@ -95,8 +96,8 @@ async function fetchFmpFinancials(ticker) {
     operatingCashFlow: numberOrNull(latestCf.operatingCashFlow),
     freeCashFlow: numberOrNull(latestCf.freeCashFlow),
     capitalExpenditure: numberOrNull(latestCf.capitalExpenditure),
-    dividendPaid: numberOrNull(latestCf.dividendsPaid),
-    repurchaseOfStock: numberOrNull(latestCf.repurchaseOfStock),
+    dividendPaid: numberOrNull(latestCf.netDividendsPaid ?? latestCf.commonDividendsPaid ?? latestCf.dividendsPaid),
+    repurchaseOfStock: numberOrNull(latestCf.netStockRepurchased ?? latestCf.commonStockRepurchased ?? latestCf.repurchaseOfStock),
     asOf: new Date().toISOString(),
     providerStatus: "ok"
   };
@@ -107,7 +108,7 @@ async function fetchFmpCompanyProfile(ticker) {
   if (!apiKey) throw new Error("missing FMP_API_KEY");
   const symbol = toFmpSymbol(ticker);
 
-  const profile = await fetchJson(`https://financialmodelingprep.com/api/v3/profile/${encodeURIComponent(symbol)}?apikey=${apiKey}`, { timeoutMs: 5000 });
+  const profile = await fetchJson(`https://financialmodelingprep.com/stable/profile?symbol=${encodeURIComponent(symbol)}&apikey=${apiKey}`, { timeoutMs: 5000 });
   if (!profile?.length) throw new Error("FMP 没有返回公司画像");
 
   const data = profile[0];
@@ -143,9 +144,10 @@ async function fetchFmpAnalystEstimates(ticker) {
   if (!apiKey) throw new Error("missing FMP_API_KEY");
   const symbol = toFmpSymbol(ticker);
 
+  const sym = encodeURIComponent(symbol);
   const [ratings, priceTarget] = await Promise.all([
-    fetchJson(`https://financialmodelingprep.com/api/v3/grade/${encodeURIComponent(symbol)}?limit=5&apikey=${apiKey}`, { timeoutMs: 5000 }),
-    fetchJson(`https://financialmodelingprep.com/api/v4/price-target-consensus?symbol=${encodeURIComponent(symbol)}&apikey=${apiKey}`, { timeoutMs: 5000 })
+    fetchJson(`https://financialmodelingprep.com/stable/grades?symbol=${sym}&limit=5&apikey=${apiKey}`, { timeoutMs: 5000 }),
+    fetchJson(`https://financialmodelingprep.com/stable/price-target-consensus?symbol=${sym}&apikey=${apiKey}`, { timeoutMs: 5000 })
   ]);
 
   const recentRatings = (ratings || []).slice(0, 5).map((r) => ({
@@ -176,8 +178,8 @@ async function fetchFmpDividendHistory(ticker) {
   if (!apiKey) throw new Error("missing FMP_API_KEY");
   const symbol = toFmpSymbol(ticker);
 
-  const dividends = await fetchJson(`https://financialmodelingprep.com/api/v3/historical-price-full/stock_dividend/${encodeURIComponent(symbol)}?apikey=${apiKey}`, { timeoutMs: 5000 });
-  const historical = (dividends?.historical || []).slice(0, 8).map((d) => ({
+  const dividends = await fetchJson(`https://financialmodelingprep.com/stable/dividends?symbol=${encodeURIComponent(symbol)}&limit=8&apikey=${apiKey}`, { timeoutMs: 5000 });
+  const historical = (Array.isArray(dividends) ? dividends : dividends?.historical || []).slice(0, 8).map((d) => ({
     date: d.date || "",
     dividend: numberOrNull(d.dividend),
     adjDividend: numberOrNull(d.adjDividend)
