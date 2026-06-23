@@ -361,6 +361,21 @@ async function fetchYahooStatistics(ticker) {
     targetHighPrice: numberOrNull(financial.targetHighPrice?.raw),
     targetLowPrice: numberOrNull(financial.targetLowPrice?.raw),
     recommendation: financial.recommendationKey || "",
+    // Canonical field names so downstream (financialQuality / financialsToMarkdown /
+    // valuation) can actually read Yahoo data when FMP is rate-limited/unavailable.
+    // Without these the Yahoo fallback returned providerStatus:"ok" but all-null,
+    // which surfaced as "基本面未核到 + 无估值条".
+    period: "TTM",
+    revenue: numberOrNull(financial.totalRevenue?.raw),
+    grossProfit: numberOrNull(financial.grossProfits?.raw),
+    grossMargin: numberOrNull(financial.grossMargins?.raw != null ? financial.grossMargins.raw * 100 : null),
+    operatingMargin: numberOrNull(financial.operatingMargins?.raw != null ? financial.operatingMargins.raw * 100 : null),
+    netMargin: numberOrNull(financial.profitMargins?.raw != null ? financial.profitMargins.raw * 100 : null),
+    eps: numberOrNull(stats.trailingEps?.raw ?? currentEstimate?.epsTrend?.current ?? stats.forwardEps?.raw),
+    freeCashFlow: numberOrNull(financial.freeCashflow?.raw),
+    operatingCashFlow: numberOrNull(financial.operatingCashflow?.raw),
+    cashAndEquivalents: numberOrNull(financial.totalCash?.raw),
+    pe: numberOrNull(stats.trailingPE?.raw),
     asOf: new Date().toISOString(),
     providerStatus: "ok"
   };

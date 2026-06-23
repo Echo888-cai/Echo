@@ -53,46 +53,47 @@ export function displayValuation(company, marketSnapshot, financialsData, estima
   if (coherent) return analyst ? { ...v, analyst } : v;
 
   const p = numOrNull(marketSnapshot?.price ?? company?.price);
-  // Prefer a real analyst target band over the mechanical ±25% band: this is what
-  // replaces the self-circular "中性 = 现价" valuation when consensus exists.
-  if (p && estimates) {
-    const lo = numOrNull(estimates.targetLow);
-    const hi = numOrNull(estimates.targetHigh);
-    const mid = numOrNull(estimates.consensusTargetPrice) ?? numOrNull(estimates.targetMedian);
-    if (lo && hi && lo < hi) {
-      // Bracket the current price so the visualization bar stays coherent even
-      // when every analyst target sits above (or below) the quote.
-      const bearV = Math.min(lo, p * 0.95);
-      const bullV = Math.max(hi, p * 1.05);
-      return {
-        method: "分析师目标价区间",
-        bear: bearV.toFixed(2),
-        base: (mid ?? p).toFixed(2),
-        bull: bullV.toFixed(2),
-        currentPrice: p,
-        methods: ["分析师目标价区间"],
-        keyAssumptions: [`基于分析师一致目标价：低 ${lo} / 中 ${mid ?? "—"} / 高 ${hi}（来源 ${estimates.source || "评级源"}）`],
-        sensitivity: [],
-        analyst,
-        cannotValueReason: null
-      };
-    }
+  const lo = numOrNull(estimates?.targetLow);
+  const hi = numOrNull(estimates?.targetHigh);
+  const mid = numOrNull(estimates?.consensusTargetPrice) ?? numOrNull(estimates?.targetMedian);
+  const midRef = mid ?? (lo && hi ? (lo + hi) / 2 : null);
+  // An analyst band is only trustworthy when its center sits in a plausible range
+  // of the live price — guards against stale/unadjusted targets (e.g. NVDA consensus
+  // 500 vs price 202, which would render a misleading "中性 500 / +147%" band).
+  const analystBandOk = p && lo && hi && lo < hi && midRef && midRef >= p * 0.5 && midRef <= p * 1.8;
+  if (analystBandOk) {
+    // Bracket the current price so the bar stays coherent even when targets cluster above it.
+    const bearV = Math.min(lo, p * 0.95);
+    const bullV = Math.max(hi, p * 1.05);
+    const baseV = mid && mid > bearV && mid < bullV ? mid : p;
+    return {
+      method: "分析师目标价区间",
+      bear: bearV.toFixed(2),
+      base: baseV.toFixed(2),
+      bull: bullV.toFixed(2),
+      currentPrice: p,
+      methods: ["分析师目标价区间"],
+      keyAssumptions: [`基于分析师一致目标价：低 ${lo} / 中 ${mid ?? "—"} / 高 ${hi}（来源 ${estimates.source || "评级源"}）`],
+      sensitivity: [],
+      analyst,
+      cannotValueReason: null
+    };
   }
 
-  // Prefer a quoted PE; otherwise derive it from real EPS (US data via FMP) so a
-  // self-consistent band still renders.
+  // Price-centered PE band from a quoted or EPS-derived PE — always coherent. This is
+  // the guaranteed fallback so a bar renders whenever we have a price + real EPS, even
+  // for growth names where FCF-yield is incoherent and analyst targets aren't trustworthy.
   let pe = marketSnapshot?.pe ?? company?.pe;
   if (!pe && financialsData?.eps && p) pe = p / financialsData.eps;
   if (p && pe) {
-    const base = p;
     return {
       method: "PE 区间",
       bear: (p * 0.78).toFixed(2),
-      base: base.toFixed(2),
+      base: p.toFixed(2),
       bull: (p * 1.28).toFixed(2),
       currentPrice: p,
       methods: ["PE 区间"],
-      keyAssumptions: [`基于现价与 PE ${pe}x 的估值带（约 ±25%，反映 PE 收缩/扩张）`],
+      keyAssumptions: [`基于现价与 PE ${Number(pe).toFixed(1)}x 的估值带（约 ±25%，反映 PE 收缩/扩张）`],
       sensitivity: [],
       analyst,
       cannotValueReason: null
