@@ -557,8 +557,13 @@ export function researchReplyFromPanel(panel, question = "", dataSources = {}, c
 export function normalizeResearchAnswer(content, panel, dataSources = {}) {
   if (!panel) return content;
   let text = String(content || "").trim();
-  if (!/^北京时间\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(text)) {
-    text = `北京时间 ${formatBeijingMinute()}，${panel.companyName || panel.ticker} 最近的状态是：${panel.oneLineView || "需要继续验证"}。\n\n${text}`;
+  // 模型有时把开头写成"北京时间2026…"（漏空格），先补空格，避免下面的去重判断误判。
+  text = text.replace(/^北京时间(\d{4})/, "北京时间 $1");
+  // 仅当模型自己没带时间前缀时才补一句；正则放宽到"北京时间 + 日期"，不强求时分，
+  // 防止重复塞前缀。oneLineView 已自带句号，先去掉避免出现"。。"。
+  if (!/^北京时间\s*\d{4}-\d{2}-\d{2}/.test(text)) {
+    const view = String(panel.oneLineView || "需要继续验证").replace(/。+$/, "");
+    text = `北京时间 ${formatBeijingMinute()}，${panel.companyName || panel.ticker} 最近的状态是：${view}。\n\n${text}`;
   }
   if (!/来源[:：]/.test(text)) {
     text += `\n\n来源：\n${sourceLines(panel, dataSources).join("\n")}`;

@@ -22,7 +22,7 @@ import { handleChatApi } from "./src/server/routes/chat.js";
 import { handleReportGenerateApi } from "./src/server/routes/reports.js";
 import { handleProfileList, handleProfileGet, handleProfileDelete } from "./src/server/routes/portraits.js";
 import { handleEventsDigest } from "./src/server/routes/events.js";
-import { handlePortfolioList, handlePortfolioDelete } from "./src/server/routes/portfolio.js";
+import { handlePortfolioList, handlePortfolioUpsert, handlePortfolioDelete } from "./src/server/routes/portfolio.js";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 loadEnvFile(root);
@@ -67,8 +67,9 @@ const server = createServer(async (req, res) => {
   // ── Event engine digest ────────────────────────────────
   if (method === "GET" && url.startsWith("/api/events/digest")) return handleEventsDigest(req, res);
 
-  // ── Portfolio (natural-language ledger) ────────────────
+  // ── Portfolio (natural-language ledger + manual edit) ──
   if (method === "GET" && url.startsWith("/api/portfolio")) return handlePortfolioList(req, res);
+  if (method === "POST" && url.startsWith("/api/portfolio")) return handlePortfolioUpsert(req, res);
   if (method === "DELETE" && url.startsWith("/api/portfolio")) return handlePortfolioDelete(req, res);
 
   // ── Company portraits (long-term memory) ───────────────

@@ -35,7 +35,7 @@ export async function handleEventsDigest(req, res) {
     }
 
     if (!companies.length) {
-      sendOk(res, { digest: { generatedAt: new Date().toISOString(), slot, events: [], counts: { high: 0, medium: 0, low: 0 }, summary: "还没有跟踪的公司。完成一轮研究后，这里会显示财报与重大新闻提醒。" }, tracked: 0 });
+      sendOk(res, { digest: { generatedAt: new Date().toISOString(), slot, events: [], groups: [], failures: [], counts: { high: 0, medium: 0, low: 0 }, summary: "还没有跟踪的公司。完成一轮研究后，这里会显示财报与重大新闻提醒。" }, tracked: 0 });
       return;
     }
 

@@ -41,13 +41,16 @@ Then continue naturally — `它靠什么赚钱？` / `护城河是什么？` / 
 
 US tickers can be typed bare (`AAPL`), by Chinese/English name (`苹果` / `Nvidia`), or explicitly with `$NVDA` / `TSLA.US`.
 
+**Dual-listed names** (Alibaba `9988.HK` / `BABA`, JD, Baidu, NetEase, NIO, Li Auto, …) are recognized as one company. Because FMP's free tier covers the US ADR but not the HK line, Luvio routes **fundamentals & valuation to the US ADR** (richer data) while showing both tickers and a "双重上市" note — so you always know it's the same business and which side the numbers come from.
+
 Interaction principles:
 
 - one research conversation, not scattered pages
-- lightweight, Apple-grade white interface with calm motion
+- lightweight, Apple-grade interface with **light & dark themes** and calm motion
+- **structured answers** — the analyst's reply is split into labelled research sections (结论 / 事实 / 推断 / 估值·风险 / 证伪条件 / 我的判断 / 来源), with the verdict promoted to a highlighted card so a long answer is scannable, not a wall of text
 - **clickable evidence provenance cards** — source type, date, credibility dot
 - **confidence chips** and a **valuation range bar** (bear / base / bull + reward:risk odds)
-- honest "thinking" state — a calm indicator, no fake step-progress
+- honest "thinking" state — a **skeleton preview of the answer forming** (no fake step-progress), and the finished answer **reveals section by section**
 - **export** a research session to Markdown
 - **smooth company switching** — mention a new company mid-chat and Luvio opens a fresh, clean session for it
 - research history stored locally in SQLite, collapsible so it never steals the screen
@@ -79,6 +82,14 @@ Judgment first, then the basis, then (folded at the end) what's still missing. W
 
 A multi-method valuation engine (PE / Forward PE / FCF yield / DCF) with a display-safe guard: if the range is incoherent with the live price, it falls back to a self-consistent PE band. The answer renders a range bar and a reward:risk ratio, and the same numbers are fed to the model so prose and visual never contradict.
 
+### Event digest
+
+An on-demand pre-/after-market digest for the companies you research or hold. Events are pulled from the earnings calendar, major news and position discipline, then **graded** (🔴 high / 🟡 medium / ⚪ low), **grouped by company**, and de-noised: law-firm class-action wire spam is dropped, and a **relevance gate** keeps a company's feed about *that* company (no competitor/market-wide bleed-in). Failures are surfaced honestly — you can tell "nothing happened" apart from "couldn't fetch", and HK names that FMP can't cover say so instead of silently showing empty.
+
+### Portfolio ledger
+
+Record holdings in plain language (`耐世特 成本 4.9 持有 3000 股 止损 4.2 止盈 6.5`) or add/edit them manually. The portfolio panel shows **live price, market value, unrealized P&L (¥/%), and distance to your stop / take lines** per position; the event digest watches those lines and flags large drawdowns.
+
 ### Local research memory
 
 Sessions persist in SQLite (thread, company, decision panel, valuation, sources, generated content) — an iterative research notebook, not a disposable chat.
@@ -101,9 +112,11 @@ Luvio
 │   ├── market.js                  # HK/US detection + per-provider symbol mapping
 │   ├── data.js · marketData.js · financialData.js · newsData.js · filingData.js
 │   ├── server/
-│   │   ├── routes/                # chat, reports, companies, research, status, documents
+│   │   ├── routes/                # chat, reports, companies, research, status, documents,
+│   │   │                          #   events (digest), portfolio, portraits
 │   │   ├── services/              # answerComposer, valuationEngine, financialQuality,
-│   │   │                          #   webEvidenceService, agentService, decisionPanel, …
+│   │   │                          #   webEvidenceService, eventEngine, companyPortrait,
+│   │   │                          #   agentService, decisionPanel, …
 │   │   └── repositories/          # SQLite access
 │   └── data/                      # HK stock seed data
 ├── scripts/seed-db.js             # SQLite seeding
@@ -156,7 +169,7 @@ SERPAPI_API_KEY=
 
 ## Status
 
-**Working:** HK + US research conversation · market-aware quotes & fundamentals · US real profit-quality scores · intent routing (incl. financial-quality & falsification) · evidence provenance with URL validation · confidence chips · valuation range + odds · Markdown export · smooth per-company sessions · single-pass chat (one model call, one DB write) · SQLite history · Apple-grade UI.
+**Working:** HK + US research conversation · dual-listing routing (HK ↔ US ADR) · market-aware quotes & fundamentals · US real profit-quality scores · intent routing (incl. financial-quality & falsification) · evidence provenance with URL validation · confidence chips · valuation range + odds · **structured section answers** · **company-grouped event digest** with severity + relevance gate · **portfolio panel with live P&L** · Markdown export · smooth per-company sessions · single-pass chat (one model call, one DB write) · SQLite history · **light & dark Apple-grade UI** with skeleton loading.
 
 **Next:** `TAVILY_API_KEY` for stable web coverage · paid/alternate HK fundamentals · HKEX & IR PDF ingestion · consensus estimates & comps · deploy-ready auth.
 

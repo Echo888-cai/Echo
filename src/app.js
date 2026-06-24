@@ -6,8 +6,24 @@ const storeKeys = {
   company: "luvio.v3.company",
   panel: "luvio.v3.panel",
   documents: "luvio.v3.documents",
-  sessionId: "luvio.v3.sessionId"
+  sessionId: "luvio.v3.sessionId",
+  theme: "luvio.v3.theme"
 };
+
+// 主题：尽早应用，减少浅→深闪烁。
+function getTheme() {
+  return localStorage.getItem(storeKeys.theme) === "dark" ? "dark" : "light";
+}
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme === "dark" ? "dark" : "light";
+}
+function toggleTheme() {
+  const next = getTheme() === "dark" ? "light" : "dark";
+  localStorage.setItem(storeKeys.theme, next);
+  applyTheme(next);
+  render();
+}
+applyTheme(getTheme());
 
 const companyAliases = [
   { pattern: /腾讯控股|腾讯|Tencent/i, ticker: "0700.HK" },
@@ -42,6 +58,45 @@ const usAliases = [
   { pattern: /台积电|TSMC|\bTSM\b/i, ticker: "TSM", name: "台积电 TSMC" },
   { pattern: /\bBABA\b/i, ticker: "BABA", name: "阿里巴巴 ADR" }
 ];
+
+// 双重上市（港股 + 美股 ADR）。基本面是同一家公司，但 FMP 免费档只覆盖美股 ADR、
+// 不覆盖港股，所以基本面/估值统一走美股 ADR 口径（数据更全），并向用户说清两地代码。
+const DUAL_LISTINGS = [
+  { nameZh: "阿里巴巴", hk: "9988.HK", us: "BABA" },
+  { nameZh: "京东", hk: "9618.HK", us: "JD" },
+  { nameZh: "百度", hk: "9888.HK", us: "BIDU" },
+  { nameZh: "网易", hk: "9999.HK", us: "NTES" },
+  { nameZh: "携程", hk: "9961.HK", us: "TCOM" },
+  { nameZh: "哔哩哔哩", hk: "9626.HK", us: "BILI" },
+  { nameZh: "理想汽车", hk: "2015.HK", us: "LI" },
+  { nameZh: "小鹏汽车", hk: "9868.HK", us: "XPEV" },
+  { nameZh: "蔚来", hk: "9866.HK", us: "NIO" },
+  { nameZh: "名创优品", hk: "9896.HK", us: "MNSO" },
+  { nameZh: "新东方", hk: "9901.HK", us: "EDU" },
+  { nameZh: "贝壳", hk: "2423.HK", us: "BEKE" }
+];
+const DUAL_BY_TICKER = new Map();
+for (const d of DUAL_LISTINGS) { DUAL_BY_TICKER.set(d.hk, d); DUAL_BY_TICKER.set(d.us, d); }
+
+// 把"双重上市"的查询统一解析到美股 ADR 口径（基本面数据更全），并附带两地代码，
+// 让前端能告诉用户"你问的是哪一边、我用哪一边做基本面"。识别不到返回 null。
+function resolveDualListing(query = "") {
+  const aliasTicker = extractAliasTicker(query);          // 阿里巴巴 → 9988.HK
+  const usHit = resolveUsTicker(query)?.ticker || "";     // BABA
+  const hkTicker = extractTicker(query);                  // 9988.HK
+  const candidate = [aliasTicker, usHit, hkTicker].find((t) => t && DUAL_BY_TICKER.has(t));
+  const byName = candidate ? null : DUAL_LISTINGS.find((d) => query.includes(d.nameZh));
+  const hit = candidate ? DUAL_BY_TICKER.get(candidate) : byName;
+  if (!hit) return null;
+  const asked = candidate || hit.us; // 用户实际问的那一边（港股代码 / 美股代码 / 名称→默认美股）
+  return {
+    ticker: hit.us,                  // 基本面/估值统一走美股 ADR
+    nameZh: hit.nameZh,
+    nameEn: "",
+    industry: "中概 · 双重上市",
+    dualListing: { hk: hit.hk, us: hit.us, asked, primary: "us" }
+  };
+}
 
 const US_STOPWORDS = new Set([
   "PE", "PB", "PS", "ROE", "ROI", "ROA", "ROC", "AI", "IPO", "GDP", "CEO",
@@ -215,6 +270,23 @@ function linkifyEscaped(text = "") {
   });
 }
 
+// 行内格式：[文字](链接) → 链接 → 转义 → 裸链接化 → **粗体**。所有行（段落 / 列表 /
+// 编号 / 标题）统一走这里，避免编号行漏掉加粗导致 ** 原样漏出。
+// Markdown 链接用私有区占位符隔离，避免被后面的裸链接化二次包裹。
+function inlineFormat(text = "") {
+  const links = [];
+  const staged = String(text).replace(/\[([^\]]+?)\]\((https?:\/\/[^\s)]+)\)/g, (_m, label, url) => {
+    links.push({ label, url });
+    return `${links.length - 1}`;
+  });
+  let out = linkifyEscaped(esc(staged)).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  out = out.replace(/(\d+)/g, (_m, i) => {
+    const { label, url } = links[Number(i)] || {};
+    return url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>` : "";
+  });
+  return out;
+}
+
 function markdownToHtml(markdown = "") {
   const lines = String(markdown).split(/\r?\n/);
   const html = [];
@@ -230,32 +302,98 @@ function markdownToHtml(markdown = "") {
       }
       continue;
     }
-    if (line.startsWith("### ")) html.push(`<h3>${esc(line.slice(4))}</h3>`);
-    else if (line.startsWith("## ")) html.push(`<h2>${esc(line.slice(3))}</h2>`);
-    else if (line.startsWith("# ")) html.push(`<h1>${esc(line.slice(2))}</h1>`);
+    if (line.startsWith("### ")) html.push(`<h3>${inlineFormat(line.slice(4))}</h3>`);
+    else if (line.startsWith("## ")) html.push(`<h2>${inlineFormat(line.slice(3))}</h2>`);
+    else if (line.startsWith("# ")) html.push(`<h1>${inlineFormat(line.slice(2))}</h1>`);
     else if (sectionTitle.test(line)) html.push(`<h3>${esc(line)}</h3>`);
     else if (/^[-*]\s+/.test(line)) {
       if (!inList) {
         html.push("<ul>");
         inList = true;
       }
-      html.push(`<li>${linkifyEscaped(esc(line.replace(/^[-*]\s+/, ""))).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")}</li>`);
+      html.push(`<li>${inlineFormat(line.replace(/^[-*]\s+/, ""))}</li>`);
     } else if (/^\d+[.、]\s+/.test(line)) {
       if (inList) {
         html.push("</ul>");
         inList = false;
       }
-      html.push(`<p class="numbered-line">${linkifyEscaped(esc(line))}</p>`);
+      html.push(`<p class="numbered-line">${inlineFormat(line)}</p>`);
     } else {
       if (inList) {
         html.push("</ul>");
         inList = false;
       }
-      html.push(`<p>${linkifyEscaped(esc(line)).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")}</p>`);
+      html.push(`<p>${inlineFormat(line)}</p>`);
     }
   }
   if (inList) html.push("</ul>");
   return html.join("");
+}
+
+// 研究段落标题 → 语气 tone（用于结构化层级与重点提权）。覆盖 prompt 里所有模式
+// （泛研究 / 赚钱 / 护城河 / 竞争 / 证伪）用到的段落名，之前有一半没被识别。
+const SECTION_TONES = [
+  [/^(结论|我的判断)$/, "verdict"],
+  [/^简单(说|结论)$/, "lead"],
+  [/^事实$/, "facts"],
+  [/^(推断|拆开看|怎么理解竞争格局)$/, "reason"],
+  [/^估值\s*\/\s*风险$/, "valuation"],
+  [/^(主要风险|风险\s*\/\s*证伪|证伪条件|会推翻逻辑的关键事实)$/, "risk"],
+  [/^动作$/, "action"],
+  [/^(还缺什么|数据缺口|证据缺口)/, "gap"],
+  [/^来源[:：]?$/, "sources"],
+  [/^(靠什么赚钱|利润质量|现金流|商业模式|护城河拆解|关键判断|主要竞争对手|接下来重点看|下一步看什么|怎么提前观察|已抓到的外部信号|深度研究)$/, "neutral"]
+];
+
+const SECTION_LABEL_EN = {
+  verdict: "VERDICT", lead: "TL;DR", facts: "FACTS", reason: "ANALYSIS",
+  valuation: "VALUATION", risk: "RISK", action: "ACTION", gap: "GAPS", sources: "SOURCES", neutral: ""
+};
+
+function sectionToneOf(line = "") {
+  for (const [re, tone] of SECTION_TONES) if (re.test(line)) return tone;
+  return null;
+}
+
+// 把一条研究回答按已知段落标题切成结构块。识别不到任何段落（画像 / 事件 / 持仓 /
+// 短答）时退回平铺渲染，行为完全不变。
+function renderRichAnswer(content = "") {
+  const lines = String(content).split(/\r?\n/);
+  const blocks = [];
+  let lead = [];
+  let cur = null;
+  for (const raw of lines) {
+    const tone = raw.trim() ? sectionToneOf(raw.trim()) : null;
+    if (tone) {
+      if (cur) blocks.push(cur);
+      else if (lead.length) { blocks.push({ lead: lead.slice() }); lead = []; }
+      cur = { title: raw.trim(), tone, body: [] };
+    } else if (cur) {
+      cur.body.push(raw);
+    } else {
+      lead.push(raw);
+    }
+  }
+  if (cur) blocks.push(cur);
+  else if (lead.length) blocks.push({ lead });
+
+  if (!blocks.some((b) => b.tone)) return markdownToHtml(content);
+
+  return blocks
+    .map((b, i) => {
+      // --i 驱动分段渐显的错峰延迟（仅最新一条回答会动，见 styles.css）。
+      if (b.lead) {
+        const html = markdownToHtml(b.lead.join("\n"));
+        return html ? `<div class="ans-lead" style="--i:${i}">${html}</div>` : "";
+      }
+      const en = SECTION_LABEL_EN[b.tone] || "";
+      const body = markdownToHtml(b.body.join("\n"));
+      return `<section class="ans-sec tone-${b.tone}" style="--i:${i}">
+        <div class="ans-sec-head"><span class="ans-dot"></span><span class="ans-sec-zh">${esc(b.title)}</span>${en ? `<span class="ans-sec-en">${en}</span>` : ""}</div>
+        <div class="ans-sec-body">${body}</div>
+      </section>`;
+    })
+    .join("");
 }
 
 function extractTicker(text = "") {
@@ -282,6 +420,9 @@ function companySearchCandidates(query = "") {
 }
 
 async function resolveCompany(query) {
+  // 双重上市优先：阿里巴巴 / 京东等统一走美股 ADR 口径，附带两地代码。
+  const dual = resolveDualListing(query);
+  if (dual) return dual;
   const us = resolveUsTicker(query);
   const candidates = companySearchCandidates(query);
   let company = null;
@@ -397,24 +538,36 @@ function exportResearch() {
 async function showPortfolio() {
   try {
     const data = await api("/api/portfolio");
-    const positions = data.positions || [];
-    const lines = ["## 我的持仓"];
-    if (!positions.length) {
-      lines.push("", "还没有记账。在对话里说一句即可记录，例如：“耐世特 成本 4.9，持有 3000 股，止损 4.2，止盈 6.5”。");
-    } else {
-      lines.push("", ...positions.map((p) => {
-        const bits = [];
-        if (p.shares != null) bits.push(`${p.shares} 股`);
-        if (p.avgCost != null) bits.push(`成本 ${p.avgCost}`);
-        if (p.stopLoss != null) bits.push(`止损 ${p.stopLoss}`);
-        if (p.takeProfit != null) bits.push(`止盈 ${p.takeProfit}`);
-        return `- **${p.companyName || p.ticker}**（${p.ticker}）：${bits.join(" · ") || "已建仓"}`;
-      }));
-      lines.push("", "盘前事件会自动盯住这些持仓的止损/止盈线和大幅回撤。");
-    }
-    appendMessage("assistant", lines.join("\n"), { type: "portfolio" });
+    appendMessage("assistant", "我的持仓", { type: "portfolio", positions: data.positions || [] });
   } catch (error) {
     toast(error.message || "暂时无法读取持仓。");
+  }
+}
+
+// 删除某条持仓后，原地刷新最近那张持仓面板，而不是再插一张新的。
+async function refreshPortfolioPanel() {
+  const data = await api("/api/portfolio");
+  const positions = data.positions || [];
+  const thread = getThread();
+  for (let i = thread.length - 1; i >= 0; i -= 1) {
+    if (thread[i].meta?.type === "portfolio") {
+      thread[i] = { ...thread[i], meta: { ...thread[i].meta, positions } };
+      break;
+    }
+  }
+  setThread(thread);
+  render();
+}
+
+async function deletePortfolioPosition(ticker) {
+  if (!ticker) return;
+  if (!window.confirm(`从持仓里移除 ${ticker}？`)) return;
+  try {
+    await api(`/api/portfolio?ticker=${encodeURIComponent(ticker)}`, { method: "DELETE" });
+    await refreshPortfolioPanel();
+    toast("已移除持仓。");
+  } catch (error) {
+    toast(error.message || "删除失败。");
   }
 }
 
@@ -422,17 +575,43 @@ async function showEventDigest() {
   try {
     const data = await api("/api/events/digest?slot=premarket");
     const digest = data.digest || {};
-    const events = digest.events || [];
-    const lines = [`## 盘前事件提醒`, "", digest.summary || ""];
-    if (events.length) {
-      const tag = (s) => (s === "high" ? "🔴 重要" : s === "medium" ? "🟡 关注" : "⚪ 一般");
-      lines.push("", ...events.map((e) => {
-        const link = e.url ? ` ${e.url}` : "";
-        return `- ${tag(e.severity)} ${e.title}${link}`;
-      }));
-    } else {
+    const groups = Array.isArray(digest.groups) ? digest.groups : [];
+    const failures = Array.isArray(digest.failures) ? digest.failures : [];
+    const tag = (s) => (s === "high" ? "🔴 重要" : s === "medium" ? "🟡 关注" : "⚪ 一般");
+
+    const withEvents = groups.filter((g) => (g.events || []).length);
+    const emptyGroups = groups.filter((g) => !(g.events || []).length && g.status !== "error");
+
+    const lines = ["## 盘前事件提醒", "", digest.summary || ""];
+
+    // 按公司分组：每家一张小卡，事件按 severity 排好。
+    for (const g of withEvents) {
+      lines.push("", `### ${g.companyName} · ${g.ticker}`);
+      for (const e of g.events) {
+        const title = String(e.title || "").replace(/[[\]]/g, "");
+        lines.push(`- ${tag(e.severity)} ${e.url ? `[${title}](${e.url})` : title}`);
+      }
+    }
+
+    // 抓取失败：明确列出哪家、为什么——不再让用户以为是"没事件"。
+    if (failures.length) {
+      lines.push("", "### ⚠️ 本轮抓取失败");
+      for (const f of failures) {
+        lines.push(`- ${f.companyName} · ${f.ticker}：${(f.reasons || []).join("；") || "未知原因"}`);
+      }
+    }
+
+    // 暂无事件的公司压成一行；港股财报日历缺失等说明只提示一次。
+    if (emptyGroups.length) {
+      lines.push("", `其余 ${emptyGroups.length} 家暂无重大事件：${emptyGroups.map((g) => g.companyName).join("、")}。`);
+      const notes = [...new Set(emptyGroups.flatMap((g) => g.reasons || []))];
+      if (notes.length) lines.push("", ...notes.map((n) => `> ${n}`));
+    }
+
+    if (!withEvents.length && !failures.length) {
       lines.push("", "完成一轮研究后，系统会跟踪该公司的财报与重大新闻，盘前在这里汇总。");
     }
+
     appendMessage("assistant", lines.join("\n"), { type: "digest" });
   } catch (error) {
     toast(error.message || "暂时无法生成事件提醒。");
@@ -589,6 +768,10 @@ async function sendChat(question) {
     toast(`已切到 ${company.nameZh || company.ticker}，开新研究。`);
   }
   setCompany(company);
+  // 双重上市：首次选中时说清楚——同一家公司，基本面走美股 ADR，两地代码都给。
+  if (company.dualListing && (switched || !prevCompany?.ticker)) {
+    toast(`${company.nameZh} 双重上市：港股 ${company.dualListing.hk}｜美股 ${company.dualListing.us}，基本面按美股 ADR 口径。`);
+  }
   render();
 
   const result = await api("/api/chat", {
@@ -738,6 +921,7 @@ function shell(content) {
         <nav>
           ${nav("/", "研究室")}
           ${nav("/settings", "设置")}
+          <button class="theme-toggle" type="button" data-action="toggle-theme" aria-label="切换深色 / 浅色" title="切换深色 / 浅色">${themeIcon()}</button>
         </nav>
       </header>
       <main>${content}</main>
@@ -747,6 +931,13 @@ function shell(content) {
 function nav(path, label) {
   const active = currentRoute() === path;
   return `<a class="${active ? "active" : ""}" href="#${path}">${label}</a>`;
+}
+
+function themeIcon() {
+  // 浅色时显示月亮（点了变深色），深色时显示太阳。
+  return getTheme() === "dark"
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>';
 }
 
 const SNAP_ICONS = {
@@ -799,6 +990,14 @@ function renderSnapshotCard(company, panel, thread) {
       </div>`
     : "";
 
+  const dual = company?.dualListing;
+  const dualNote = dual
+    ? `<div class="snapshot-dual" title="同一家公司在港股和美股双重上市；FMP 免费档只覆盖美股 ADR，所以基本面与估值统一按美股口径，行情两地可分别查。">
+        <span class="dual-badge">双重上市</span>
+        <span class="dual-text">港股 ${esc(dual.hk)}｜美股 ${esc(dual.us)} · 基本面按美股 ADR 口径</span>
+      </div>`
+    : "";
+
   const tools = [
     ticker ? snapTool("portrait", "画像") : "",
     snapTool("digest", "事件"),
@@ -815,6 +1014,7 @@ function renderSnapshotCard(company, panel, thread) {
       </div>
       ${confChip}
     </div>
+    ${dualNote}
     ${quoteBlock}
     ${metricChips}
     <div class="snapshot-tools">${tools}</div>
@@ -910,6 +1110,17 @@ function renderWaitingCard() {
         <em>已等待 <span data-busy-seconds>${busyElapsedSeconds()}</span>s</em>
       </div>
       <p class="wait-phase" data-busy-phase>${esc(waitPhase())}</p>
+      <div class="skeleton" aria-hidden="true">
+        <div class="sk-line w-95"></div>
+        <div class="sk-line w-75"></div>
+        <div class="sk-card">
+          <div class="sk-line sk-strong w-30"></div>
+          <div class="sk-line w-90"></div>
+          <div class="sk-line w-65"></div>
+        </div>
+        <div class="sk-line w-85"></div>
+        <div class="sk-line w-55"></div>
+      </div>
     </div>
   </article>`;
 }
@@ -941,21 +1152,26 @@ function renderComposer(company) {
 
 function renderEmptyState() {
   const examples = [
-    { label: "腾讯 0700.HK", q: "腾讯最近怎么样？" },
-    { label: "苹果 AAPL", q: "苹果赚钱吗？" },
-    { label: "英伟达 NVDA", q: "英伟达的护城河在哪？" },
-    { label: "比亚迪 1211.HK", q: "比亚迪靠什么赚钱？" }
+    { name: "腾讯", ticker: "0700.HK", market: "港股", q: "腾讯最近怎么样？" },
+    { name: "苹果", ticker: "AAPL", market: "美股", q: "苹果赚钱吗？" },
+    { name: "英伟达", ticker: "NVDA", market: "美股", q: "英伟达的护城河在哪？" },
+    { name: "比亚迪", ticker: "1211.HK", market: "港股", q: "比亚迪靠什么赚钱？" }
   ];
+  const caps = ["赚钱机制", "护城河", "竞争格局", "估值赔率", "什么会证伪"];
   return `<div class="empty-chat">
-    <p>LUVIO RESEARCH</p>
-    <h2>像研究员一样，<br>聊懂一家港美股公司。</h2>
-    <span>港股、美股都能问——赚不赚钱、护城河、竞争格局、估值、什么会证伪。问一句就开始：输入公司名、港股代码或美股代码（如 AAPL、$NVDA）。普通追问给精炼短答，需要完整证据链时再生成深度研究。</span>
+    <div class="hero-head">
+      <p class="hero-eyebrow"><span class="hero-spark"></span>LUVIO RESEARCH</p>
+      <h2>像研究员一样，<br>聊懂一家公司。</h2>
+      <p class="hero-sub">港股与美股，一句话就开始。普通追问给精炼短答，复杂研究再沉到底层。</p>
+      <div class="hero-caps">${caps.map((c) => `<span class="cap-pill">${esc(c)}</span>`).join("")}</div>
+    </div>
     <div class="example-grid">
       ${examples
         .map(
           (item) => `<button class="example-card" type="button" data-action="example" data-query="${esc(item.q)}">
-        <strong>${esc(item.label)}</strong>
-        <span>${esc(item.q)}</span>
+        <span class="ex-head"><strong>${esc(item.name)}</strong><span class="ex-badge ${item.market === "美股" ? "us" : "hk"}">${esc(item.market)}</span></span>
+        <span class="ex-ticker">${esc(item.ticker)}</span>
+        <span class="ex-q">${esc(item.q)}</span>
       </button>`
         )
         .join("")}
@@ -983,6 +1199,58 @@ function credLevel(score) {
 function numFrom(value) {
   const n = parseFloat(String(value).replace(/[^\d.-]/g, ""));
   return Number.isFinite(n) ? n : null;
+}
+
+// ── Portfolio panel ──────────────────────────────────────
+function fmtPct(v) {
+  if (typeof v !== "number" || !Number.isFinite(v)) return "";
+  return `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`;
+}
+function fmtNum(v, digits = 2) {
+  if (typeof v !== "number" || !Number.isFinite(v)) return "—";
+  return v.toLocaleString("zh-CN", { maximumFractionDigits: digits });
+}
+function pnlDir(v) {
+  return typeof v === "number" && Number.isFinite(v) ? (v > 0 ? "is-up" : v < 0 ? "is-down" : "is-flat") : "is-flat";
+}
+
+function renderPositionCard(p) {
+  const name = esc(p.companyName || p.ticker);
+  const ticker = esc(p.ticker);
+  const ccy = esc(p.currency || "");
+  const hasQuote = p.priceStatus === "ok" && p.currentPrice != null;
+  const priceBlock = hasQuote
+    ? `<div class="pf-price"><span class="pf-now">${fmtNum(p.currentPrice)} ${ccy}</span>${fmtPct(p.returnPct) ? `<span class="pf-ret ${pnlDir(p.returnPct)}">${fmtPct(p.returnPct)}</span>` : ""}</div>`
+    : `<div class="pf-price"><span class="pf-noquote">现价暂不可用</span></div>`;
+  const metrics = [];
+  if (p.avgCost != null) metrics.push(`<div><span>成本</span><b>${fmtNum(p.avgCost)}</b></div>`);
+  if (p.shares != null) metrics.push(`<div><span>股数</span><b>${fmtNum(p.shares, 0)}</b></div>`);
+  if (p.marketValue != null) metrics.push(`<div><span>市值</span><b>${fmtNum(p.marketValue, 0)} ${ccy}</b></div>`);
+  if (p.unrealizedPnl != null) metrics.push(`<div><span>浮动盈亏</span><b class="${pnlDir(p.unrealizedPnl)}">${p.unrealizedPnl >= 0 ? "+" : ""}${fmtNum(p.unrealizedPnl, 0)} ${ccy}</b></div>`);
+  if (p.stopLoss != null) metrics.push(`<div><span>止损</span><b>${fmtNum(p.stopLoss)}${typeof p.toStopPct === "number" ? ` <em class="pf-dist ${pnlDir(p.toStopPct)}">缓冲 ${fmtPct(p.toStopPct)}</em>` : ""}</b></div>`);
+  if (p.takeProfit != null) metrics.push(`<div><span>止盈</span><b>${fmtNum(p.takeProfit)}${typeof p.toTakePct === "number" ? ` <em class="pf-dist">空间 ${fmtPct(p.toTakePct)}</em>` : ""}</b></div>`);
+  return `<article class="pf-card">
+    <div class="pf-card-head">
+      <div class="pf-id"><strong>${name}</strong><span>${ticker}</span></div>
+      <button class="pf-del" type="button" data-action="delete-position" data-ticker="${ticker}" aria-label="删除持仓">删除</button>
+    </div>
+    ${priceBlock}
+    ${metrics.length ? `<div class="pf-metrics">${metrics.join("")}</div>` : ""}
+  </article>`;
+}
+
+function renderPortfolioPanel(positions = []) {
+  if (!positions.length) {
+    return `<p class="pf-empty">还没有记账。点下面按钮，或在对话里说一句即可记录，例如：<strong>耐世特 成本 4.9 持有 3000 股 止损 4.2 止盈 6.5</strong>。</p>
+      <div class="pf-actions"><button class="pf-add" type="button" data-action="portfolio-add">＋ 记一笔持仓</button></div>`;
+  }
+  const noQuote = positions.filter((p) => p.priceStatus !== "ok").length;
+  const foot = noQuote
+    ? `盘前事件会盯住止损 / 止盈线和大幅回撤。${noQuote} 家暂时取不到实时行情。`
+    : "盘前事件会自动盯住这些持仓的止损 / 止盈线和大幅回撤。";
+  return `<div class="pf-list">${positions.map(renderPositionCard).join("")}</div>
+    <div class="pf-actions"><button class="pf-add" type="button" data-action="portfolio-add">＋ 记一笔持仓</button></div>
+    <p class="pf-foot">${foot}</p>`;
 }
 
 function renderValuation(valuation) {
@@ -1079,16 +1347,17 @@ function renderMessage(message) {
     const meta = message.meta || {};
     const title = meta.type === "deep_research" ? "DEEP RESEARCH" : meta.type === "portrait" ? "公司画像" : meta.type === "digest" ? "事件提醒" : meta.type === "portfolio" ? "我的持仓" : "LUVIO";
     const messageId = message.id || "";
+    const isPortfolio = meta.type === "portfolio";
     return `<article class="message assistant">
       <div class="bubble answer-card">
         <div class="answer-brand">
           <div class="answer-mark"><i></i><span>${title}</span></div>
-          <button class="copy-answer" type="button" data-action="copy-message" data-id="${esc(messageId)}">复制</button>
+          ${isPortfolio ? "" : `<button class="copy-answer" type="button" data-action="copy-message" data-id="${esc(messageId)}">复制</button>`}
         </div>
-        ${markdownToHtml(message.content)}
+        ${isPortfolio ? renderPortfolioPanel(meta.positions) : renderRichAnswer(message.content)}
         ${renderValuation(meta.valuation)}
         ${renderEvidenceBlock(meta.evidence)}
-        ${renderAnswerMeta(meta)}
+        ${isPortfolio ? "" : renderAnswerMeta(meta)}
       </div>
     </article>`;
   }
@@ -1153,6 +1422,7 @@ document.addEventListener("click", async (event) => {
   if (!target) return;
   const action = target.dataset.action;
   if (action === "new") clearResearch();
+  if (action === "toggle-theme") { toggleTheme(); return; }
   if (action === "export") exportResearch();
   if (action === "portrait") await showPortrait();
   if (action === "digest") await showEventDigest();
@@ -1183,6 +1453,15 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "copy-message") await copyMessage(target.dataset.id);
   if (action === "report") await generateDeepResearch();
+  if (action === "delete-position") await deletePortfolioPosition(target.dataset.ticker);
+  if (action === "portfolio-add") {
+    const input = document.querySelector(".composer textarea");
+    if (input) {
+      input.value = "<公司名或代码> 成本 <价> 持有 <股数> 股 止损 <价> 止盈 <价>";
+      input.focus();
+      input.select();
+    }
+  }
 });
 
 document.addEventListener("change", (event) => {
