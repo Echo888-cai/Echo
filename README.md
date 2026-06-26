@@ -39,9 +39,9 @@ AAPL 赚钱吗？           # US by ticker
 
 Then continue naturally — `它靠什么赚钱？` / `护城河是什么？` / `什么情况会证伪？`. The system keeps the company context, adapts the format to the question (focused follow-ups get focused answers), and never restarts the whole report each turn.
 
-US names resolve three ways: a built-in **Chinese/English alias table** (`美光` / `Micron`, `博通`, `高通`, `礼来`, …), an **FMP name-search fallback** so arbitrary US companies still map to the right main-board ticker (`Robinhood` → `HOOD`, `Coinbase` → `COIN`), or explicit notation (bare `AAPL`, `$NVDA`, `TSLA.US`).
+Company resolution is layered, so almost any name works: a built-in **Chinese/English alias table** (`美光` / `Micron`, `博通`, `礼来`, …), an **FMP name-search** for English/pinyin (`Robinhood` → `HOOD`, `Coinbase` → `COIN`), and an **LLM resolver** that maps a free-form Chinese name to the right ticker and **verifies it against FMP** before trusting it (`泛林集团` → `LRCX`, `商汤` → `0020.HK`). Explicit notation always works too (bare `AAPL`, `$NVDA`, `TSLA.US`, `0700.HK`).
 
-**Honest about unknown companies.** If a question clearly names a company Luvio can't pin to a ticker, it says so and asks for a code — it will **never silently answer as the previously-open company**. (No more "ask about Micron, get an answer about a construction firm".)
+**Honest about what it can't resolve.** If a question names a company Luvio genuinely can't pin to a ticker, it says so and asks for a code — it will **never silently answer as the previously-open company** (no more "ask about Micron, get an answer about a construction firm"). A-share-only names (`贵州茅台`) are recognized and politely declined, since Luvio covers HK + US. Follow-ups (`护城河是什么？` / `估值贵不贵？`) are understood as questions about the current company, not mistaken for new ones.
 
 **Dual-listed names** (Alibaba `9988.HK` / `BABA`, JD, Baidu, NetEase, NIO, Li Auto, …) are recognized as one company. Because FMP's free tier covers the US ADR but not the HK line, Luvio routes **fundamentals & valuation to the US ADR** (richer data) while showing both tickers and a "双重上市" note — so you always know it's the same business and which side the numbers come from.
 

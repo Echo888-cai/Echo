@@ -16,7 +16,7 @@ import { loadEnvFile } from "./src/server/utils/env.js";
 // Routes
 import { handleStatusApi } from "./src/server/routes/status.js";
 import { handleDocumentParseApi } from "./src/server/routes/documents.js";
-import { handleCompanySearch, handleUsCompanySearch } from "./src/server/routes/companies.js";
+import { handleCompanySearch, handleCompanyResolve } from "./src/server/routes/companies.js";
 import { handleSessionList, handleSessionClear, handleSessionGet, handleSessionDelete } from "./src/server/routes/research.js";
 import { handleChatApi } from "./src/server/routes/chat.js";
 import { handleReportGenerateApi } from "./src/server/routes/reports.js";
@@ -52,7 +52,7 @@ const server = createServer(async (req, res) => {
   const method = req.method || "GET";
 
   // ── Company search ─────────────────────────────────────
-  if (method === "GET" && url.startsWith("/api/companies/us-search")) return handleUsCompanySearch(req, res);
+  if (method === "GET" && url.startsWith("/api/companies/resolve")) return handleCompanyResolve(req, res);
   if (method === "GET" && url.startsWith("/api/companies/search")) return handleCompanySearch(req, res);
 
   // ── Status ─────────────────────────────────────────────

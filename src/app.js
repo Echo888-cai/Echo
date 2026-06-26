@@ -44,7 +44,7 @@ const companyAliases = [
 ];
 
 // 美股别名（名称 + 代码）。中文名只能靠这张表（FMP 搜索不认中文）；英文名/拼音/代码
-// 没命中这张表时，resolveCompany 会再走 FMP /api/companies/us-search 兜底。
+// 没命中这张表时，resolveCompany 会再走 /api/companies/resolve（FMP + LLM）兜底。
 // 其它美股也可用 $代码 或 代码.US，例如 $PLTR、PLTR.US。
 const usAliases = [
   { pattern: /苹果|Apple|\bAAPL\b/i, ticker: "AAPL", name: "苹果 Apple" },
@@ -449,13 +449,20 @@ function extractAliasTicker(text = "") {
 function companyNameResidual(query = "") {
   return String(query)
     .replace(/[？?！!，,。.；;：:、""''《》()（）]/g, " ")
-    .replace(/最近|怎么样|怎样|怎么|如何|分析|看看|帮我|一下|讲讲|说说|介绍|了解|护城河|赚钱|不赚钱|主要风险|风险|利润|毛利|营收|估值|赔率|基本面|值得|研究|持续|能不能|是什么|有没有|多少|呢|吗|的|了/g, " ")
+    // 开场白 / 客套（"我想了解"那种）先剥掉，避免残串变成"我想 泛林集团"。
+    .replace(/我想了解|我想问问|我想问|我想知道|我想看看|我想|想了解|想知道|想问问|想问|帮我看看|帮我查查|帮我查|帮我分析|帮我|麻烦你|麻烦|请问|请帮我|给我讲|给我说|能否|可以/g, " ")
+    .replace(/最近|怎么样|怎样|怎么|如何|分析|看看|一下|讲讲|说说|介绍|了解|这家公司|这家|公司|这只|股票|护城河|赚钱|不赚钱|主要风险|风险|利润|毛利|营收|估值|赔率|基本面|值得|研究|持续|能不能|是什么|有没有|多少|呢|吗|的|了/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
 // 公司名后缀（中文）。命中说明残串多半是一家公司，而不是"毛利率/护城河"这类追问。
 const CN_COMPANY_SUFFIX = /(科技|集团|股份|控股|银行|保险|证券|基金|汽车|医药|生物|制药|能源|半导体|电子|国际|地产|食品|饮料|光电|通信|网络|软件|数据|智能|重工|机械|电力|航空|航运|传媒|文化|教育|物流|材料|化工|钢铁|水泥|实业|电器|家居|服饰|乳业|酒业|影业)/;
+
+// 开场白前缀（"我想了解…"），判断主语位时先剥掉。
+const LEAD_IN_PREFIX = /^(我想了解|我想问问|我想问|我想知道|我想看看|我想|想了解|想知道|想问问|想问|帮我看看|帮我查查|帮我查|帮我分析|帮我|麻烦你|麻烦|请问|请帮我|了解一下|看下|看看)\s*/;
+// 追问句常见开头（指代/时间/指标）。出现在主语位说明这是对当前公司的追问，不是点名新公司。
+const FOLLOWUP_HEAD = /^(它|他|她|这|那|其|该|怎|为什么|现在|目前|当前|未来|今年|去年|最近|短期|长期|股价|估值|市值|毛利|利润|净利|营收|收入|护城河|风险|基本面|赚钱|分红|回购|增长|前景|趋势|空间|逻辑|催化|对比|相比|和|跟|与|vs)/i;
 
 // 这句是否在"点名一家（可能是新的）公司"。用于决定是否触发解析，以及解析失败时
 // 是否要明确告诉用户"没识别出"，而不是默默沿用上一家公司作答（张冠李戴的根因）。
@@ -465,6 +472,10 @@ function mentionsNewCompany(query = "") {
   if (residual.length < 2) return false;
   if (CN_COMPANY_SUFFIX.test(residual)) return true;        // 美光科技 / 某某集团
   if (/[A-Z][a-z]{2,}/.test(residual)) return true;         // 英文专有名词：Micron / Coinbase（排除 ROE/EBITDA 这类全大写）
+  // 无后缀的中文公司名（贵州茅台 / 比亚迪 / 顺丰）：只有出现在主语位（问句开头、不是
+  // 指代/指标这类追问词）才算点名公司，避免把"估值贵不贵""现在怎么看"误判成新公司。
+  const lead = query.trim().replace(LEAD_IN_PREFIX, "").trim();
+  if (/^[一-龥]{2,}/.test(lead) && !FOLLOWUP_HEAD.test(lead)) return true;
   return false;
 }
 
@@ -492,13 +503,16 @@ async function resolveCompany(query) {
   if (!company && us) return { ticker: us.ticker, nameZh: us.name, nameEn: us.name, industry: "美股" };
   const fallbackTicker = candidates.find((candidate) => /^\d{4,5}\.HK$/.test(candidate));
   if (!company && fallbackTicker) return { ticker: fallbackTicker, nameZh: fallbackTicker, industry: "待补充" };
-  // 英文名/拼音/代码没命中别名表时，走 FMP 名称搜索兜底（如 Robinhood→HOOD）。
+  // 没命中别名表/港股库时，走智能解析兜底：英文/拼音→FMP，中文名→LLM（如
+  // 泛林集团→LRCX、商汤→0020.HK），代码再经 FMP 校验，防止张冠李戴。
   if (!company) {
-    const residual = companyNameResidual(query);
-    if (residual.length >= 2 && /[A-Za-z]/.test(residual)) {
+    const residual = companyNameResidual(query) || query.trim();
+    if (residual.length >= 2) {
       try {
-        const data = await api(`/api/companies/us-search?q=${encodeURIComponent(residual)}`);
+        const data = await api(`/api/companies/resolve?q=${encodeURIComponent(residual)}`);
         if (data.company?.ticker) return data.company;
+        // A 股（沪深）：Luvio 目前只做港股+美股，给一个专门的提示而不是泛泛"没识别"。
+        if (data.reason === "cn_unsupported") return { unsupported: true, market: "CN", name: data.name || residual };
       } catch { /* 兜底失败就走下面的"未识别"分支 */ }
     }
   }
@@ -759,7 +773,7 @@ async function loadSession(id) {
     let company = null;
     if (session.ticker) {
       const resolved = await resolveCompany(session.ticker);
-      if (resolved && !resolved.unresolved) company = resolved;
+      if (resolved && !resolved.unresolved && !resolved.unsupported) company = resolved;
     }
     if (!company && panel?.ticker) company = { ticker: panel.ticker, nameZh: panel.companyName || panel.ticker };
     setSessionId(session.id);
@@ -826,6 +840,15 @@ async function sendChat(question) {
   const shouldResolve = !company || mentionsNewCompany(question);
   if (shouldResolve) {
     const resolved = await resolveCompany(question);
+    // A 股（沪深）暂不支持：给专门提示，而不是泛泛的"没识别出"。
+    if (resolved?.unsupported) {
+      appendMessage(
+        "assistant",
+        `「${resolved.name}」是 A 股（沪深）。Luvio 目前只覆盖**港股和美股**，这家暂时研究不了。\n\n` +
+        `如果它同时在港股或美股上市（很多中概股是双重上市），可以用对应代码再问我，比如港股 **xxxx.HK** 或美股代码。`
+      );
+      return;
+    }
     // 点名了一家公司却解析不出：明确说"没识别出"，绝不拿上一家公司硬答。
     if (resolved?.unresolved) {
       appendMessage(
