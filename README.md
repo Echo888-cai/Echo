@@ -67,10 +67,11 @@ A single `src/market.js` layer knows whether a ticker is HK or US and spells it 
 
 - **HK quotes** → Tencent Finance (free), with Finnhub / Alpha Vantage / Yahoo fallback.
 - **US quotes** → Finnhub / Alpha Vantage / Yahoo.
-- **Fundamentals** → FMP (new `/stable` API) for US; HK falls back to Tencent/Yahoo basics.
+- **Fundamentals** → FMP `/stable` when the plan allows it, else **Finnhub `/stock/metric`** (free: EPS / PE / margins / ROE / growth), then Yahoo. HK falls back to Tencent/Yahoo basics.
+- **Company news** → Finnhub `/company-news` (free, keyed, reliable) as the primary source, with Yahoo / Bing scraping as supplement.
 - Currency is inferred per market (USD / HKD).
 
-> FMP's **free tier covers US fundamentals** (real EPS / FCF / margins), so US names get a real **profit-quality score** and a valuation range. HK full statements need a paid source; HK valuation shows a self-consistent PE band.
+> Every provider degrades gracefully. FMP's free tier now gates the statement endpoints (`402 Special Endpoint`), so US fundamentals are sourced from **Finnhub's free metric endpoint** — real EPS / PE / margins / ROE — which still powers the **profit-quality score** and the **valuation range bar**. A premium-gated endpoint never cools down the whole FMP key (so search/resolve keep working). HK full statements need a paid source; HK valuation shows a self-consistent PE band.
 
 ### Research conversation
 
@@ -157,8 +158,10 @@ FINNHUB_API_KEY=
 ALPHAVANTAGE_API_KEY=
 TWELVEDATA_API_KEY=
 
-# Fundamentals — FMP free tier covers US (real EPS/FCF → US valuation differentiates).
-# HK fundamentals need a paid FMP plan or another HK source.
+# Fundamentals & news — the FINNHUB_API_KEY above also powers US fundamentals
+# (EPS/PE/margins via /stock/metric) and reliable company news on the free tier.
+# FMP is used for company search/resolve and statements when your plan allows; its free
+# tier now gates the statement endpoints, so Finnhub is the US fundamentals fallback.
 FMP_API_KEY=
 
 # Web evidence — optional; without it Luvio uses DuckDuckGo/Yahoo/Bing (404-checked).
