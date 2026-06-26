@@ -39,7 +39,9 @@ AAPL 赚钱吗？           # US by ticker
 
 Then continue naturally — `它靠什么赚钱？` / `护城河是什么？` / `什么情况会证伪？`. The system keeps the company context, adapts the format to the question (focused follow-ups get focused answers), and never restarts the whole report each turn.
 
-US tickers can be typed bare (`AAPL`), by Chinese/English name (`苹果` / `Nvidia`), or explicitly with `$NVDA` / `TSLA.US`.
+US names resolve three ways: a built-in **Chinese/English alias table** (`美光` / `Micron`, `博通`, `高通`, `礼来`, …), an **FMP name-search fallback** so arbitrary US companies still map to the right main-board ticker (`Robinhood` → `HOOD`, `Coinbase` → `COIN`), or explicit notation (bare `AAPL`, `$NVDA`, `TSLA.US`).
+
+**Honest about unknown companies.** If a question clearly names a company Luvio can't pin to a ticker, it says so and asks for a code — it will **never silently answer as the previously-open company**. (No more "ask about Micron, get an answer about a construction firm".)
 
 **Dual-listed names** (Alibaba `9988.HK` / `BABA`, JD, Baidu, NetEase, NIO, Li Auto, …) are recognized as one company. Because FMP's free tier covers the US ADR but not the HK line, Luvio routes **fundamentals & valuation to the US ADR** (richer data) while showing both tickers and a "双重上市" note — so you always know it's the same business and which side the numbers come from.
 
@@ -92,7 +94,7 @@ Record holdings in plain language (`耐世特 成本 4.9 持有 3000 股 止损 
 
 ### Local research memory
 
-Sessions persist in SQLite (thread, company, decision panel, valuation, sources, generated content) — an iterative research notebook, not a disposable chat.
+Sessions persist in SQLite (thread, company, decision panel, valuation, sources, generated content) — an iterative research notebook, not a disposable chat. Each turn's answer keeps its own meta (valuation bar, evidence cards, confidence chip), so reopening a past session **renders exactly like the live answer** instead of losing the valuation bar.
 
 ### Model safety
 

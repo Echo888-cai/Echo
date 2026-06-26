@@ -43,7 +43,9 @@ const companyAliases = [
   { pattern: /港交所|香港交易所/i, ticker: "0388.HK" }
 ];
 
-// 美股别名（名称 + 代码）。其它美股可用 $代码 或 代码.US，例如 $PLTR、PLTR.US。
+// 美股别名（名称 + 代码）。中文名只能靠这张表（FMP 搜索不认中文）；英文名/拼音/代码
+// 没命中这张表时，resolveCompany 会再走 FMP /api/companies/us-search 兜底。
+// 其它美股也可用 $代码 或 代码.US，例如 $PLTR、PLTR.US。
 const usAliases = [
   { pattern: /苹果|Apple|\bAAPL\b/i, ticker: "AAPL", name: "苹果 Apple" },
   { pattern: /英伟达|NVIDIA|\bNVDA\b/i, ticker: "NVDA", name: "英伟达 NVIDIA" },
@@ -56,6 +58,40 @@ const usAliases = [
   { pattern: /英特尔|Intel|\bINTC\b/i, ticker: "INTC", name: "英特尔 Intel" },
   { pattern: /\bAMD\b|超威/i, ticker: "AMD", name: "AMD" },
   { pattern: /台积电|TSMC|\bTSM\b/i, ticker: "TSM", name: "台积电 TSMC" },
+  // 半导体 / 硬件
+  { pattern: /美光|镁光|Micron|\bMU\b/i, ticker: "MU", name: "美光科技 Micron" },
+  { pattern: /博通|Broadcom|\bAVGO\b/i, ticker: "AVGO", name: "博通 Broadcom" },
+  { pattern: /高通|Qualcomm|\bQCOM\b/i, ticker: "QCOM", name: "高通 Qualcomm" },
+  { pattern: /阿斯麦|阿斯麦尔|\bASML\b/i, ticker: "ASML", name: "阿斯麦 ASML" },
+  { pattern: /应用材料|Applied Materials|\bAMAT\b/i, ticker: "AMAT", name: "应用材料 Applied Materials" },
+  { pattern: /美满|Marvell|\bMRVL\b/i, ticker: "MRVL", name: "美满电子 Marvell" },
+  { pattern: /\bARM\b|安谋/i, ticker: "ARM", name: "ARM" },
+  // 软件 / 互联网
+  { pattern: /甲骨文|Oracle|\bORCL\b/i, ticker: "ORCL", name: "甲骨文 Oracle" },
+  { pattern: /思科|Cisco|\bCSCO\b/i, ticker: "CSCO", name: "思科 Cisco" },
+  { pattern: /Adobe|\bADBE\b/i, ticker: "ADBE", name: "Adobe" },
+  { pattern: /Salesforce|赛富时|\bCRM\b/i, ticker: "CRM", name: "Salesforce" },
+  { pattern: /Palantir|\bPLTR\b/i, ticker: "PLTR", name: "Palantir" },
+  { pattern: /Snowflake|\bSNOW\b/i, ticker: "SNOW", name: "Snowflake" },
+  { pattern: /Coinbase|\bCOIN\b/i, ticker: "COIN", name: "Coinbase" },
+  { pattern: /优步|Uber|\bUBER\b/i, ticker: "UBER", name: "优步 Uber" },
+  // 消费 / 工业 / 金融 / 医药
+  { pattern: /迪士尼|Disney|\bDIS\b/i, ticker: "DIS", name: "迪士尼 Disney" },
+  { pattern: /星巴克|Starbucks|\bSBUX\b/i, ticker: "SBUX", name: "星巴克 Starbucks" },
+  { pattern: /麦当劳|McDonald|\bMCD\b/i, ticker: "MCD", name: "麦当劳 McDonald's" },
+  { pattern: /可口可乐|Coca[ -]?Cola/i, ticker: "KO", name: "可口可乐 Coca-Cola" },
+  { pattern: /百事|Pepsi|\bPEP\b/i, ticker: "PEP", name: "百事 PepsiCo" },
+  { pattern: /沃尔玛|Walmart|\bWMT\b/i, ticker: "WMT", name: "沃尔玛 Walmart" },
+  { pattern: /耐克|Nike/i, ticker: "NKE", name: "耐克 Nike" },
+  { pattern: /波音|Boeing/i, ticker: "BA", name: "波音 Boeing" },
+  { pattern: /摩根大通|小摩|JPMorgan|JP\s?Morgan|\bJPM\b/i, ticker: "JPM", name: "摩根大通 JPMorgan" },
+  { pattern: /高盛|Goldman/i, ticker: "GS", name: "高盛 Goldman Sachs" },
+  { pattern: /伯克希尔|巴菲特|Berkshire/i, ticker: "BRK-B", name: "伯克希尔 Berkshire" },
+  { pattern: /Visa|维萨/i, ticker: "V", name: "Visa" },
+  { pattern: /万事达|Mastercard/i, ticker: "MA", name: "万事达 Mastercard" },
+  { pattern: /礼来|Eli\s?Lilly|\bLLY\b/i, ticker: "LLY", name: "礼来 Eli Lilly" },
+  { pattern: /强生|Johnson\s?&?\s?Johnson|\bJNJ\b/i, ticker: "JNJ", name: "强生 J&J" },
+  { pattern: /辉瑞|Pfizer|\bPFE\b/i, ticker: "PFE", name: "辉瑞 Pfizer" },
   { pattern: /\bBABA\b/i, ticker: "BABA", name: "阿里巴巴 ADR" }
 ];
 
@@ -408,14 +444,34 @@ function extractAliasTicker(text = "") {
   return hit?.ticker || "";
 }
 
+// 把追问词剥掉，留下"疑似公司名"残串。用于 HK 搜索候选、FMP 兜底查询、以及
+// 判断"这句到底有没有点名一家公司"。
+function companyNameResidual(query = "") {
+  return String(query)
+    .replace(/[？?！!，,。.；;：:、""''《》()（）]/g, " ")
+    .replace(/最近|怎么样|怎样|怎么|如何|分析|看看|帮我|一下|讲讲|说说|介绍|了解|护城河|赚钱|不赚钱|主要风险|风险|利润|毛利|营收|估值|赔率|基本面|值得|研究|持续|能不能|是什么|有没有|多少|呢|吗|的|了/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// 公司名后缀（中文）。命中说明残串多半是一家公司，而不是"毛利率/护城河"这类追问。
+const CN_COMPANY_SUFFIX = /(科技|集团|股份|控股|银行|保险|证券|基金|汽车|医药|生物|制药|能源|半导体|电子|国际|地产|食品|饮料|光电|通信|网络|软件|数据|智能|重工|机械|电力|航空|航运|传媒|文化|教育|物流|材料|化工|钢铁|水泥|实业|电器|家居|服饰|乳业|酒业|影业)/;
+
+// 这句是否在"点名一家（可能是新的）公司"。用于决定是否触发解析，以及解析失败时
+// 是否要明确告诉用户"没识别出"，而不是默默沿用上一家公司作答（张冠李戴的根因）。
+function mentionsNewCompany(query = "") {
+  if (extractTicker(query) || extractAliasTicker(query) || resolveUsTicker(query) || resolveDualListing(query)) return true;
+  const residual = companyNameResidual(query);
+  if (residual.length < 2) return false;
+  if (CN_COMPANY_SUFFIX.test(residual)) return true;        // 美光科技 / 某某集团
+  if (/[A-Z][a-z]{2,}/.test(residual)) return true;         // 英文专有名词：Micron / Coinbase（排除 ROE/EBITDA 这类全大写）
+  return false;
+}
+
 function companySearchCandidates(query = "") {
   const ticker = extractTicker(query);
   const aliasTicker = extractAliasTicker(query);
-  const cleaned = String(query)
-    .replace(/[？?！!，,。；;：:]/g, " ")
-    .replace(/最近|怎么样|怎么|分析|看看|帮我|一下|护城河|赚钱|不赚钱|主要风险|风险|利润|估值|值得|研究|持续|能不能|是什么/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const cleaned = companyNameResidual(query);
   return [...new Set([ticker, aliasTicker, cleaned, query].filter(Boolean))];
 }
 
@@ -436,7 +492,23 @@ async function resolveCompany(query) {
   if (!company && us) return { ticker: us.ticker, nameZh: us.name, nameEn: us.name, industry: "美股" };
   const fallbackTicker = candidates.find((candidate) => /^\d{4,5}\.HK$/.test(candidate));
   if (!company && fallbackTicker) return { ticker: fallbackTicker, nameZh: fallbackTicker, industry: "待补充" };
-  if (!company) return null;
+  // 英文名/拼音/代码没命中别名表时，走 FMP 名称搜索兜底（如 Robinhood→HOOD）。
+  if (!company) {
+    const residual = companyNameResidual(query);
+    if (residual.length >= 2 && /[A-Za-z]/.test(residual)) {
+      try {
+        const data = await api(`/api/companies/us-search?q=${encodeURIComponent(residual)}`);
+        if (data.company?.ticker) return data.company;
+      } catch { /* 兜底失败就走下面的"未识别"分支 */ }
+    }
+  }
+  // 点名了一家公司却怎么都解析不出 → 返回明确的"未识别"信号，让上层提示用户用代码，
+  // 绝不沿用上一家公司作答（这是"美光问成中国交通建设"那种张冠李戴的根因）。
+  if (!company) {
+    return mentionsNewCompany(query)
+      ? { unresolved: true, name: companyNameResidual(query) || query.trim() }
+      : null;
+  }
   return {
     ticker: company.ticker,
     nameZh: company.nameZh || company.name_zh || company.name || company.ticker,
@@ -685,7 +757,10 @@ async function loadSession(id) {
     if (!session) throw new Error("未找到研究会话");
     const panel = session.decisionPanel || null;
     let company = null;
-    if (session.ticker) company = await resolveCompany(session.ticker);
+    if (session.ticker) {
+      const resolved = await resolveCompany(session.ticker);
+      if (resolved && !resolved.unresolved) company = resolved;
+    }
     if (!company && panel?.ticker) company = { ticker: panel.ticker, nameZh: panel.companyName || panel.ticker };
     setSessionId(session.id);
     setCompany(company);
@@ -746,9 +821,23 @@ async function clearAllSessions() {
 async function sendChat(question) {
   const prevCompany = getCompany();
   let company = prevCompany;
-  const shouldResolve = !company || extractTicker(question) || extractAliasTicker(question) || resolveUsTicker(question);
+  // 没有公司、或这句在点名一家公司时都要解析。后者很关键：以前只看 ticker/别名/美股别名，
+  // "美光科技怎么样"三者都不命中 → 不解析 → 默默沿用上一家公司作答（张冠李戴）。
+  const shouldResolve = !company || mentionsNewCompany(question);
   if (shouldResolve) {
     const resolved = await resolveCompany(question);
+    // 点名了一家公司却解析不出：明确说"没识别出"，绝不拿上一家公司硬答。
+    if (resolved?.unresolved) {
+      appendMessage(
+        "assistant",
+        `我没把握「${resolved.name}」对应哪只股票，这轮就不答了，免得张冠李戴答成别的公司。\n\n` +
+        `可以这样再问我一次：\n` +
+        `- 美股：直接输代码，如 **MU**、**HOOD**，或写 **$MU**\n` +
+        `- 港股：用代码，如 **0700.HK**\n` +
+        `- 或者写更完整、更标准的公司名`
+      );
+      return;
+    }
     if (resolved) company = resolved;
   }
   if (!company) {

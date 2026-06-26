@@ -95,7 +95,10 @@ export async function handleChatApi(req, res) {
         console.warn("company_profile 回写失败:", err?.message || err);
       }
     }
-    const sessionId = persistFinalChatSession(payload, result, content);
+    const sessionId = persistFinalChatSession(payload, result, content, {
+      valuation: valuation.cannotValueReason ? null : valuation,
+      mode: chatModel?.content ? "chat_model" : "chat_local"
+    });
     sendJson(res, 200, {
       mode: chatModel?.content ? "chat_model" : "chat_local",
       stages: chatModel?.stages || "none",
@@ -122,11 +125,21 @@ export async function handleChatApi(req, res) {
   }
 }
 
-function persistFinalChatSession(payload, result, content) {
+function persistFinalChatSession(payload, result, content, extra = {}) {
   const panel = result.decisionPanel;
   const ticker = panel?.ticker || payload.company?.ticker;
   if (!ticker) return payload.sessionId || result.sessionId || null;
-  const thread = buildFinalThread(payload.history, payload.question, content);
+  // Reconstruct the assistant message meta so a restored session renders exactly
+  // like the live answer — including the valuation bar, evidence cards and chips.
+  const assistantMeta = {
+    mode: extra.mode || "chat_local",
+    webCount: result.webEvidence?.evidence?.length ?? 0,
+    sources: dataSourceLabels(result.dataSources),
+    confidence: panel?.confidence || null,
+    valuation: extra.valuation || null,
+    evidence: provenanceFromPanel(panel)
+  };
+  const thread = buildFinalThread(payload.history, payload.question, content, assistantMeta);
   try {
     const saved = saveResearchSession({
       id: payload.sessionId || result.sessionId || undefined,
@@ -160,14 +173,50 @@ function persistFinalChatSession(payload, result, content) {
   }
 }
 
-function buildFinalThread(history = [], question = "", assistantContent = "") {
+function buildFinalThread(history = [], question = "", assistantContent = "", assistantMeta = {}) {
   const thread = Array.isArray(history) ? [...history] : [];
   const normalizedQuestion = String(question || "").trim();
   const last = thread[thread.length - 1];
   if (!(last?.role === "user" && String(last.content || "").trim() === normalizedQuestion)) {
     thread.push({ role: "user", content: question, createdAt: new Date().toISOString() });
   }
-  if (assistantContent) thread.push({ role: "assistant", content: assistantContent, createdAt: new Date().toISOString() });
+  if (assistantContent) {
+    thread.push({ role: "assistant", content: assistantContent, meta: assistantMeta, createdAt: new Date().toISOString() });
+  }
   return thread.slice(-80);
+}
+
+// 服务端复刻前端的 provenance/数据源标签（app.js 同名函数），让恢复历史时
+// assistant 消息的 meta（估值条/证据卡/置信度）与实时回答完全一致。
+const TYPE_CRED_DEFAULT = { official: 0.9, industry_research: 0.82, financial_media: 0.72, cn_financial_media: 0.6, market: 0.7, news: 0.55, web: 0.45 };
+
+function hostFromUrl(url = "") {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+function provenanceFromPanel(panel) {
+  const sources = Array.isArray(panel?.sources) ? panel.sources : [];
+  return sources
+    .filter((s) => s.url)
+    .slice(0, 6)
+    .map((s) => ({
+      title: s.label || hostFromUrl(s.url) || "来源",
+      url: s.url,
+      source: hostFromUrl(s.url) || s.type || "web",
+      type: s.type || (s.origin === "web_evidence" ? "web" : "official"),
+      cred: typeof s.credibility === "number" ? s.credibility : (TYPE_CRED_DEFAULT[s.type] ?? null),
+      date: s.timestamp || ""
+    }));
+}
+
+function dataSourceLabels(dataSources = {}) {
+  const map = { market: "行情", financials: "财报", filings: "公告", news: "新闻", estimates: "预期" };
+  return Object.entries(map)
+    .filter(([key]) => dataSources?.[key]?.status === "ok")
+    .map(([, label]) => label);
 }
 
