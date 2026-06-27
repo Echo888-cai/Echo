@@ -65,7 +65,8 @@ export async function handleChatApi(req, res) {
         chatModel = await runTwoStageChatStream({
           question, panel: result.decisionPanel, dataSources: result.dataSources, context,
           system: PROMPTS.chat.system,
-          onToken: (t) => send("token", { t })
+          onToken: (t) => send("token", { t }),
+          onReasoning: (t) => send("reasoning", { n: t.length }) // 只送字数，不送思考原文
         });
         if (chatModel?.content && chatModel.content.length < 9000) content = chatModel.content;
       }

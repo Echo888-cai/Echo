@@ -127,7 +127,7 @@ async function runSearchStage({ question, panel, dataSources, context }) {
  * callModelStream 把答案增量通过 onToken 推出去。返回与 runTwoStageChat 同形的对象
  * （含完整 content，供下游归一化/落库）。阶段 2 不可用时 content=null，调用方走本地兜底。
  */
-export async function runTwoStageChatStream({ question, panel, dataSources, context, system, onToken }) {
+export async function runTwoStageChatStream({ question, panel, dataSources, context, system, onToken, onReasoning }) {
   const researchNote = await runSearchStage({ question, panel, dataSources, context });
   const answerUser = researchNote
     ? buildAnswerStagePrompt(question, panel, dataSources, context, researchNote)
@@ -135,7 +135,7 @@ export async function runTwoStageChatStream({ question, panel, dataSources, cont
 
   let answerModel = null;
   try {
-    answerModel = await callModelStream({ system, user: answerUser, onToken });
+    answerModel = await callModelStream({ system, user: answerUser, onToken, onReasoning });
   } catch {
     answerModel = null;
   }

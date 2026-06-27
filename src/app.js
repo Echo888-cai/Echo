@@ -169,6 +169,9 @@ let historyOpen = true;
 // 后续 token 只改 #stream-body 的 innerHTML（不整页重渲，避免抖动）。
 let streamingActive = false;
 let streamingText = "";
+// 思考型模型（deepseek-v4）出首个答案 token 前会先推理一阵，期间没有内容 token。
+// 累计推理字数，让等待卡显示"正在推理 · 已 N 字"，而不是干等一片骨架屏。
+let reasoningChars = 0;
 
 function readStore(key, fallback) {
   try {
@@ -307,6 +310,7 @@ async function api(path, options = {}) {
 async function chatStream(body) {
   streamingActive = false;
   streamingText = "";
+  reasoningChars = 0;
   let finalResult = null;
   try {
     const resp = await fetch("/api/chat", {
@@ -342,6 +346,10 @@ async function chatStream(body) {
           const node = document.getElementById("stream-body");
           if (node) node.innerHTML = `${markdownToHtml(streamingText)}<span class="stream-caret"></span>`;
           document.querySelector(".conversation")?.scrollTo({ top: 999999 });
+        } else if (evt === "reasoning") {
+          // 推理期：累计字数，等待卡的 phase 行（1s tick）会读 reasoningChars 显示进度。
+          reasoningChars += json.n || 0;
+          updateBusyClock();
         } else if (evt === "final") {
           finalResult = json;
         } else if (evt === "error") {
@@ -1283,6 +1291,8 @@ const WAIT_PHASES = [
 ];
 
 function waitPhase() {
+  // 模型已经在推理（思考型模型出答案前的阶段）：显示活的推理字数，比静态骨架更诚实。
+  if (reasoningChars > 0 && !streamingActive) return `模型正在推理 · 已 ${reasoningChars} 字`;
   return WAIT_PHASES[Math.min(WAIT_PHASES.length - 1, Math.floor(busyElapsedSeconds() / 5))];
 }
 
