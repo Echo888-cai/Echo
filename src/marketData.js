@@ -205,12 +205,23 @@ async function fetchYahooChart(ticker) {
 }
 
 export async function getMarketSnapshot(ticker) {
-  // US: lead with US-native providers; HK: lead with Tencent (free, reliable for HK).
-  const providers = detectMarket(ticker) === "US"
-    ? [fetchFinnhub, fetchAlphaVantage, fetchTwelveData, fetchYahooChart]
-    : [fetchTencentQuote, fetchFinnhub, fetchAlphaVantage, fetchTwelveData, fetchYahooChart];
+  // 第一梯队**并发竞速**（取最快成功的），其余作串行兜底。
+  // 之前是纯串行兜底：每个源 fetch 超时 4.5s，并发研究时 Finnhub quote 又被新闻
+  // (company-news 大包) / 评级同时抢占，一慢就拖到 5s+ 撞上游超时 → 行情槽经常 missing。
+  // 竞速把延迟压到最快源即可返回。只让额度宽裕的源参与竞速（Finnhub 60/min、
+  // TwelveData 8/min、腾讯免费）；AlphaVantage 免费仅 25/天，留作兜底不参与竞速。
+  const isUS = detectMarket(ticker) === "US";
+  const fast = isUS ? [fetchFinnhub, fetchTwelveData] : [fetchTencentQuote, fetchFinnhub];
+  const fallback = isUS
+    ? [fetchAlphaVantage, fetchYahooChart]
+    : [fetchTwelveData, fetchAlphaVantage, fetchYahooChart];
   const errors = [];
-  for (const provider of providers) {
+  try {
+    return await Promise.any(fast.map((provider) => provider(ticker)));
+  } catch (aggregate) {
+    for (const err of aggregate?.errors || []) errors.push(err?.message || String(err));
+  }
+  for (const provider of fallback) {
     try {
       return await provider(ticker);
     } catch (error) {

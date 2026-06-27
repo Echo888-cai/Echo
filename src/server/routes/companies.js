@@ -14,8 +14,10 @@ import { callModel, getProviderStatus } from "../services/modelGateway.js";
 
 // 主板交易所优先级（越小越优先）。FMP 搜索会混进 OTC / 海外同名小票，按这个排序挑主板。
 const US_EXCHANGE_RANK = { NASDAQ: 0, NYSE: 0, AMEX: 1, BATS: 2, CBOE: 2 };
-// 明显不是普通股的名字（基金/ETF/信托/优先股/权证），名称兜底时排除。
-const NON_EQUITY_HINT = /\b(ETF|Fund|Trust|Index|Preferred|Warrant|Units?|Notes?|Bond)\b/i;
+// 明显不是普通股的名字（基金/ETF/信托/优先股/权证/杠杆反向产品），名称兜底时排除。
+// 含杠杆/反向 ETF 发行商与措辞——否则搜 "SpaceX" 会撞到 "ProShares - Ultra SpaceX"(SPCF)
+// 这类把热门公司名塞进产品名的衍生品，而不是正主。
+const NON_EQUITY_HINT = /\b(ETF|ETN|Fund|Trust|Index|Preferred|Warrant|Units?|Notes?|Bond|ProShares|Direxion|Leveraged|Ultra(?:Pro|Short)?|[123]x|Bull|Bear|Inverse)\b/i;
 
 // FMP 名称搜索：英文/拼音/代码 → 最佳美股主板普通股。返回 {ticker,name} 或 null。
 async function fmpUsNameSearch(query) {
@@ -45,19 +47,114 @@ async function fmpUsNameSearch(query) {
   return best ? { ticker: best.sym, name: best.name } : null;
 }
 
+// Finnhub 公司 profile：拿一个代码的官方名字 + 上市状态。FMP 免费档对刚 IPO 的新股
+// 会 402 漏掉，但 Finnhub profile 有（含 ipo 日期）——这是"新上市自愈"的兜底校验源。
+// 返回 { name } 或 null。
+async function finnhubProfile(ticker) {
+  const apiKey = process.env.FINNHUB_API_KEY;
+  if (!apiKey) return null;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    const r = await fetch(
+      `https://finnhub.io/api/v1/stock/profile2?symbol=${encodeURIComponent(ticker)}&token=${apiKey}`,
+      { signal: ctrl.signal }
+    );
+    clearTimeout(timer);
+    if (!r.ok) return null;
+    const data = await r.json();
+    return data?.name ? { name: data.name } : null;
+  } catch {
+    return null;
+  }
+}
+
+// Finnhub 符号搜索：把自由文本 → 候选代码。覆盖 FMP 名称搜索漏掉的新上市标的
+// （如 "space exploration" → SPCX）。返回 result 数组。
+async function finnhubSearch(query) {
+  const apiKey = process.env.FINNHUB_API_KEY;
+  if (!apiKey) return [];
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    const r = await fetch(
+      `https://finnhub.io/api/v1/search?q=${encodeURIComponent(query)}&token=${apiKey}`,
+      { signal: ctrl.signal }
+    );
+    clearTimeout(timer);
+    if (!r.ok) return [];
+    const data = await r.json();
+    return Array.isArray(data?.result) ? data.result : [];
+  } catch {
+    return [];
+  }
+}
+
 // 校验美股代码是否真实存在于主板（防止模型把代码 hallucinate 出来张冠李戴）。
 // 返回 { status: "verified"|"not_found"|"error", name? }。error（网络/限流）时上层选择信任模型。
+// FMP search-symbol 是主校验；FMP 漏掉的新股（免费档 402）再用 Finnhub profile 兜底，
+// 这样刚 IPO、模型/FMP 还没收录的代码也能被确认上市（"新上市自愈"）。
 async function verifyUsTicker(ticker) {
   let rows;
+  let fmpErrored = false;
   try {
     rows = await fmpGet("/stable/search-symbol", { query: ticker }, { ttl: FMP_TTL.profile, timeoutMs: 5000 });
   } catch {
-    return { status: "error" };
+    fmpErrored = true;
   }
   const hit = (Array.isArray(rows) ? rows : []).find(
     (r) => String(r.symbol).toUpperCase() === ticker.toUpperCase() && US_EXCHANGE_RANK[r.exchange] !== undefined
   );
-  return hit ? { status: "verified", name: hit.name } : { status: "not_found" };
+  if (hit) return { status: "verified", name: hit.name };
+  // FMP 没命中（新股 402 / 免费档不覆盖）→ Finnhub profile 兜底确认是否真上市。
+  const prof = await finnhubProfile(ticker);
+  if (prof) return { status: "verified", name: prof.name };
+  return { status: fmpErrored ? "error" : "not_found" };
+}
+
+// 知名品牌 → 真实上市代码的别名。这不是"私人公司黑名单"（那种会过时、且会把已 IPO 的
+// 公司错判成研究不了）——这里登记的是**已上市公司的真实代码**，而且每次都经下面的
+// listing 探针实时校验：若某天退市/改名，校验失败会自动回退。只收录"搜索引擎按品牌词
+// 撞名、搜不到正主"的高信号案例（如 SpaceX 搜出来是港股 Metaspacex / 杠杆 ETF）。
+const BRAND_ALIASES = {
+  spacex: "SPCX",
+  "space x": "SPCX",
+  太空探索: "SPCX",
+  太空探索技术: "SPCX",
+  "space exploration": "SPCX"
+};
+
+// 品牌别名 → 实时校验过的上市代码。**必须在 FMP 名称搜索之前**调用：这些品牌词正是
+// FMP/搜索引擎会撞到衍生品/壳/同名小票的（"SpaceX"→杠杆 ETF SPCF、港股 Metaspacex），
+// 先用别名锚定正主再实时校验，确认上市才返回。返回 {ticker,name} 或 null。
+// 尾随的中文问句词/口语（"…怎么样""…最近如何""…股价"）。前端通常已剥净，但后端兜底
+// 再剥一层，让别名走精确匹配——不用 substring 包含，避免 "Metaspacex"(1796.HK) 被
+// "spacex" 误中这类真碰撞。
+const TRAILING_QUERY_WORDS = /(怎么样|怎样|最近怎样|最近如何|如何|最近|现在|目前|股价|股票|行情|怎么看|值得买吗?|能买吗?|可以买吗?|贵不贵|怎么|呢|吗|的)+$/;
+
+async function resolveBrandAlias(query) {
+  const norm = String(query).trim().toLowerCase().replace(/\s+/g, " ");
+  const stripped = norm.replace(TRAILING_QUERY_WORDS, "").trim();
+  const aliasTicker =
+    BRAND_ALIASES[norm] || BRAND_ALIASES[norm.replace(/\s+/g, "")] ||
+    BRAND_ALIASES[stripped] || BRAND_ALIASES[stripped.replace(/\s+/g, "")];
+  if (!aliasTicker) return null;
+  const check = await verifyUsTicker(aliasTicker);
+  return check.status === "verified" ? { ticker: aliasTicker, name: check.name || query } : null;
+}
+
+// Finnhub 符号搜索探针：覆盖 FMP 名称搜索漏掉的新上市标的（如 "space exploration" → SPCX）。
+// 候选过 verifyUsTicker 实时校验，确认上市才返回。返回 {ticker,name} 或 null。
+async function finnhubSearchProbe(query) {
+  const rows = await finnhubSearch(query);
+  const cand = rows.find(
+    (r) => r.symbol && !String(r.symbol).includes(".") && /common stock/i.test(r.type || "Common Stock")
+  );
+  if (!cand) return null;
+  const check = await verifyUsTicker(String(cand.symbol).toUpperCase());
+  return check.status === "verified"
+    ? { ticker: String(cand.symbol).toUpperCase(), name: check.name || cand.description || query }
+    : null;
 }
 
 // 港股代码标准化：700 / 0700 / 0700.HK → 0700.HK。识别不出返回 ""。
@@ -177,7 +274,14 @@ export async function handleCompanyResolve(req, res) {
       sendOk(res, { company: null });
       return;
     }
-    // 1) 含拉丁字母 → 先走 FMP（英文名/拼音/代码命中率高，且不耗模型额度）。
+    // 1) 品牌别名（实时校验过的上市代码）。必须最先——这些词 FMP/搜索引擎会撞衍生品/壳
+    //    （"SpaceX"→杠杆 ETF SPCF），先锚定正主。这是 SpaceX→SPCX 能识别的关键。
+    const alias = await resolveBrandAlias(query);
+    if (alias) {
+      sendOk(res, { company: { ticker: alias.ticker, nameZh: alias.name, nameEn: alias.name, industry: "美股" } });
+      return;
+    }
+    // 2) 含拉丁字母 → 走 FMP（英文名/拼音/代码命中率高，且不耗模型额度）。
     if (/[A-Za-z]/.test(query)) {
       const fmp = await fmpUsNameSearch(query);
       if (fmp) {
@@ -185,7 +289,13 @@ export async function handleCompanyResolve(req, res) {
         return;
       }
     }
-    // 2) LLM 解析（中文名主力路径；也兜住 FMP 漏掉的英文名）。
+    // 3) Finnhub 符号搜索探针（实时上市校验）。覆盖 FMP 名称搜索漏掉的新上市标的。
+    const probed = await finnhubSearchProbe(query);
+    if (probed) {
+      sendOk(res, { company: { ticker: probed.ticker, nameZh: probed.name, nameEn: probed.name, industry: "美股" } });
+      return;
+    }
+    // 4) LLM 解析（中文名主力路径；也兜住 FMP 漏掉的英文名）。
     const llm = await llmResolveCompany(query);
     sendOk(res, llm.company ? { company: llm.company } : { company: null, reason: llm.reason, name: llm.name });
   } catch (error) {

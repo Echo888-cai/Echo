@@ -43,7 +43,9 @@ export async function handleChatApi(req, res) {
       financialsData: result.financialsData,
       marketSnapshot: result.marketSnapshot,
       valuation: valuation.cannotValueReason ? null : valuation,
-      portraitContext: portraitTicker ? loadPortraitContext(portraitTicker) : ""
+      portraitContext: portraitTicker ? loadPortraitContext(portraitTicker) : "",
+      // 最近几轮对话，注入作答 prompt 让追问能承接上文（连续对话能力）。
+      history: Array.isArray(payload.history) ? payload.history : []
     };
     const fallback = researchReplyFromPanel(result.decisionPanel, question, result.dataSources, context);
     const wantStream = payload.stream === true;

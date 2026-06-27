@@ -64,8 +64,13 @@ export async function collectDataSources({ company, suppliedMarketSnapshot = nul
   const tasks = await Promise.allSettled([
     suppliedMarketSnapshot
       ? Promise.resolve(suppliedMarketSnapshot)
-      : withTimeout(getMarketSnapshot(company.ticker), 3500, fallbackMarketSnapshot(company.ticker, "行情请求超时")),
-    withTimeout(getNewsSnapshot(company), 3500, fallbackNewsSnapshot(company, "新闻请求超时")),
+      // 6s：getMarketSnapshot 现在第一梯队并发竞速（~1-2s 即可返回最快源），但研究时
+      // 还并发着 news/财报/评级/分部 + 网页证据检索，给足余量避免被挤超时退化成"行情 missing"。
+      : withTimeout(getMarketSnapshot(company.ticker), 6000, fallbackMarketSnapshot(company.ticker, "行情请求超时")),
+    // 7s（不是 3.5s）：新闻管道现在以可靠源（Finnhub/Tavily，~1-2s 就够了就早返回）为主，
+    // 但 Tavily 慢网可达 6s；3.5s 会在可靠源还没回来时就超时退化成"新闻✗"——这正是
+    // "新闻一直不可用"的根因之一。给足预算让早返回机制真正生效。
+    withTimeout(getNewsSnapshot(company), 7000, fallbackNewsSnapshot(company, "新闻请求超时")),
     withTimeout(getFinancials(company.ticker), 8000, { providerStatus: "missing", errors: ["财务数据请求超时"], asOf: new Date().toISOString() }),
     withTimeout(getRecentFilings(company.ticker), 5000, { providerStatus: "missing", errors: ["公告请求超时"], filings: [], asOf: new Date().toISOString() }),
     // 6s（不是 4s）：getAnalystEstimates 现在串行跑 FMP grades→Finnhub→Yahoo 目标价，

@@ -391,27 +391,89 @@ async function fetchEastMoneyNews(companyName) {
   }));
 }
 
+// Tavily 新闻搜索：带 Key、快、返回带日期的真实新闻，覆盖美股+港股/中概（搜索式，
+// 不受 Finnhub"仅美股"限制）。之前管道里这个付费 key 闲置着没用——接成可靠源之一。
+async function fetchTavilyNews(company) {
+  const apiKey = process.env.TAVILY_API_KEY || "";
+  if (!apiKey) throw new Error("missing TAVILY_API_KEY");
+  const names = primarySearchNames(company);
+  const query = `${names.join(" ")} 股票 财报 业绩 stock earnings news`.trim();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 6000);
+  let res;
+  try {
+    res = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key: apiKey, query, topic: "news", days: 21, max_results: 8, search_depth: "basic" }),
+      signal: ctrl.signal
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) throw new Error(`Tavily ${res.status}`);
+  const data = await res.json();
+  const articles = (Array.isArray(data?.results) ? data.results : [])
+    .map((r) => ({
+      title: r.title || "",
+      description: String(r.content || "").slice(0, 280),
+      url: r.url || "",
+      source: "Tavily News",
+      scope: "财经",
+      publishedAt: r.published_date || "",
+      ticker: normalizeTicker(company.ticker)
+    }))
+    .filter((a) => a.title && a.url);
+  if (!articles.length) throw new Error("Tavily 没有返回相关新闻");
+  return articles;
+}
+
+// 给单个抓取任务套一个超时上限：超时就当"返回空"而不是拖死整批。根治"新闻一直不可用"
+// 的关键之一——慢爬虫（Bing HTML / Yahoo RSS）不再能把整块拖超时。
+function withJobTimeout(promise, ms, onTimeout = []) {
+  return Promise.race([
+    Promise.resolve(promise).catch((err) => { throw err; }),
+    new Promise((resolve) => setTimeout(() => resolve(onTimeout), ms))
+  ]);
+}
+
 async function fetchBroadNews(company) {
   const enableGoogleNews = process.env.LUVIO_ENABLE_GOOGLE_NEWS === "1";
-  const searchJobs = [
-    fetchFinnhubCompanyNews(company),   // 主源：稳定、带 Key（美股）
-    fetchYahooFinanceNews(company.ticker),
-    ...NEWS_SCOPES.map((scope) => fetchYahooSearchForScope(company, scope)),
-    ...NEWS_SCOPES.map((scope) => fetchBingSignalsForScope(company, scope)),
-    ...(enableGoogleNews ? NEWS_SCOPES.map((scope) => fetchGoogleNewsForScope(company, scope)) : [])
+  const collect = (results, articles, errors) => {
+    for (const result of results) {
+      if (result.status === "fulfilled") articles.push(...(result.value || []));
+      else errors.push(result.reason?.message || "新闻抓取失败");
+    }
+  };
+
+  // 可靠快源：Finnhub（美股，带 key，稳定）+ Tavily（全市场，带 key，带日期）。先跑它们，
+  // 够了就直接返回，不等下面易被反爬挡掉/拖慢的抓取源——这正是"新闻一直不可用"的根因：
+  // 旧实现用 allSettled 等所有源，慢爬虫一拖就把整块拖超时退化成"新闻✗"。
+  const reliableJobs = [
+    withJobTimeout(fetchFinnhubCompanyNews(company), 5000),
+    withJobTimeout(fetchTavilyNews(company), 6000)
+  ];
+  // 抓取源（弱）：现在就并发起跑，每个套独立超时上限，慢的不拖累快的。
+  const scraperJobs = [
+    withJobTimeout(fetchYahooFinanceNews(company.ticker), 4000),
+    ...NEWS_SCOPES.map((scope) => withJobTimeout(fetchYahooSearchForScope(company, scope), 4000)),
+    ...NEWS_SCOPES.map((scope) => withJobTimeout(fetchBingSignalsForScope(company, scope), 4000)),
+    ...(enableGoogleNews ? NEWS_SCOPES.map((scope) => withJobTimeout(fetchGoogleNewsForScope(company, scope), 4000)) : []),
+    ...(company.nameZh ? [withJobTimeout(fetchEastMoneyNews(company.nameZh), 4000)] : [])
   ];
 
-  // Add Chinese news sources
-  if (company.nameZh) {
-    searchJobs.push(fetchEastMoneyNews(company.nameZh));
-  }
-  const results = await Promise.allSettled(searchJobs);
   const errors = [];
   const articles = [];
-  for (const result of results) {
-    if (result.status === "fulfilled") articles.push(...result.value);
-    else errors.push(result.reason?.message || "新闻抓取失败");
+  collect(await Promise.allSettled(reliableJobs), articles, errors);
+
+  // 可靠源已经给到足够相关新闻 → 立刻返回，不等慢爬虫（它们在后台跑完即弃）。
+  const relevantNow = filterRelevantArticles(articles, company);
+  if (relevantNow.length >= 4) {
+    return { articles: dedupeArticles(relevantNow).slice(0, 14), errors };
   }
+
+  // 可靠源不足 → 再纳入抓取源结果（已在跑，每个有 4s 上限，最多再等 ~4s）。
+  collect(await Promise.allSettled(scraperJobs), articles, errors);
   return {
     articles: dedupeArticles(filterRelevantArticles(articles, company)).slice(0, 14),
     errors
@@ -433,9 +495,13 @@ export async function getNewsSnapshot(company) {
   try {
     const { articles, errors } = await fetchBroadNews(company);
     if (!articles.length) throw new Error("多源新闻没有返回相关新闻");
+    // 来源标签按本轮真实贡献的源动态生成（Finnhub / Tavily / Yahoo / Bing / 东方财富）。
+    const sourceLabel = [...new Set(articles.map((a) => String(a.source || "").split(" · ")[0]).filter(Boolean))]
+      .slice(0, 4)
+      .join(" + ") || "多源新闻";
     return {
       providerStatus: "ok",
-      source: "Yahoo Finance + Yahoo News + Bing Web Signals",
+      source: sourceLabel,
       ticker: normalizeTicker(company.ticker),
       company: company.nameZh,
       articles,

@@ -571,6 +571,27 @@ export function normalizeResearchAnswer(content, panel, dataSources = {}) {
   return text;
 }
 
+// 对话上文：把最近几轮对话压缩进 prompt，让追问能承接（"它的竞对是谁""那第二个呢"）。
+// 当前研究主体仍以最新问题 + 已接入数据为准——这里只供承接语义，明确叮嘱不要从上文
+// 翻出旧公司当新主题，避免张冠李戴。assistant 内容截断，避免把整段长回答塞回去。
+function conversationHistoryBlock(history) {
+  if (!Array.isArray(history) || !history.length) return "";
+  const turns = history
+    .filter((m) => m && (m.role === "user" || m.role === "assistant") && String(m.content || "").trim())
+    .slice(-6)
+    .map((m) => {
+      const who = m.role === "user" ? "用户" : "你";
+      const limit = m.role === "user" ? 200 : 420;
+      let text = String(m.content).replace(/\s+/g, " ").trim();
+      if (text.length > limit) text = `${text.slice(0, limit)}…`;
+      return `${who}：${text}`;
+    });
+  if (!turns.length) return "";
+  return `对话上文（最近几轮，供承接追问用；当前研究主体仍以"用户问题"和下面已接入数据为准，不要从这里翻出旧公司当成本轮新主题）：
+${turns.join("\n")}
+`;
+}
+
 export function buildChatPrompt(question, panel, dataSources = {}, context = {}) {
   const drivers = (panel.keyDrivers || []).map((d) => `- ${d.name}：${d.status}。${d.summary}`).join("\n");
   const missing = (panel.missingData || []).join("、") || "无";
@@ -610,8 +631,9 @@ export function buildChatPrompt(question, panel, dataSources = {}, context = {})
   const newsSignals = [...evidenceSignalsFromWeb(context.webEvidence), ...evidenceSignalsFromNews(context.newsSnapshot)].slice(0, 8).join("\n") || "本轮没有抓到可直接使用的竞争/行业外部信号";
   const webEvidencePrompt = webEvidenceToPrompt(context.webEvidence);
   const portraitBlock = context.portraitContext ? `\n${context.portraitContext}\n` : "";
+  const historyBlock = conversationHistoryBlock(context.history);
   return `用户问题：${question}
-${portraitBlock}
+${historyBlock}${portraitBlock}
 当前研究对象：${panel.companyName}（${panel.ticker}）
 研究状态：${RESEARCH_STATUS_LABELS[panel.researchStatus] || panel.researchStatus}
 数据完整度：${panel.dataCompleteness}%
