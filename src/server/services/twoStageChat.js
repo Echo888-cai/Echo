@@ -12,7 +12,7 @@
  * 有模型 key 时启用；阶段 1 失败/超时则回退为单段作答（现有行为），绝不回归。
  */
 
-import { callModel } from "./modelGateway.js";
+import { callModel, callModelStream } from "./modelGateway.js";
 import { withTimeout } from "../utils/async.js";
 import { buildChatPrompt } from "./answerComposer.js";
 import { beijingMinute } from "../utils/time.js";
@@ -94,6 +94,48 @@ export async function runTwoStageChat({ question, panel, dataSources, context, s
       ANSWER_STAGE_TIMEOUT_MS,
       null
     );
+  } catch {
+    answerModel = null;
+  }
+
+  if (!answerModel?.content) {
+    return { content: null, provider: null, model: null, stages: "none" };
+  }
+  return {
+    content: answerModel.content,
+    provider: answerModel.provider,
+    model: answerModel.model,
+    stages: researchNote ? "two_stage" : "single"
+  };
+}
+
+/** 阶段 1（内部研究笔记）的复用：非流式、用户不可见。返回 researchNote 字符串。 */
+async function runSearchStage({ question, panel, dataSources, context }) {
+  try {
+    const searchModel = await withTimeout(
+      callModel({ system: SEARCH_STAGE_SYSTEM, user: buildSearchStagePrompt(question, panel, dataSources, context) }),
+      SEARCH_STAGE_TIMEOUT_MS,
+      null
+    );
+    if (searchModel?.content && searchModel.content.trim().length > 10) return searchModel.content.trim();
+  } catch { /* 阶段1失败→单段 */ }
+  return "";
+}
+
+/**
+ * 流式版两阶段作答。阶段 1 与非流式一致（内部笔记，用户不可见）；阶段 2 用
+ * callModelStream 把答案增量通过 onToken 推出去。返回与 runTwoStageChat 同形的对象
+ * （含完整 content，供下游归一化/落库）。阶段 2 不可用时 content=null，调用方走本地兜底。
+ */
+export async function runTwoStageChatStream({ question, panel, dataSources, context, system, onToken }) {
+  const researchNote = await runSearchStage({ question, panel, dataSources, context });
+  const answerUser = researchNote
+    ? buildAnswerStagePrompt(question, panel, dataSources, context, researchNote)
+    : buildChatPrompt(question, panel, dataSources, context);
+
+  let answerModel = null;
+  try {
+    answerModel = await callModelStream({ system, user: answerUser, onToken });
   } catch {
     answerModel = null;
   }

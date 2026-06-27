@@ -51,8 +51,9 @@ Interaction principles:
 - lightweight, Apple-grade interface with **light & dark themes** and calm motion
 - **structured answers** — the analyst's reply is split into labelled research sections (结论 / 事实 / 推断 / 估值·风险 / 证伪条件 / 我的判断 / 来源), with the verdict promoted to a highlighted card so a long answer is scannable, not a wall of text
 - **clickable evidence provenance cards** — source type, date, credibility dot
-- **confidence chips** and a **valuation range bar** (bear / base / bull + reward:risk odds)
-- honest "thinking" state — a **skeleton preview of the answer forming** (no fake step-progress), and the finished answer **reveals section by section**
+- **a data-grounding bar at the top of every answer** — `行情✓ 财报✓ 新闻✗ 预期 + 完整度%`, so low confidence is always explainable
+- **confidence chips** (scored by how many data slots are actually grounded), an **analyst-consensus block** (buy/hold/sell distribution + consensus target & upside), and a **valuation range bar** (bear / base / bull + reward:risk odds, with the cross-validated method list)
+- **real-time streaming answers** — the analyst's reply streams in token by token over SSE with a live caret, then settles into the structured, sourced final card (graceful fallback to a non-streaming request if streaming is unavailable)
 - **export** a research session to Markdown
 - **smooth company switching** — mention a new company mid-chat and Luvio opens a fresh, clean session for it
 - research history stored locally in SQLite, collapsible so it never steals the screen
@@ -83,7 +84,11 @@ Judgment first, then the basis, then (folded at the end) what's still missing. W
 
 ### Valuation & odds
 
-A multi-method valuation engine (PE / Forward PE / FCF yield / DCF) with a display-safe guard: if the range is incoherent with the live price, it falls back to a self-consistent PE band. The answer renders a range bar and a reward:risk ratio, and the same numbers are fed to the model so prose and visual never contradict.
+A multi-method valuation engine (PE / Forward PE / FCF yield / DCF) with a display-safe guard: if the range is incoherent with the live price, it falls back to a self-consistent PE band. The answer renders a range bar and a reward:risk ratio, surfaces the **cross-validated method list** and key assumptions, and — when analyst data is available — overlays an **analyst consensus target anchor**. The same numbers are fed to the model so prose and visual never contradict.
+
+### Analyst consensus
+
+When the data is available (Finnhub recommendations for the buy/hold/sell distribution, Yahoo as a best-effort target-price fallback), answers carry an **analyst-consensus block**: the rating distribution as a coloured bar, the consensus direction, and the consensus target with upside-to-target. The presence of consensus data also **raises the confidence score** — confidence is now scored by how many real data dimensions (price / fundamentals / estimates / filings / news) are grounded, instead of requiring HK-only filings.
 
 ### Event digest
 
@@ -127,7 +132,7 @@ Luvio
 └── docs/                          # product, architecture, data-source notes
 ```
 
-The chat route is thin: it orchestrates a single data+evidence pass, one model call, and one DB write. All answer composition lives in `services/answerComposer.js`.
+The chat route is thin: it orchestrates a single data+evidence pass, a two-stage model call (search-triage → **streamed** answer), and one DB write. Streaming and non-streaming requests share one `finalizeChat` post-processor, so both paths persist and render identically. All answer composition lives in `services/answerComposer.js`.
 
 ---
 
@@ -174,9 +179,9 @@ SERPAPI_API_KEY=
 
 ## Status
 
-**Working:** HK + US research conversation · dual-listing routing (HK ↔ US ADR) · market-aware quotes & fundamentals · US real profit-quality scores · intent routing (incl. financial-quality & falsification) · evidence provenance with URL validation · confidence chips · valuation range + odds · **structured section answers** · **company-grouped event digest** with severity + relevance gate · **portfolio panel with live P&L** · Markdown export · smooth per-company sessions · single-pass chat (one model call, one DB write) · SQLite history · **light & dark Apple-grade UI** with skeleton loading.
+**Working:** HK + US research conversation · dual-listing routing (HK ↔ US ADR) · market-aware quotes & fundamentals · US real profit-quality scores · intent routing (incl. financial-quality & falsification) · evidence provenance with URL validation · **data-grounding bar + completeness %** · **data-dimension confidence scoring** · **analyst consensus (distribution + target anchor)** · valuation range + odds + cross-validated methods · **structured section answers** · **real-time SSE streaming** · **company-grouped event digest** with severity + relevance gate · **portfolio panel with live P&L** · Markdown export · smooth per-company sessions · streamed two-stage chat (one DB write) · SQLite history · **light & dark Apple-grade UI**.
 
-**Next:** `TAVILY_API_KEY` for stable web coverage · paid/alternate HK fundamentals · HKEX & IR PDF ingestion · consensus estimates & comps · deploy-ready auth.
+**Next:** `TAVILY_API_KEY` for stable web coverage · **real HK three-statement fundamentals** (paid source or HKEX/IR PDF ingestion — the largest remaining gap) · multi-company comps · deploy-ready auth.
 
 ---
 

@@ -165,6 +165,10 @@ let busyTimer = null;
 let recentSessions = [];
 let sessionsLoaded = false;
 let historyOpen = true;
+// 流式作答：tokens 边到边渲染。streamingActive 时用 renderStreamingCard 顶掉骨架屏，
+// 后续 token 只改 #stream-body 的 innerHTML（不整页重渲，避免抖动）。
+let streamingActive = false;
+let streamingText = "";
 
 function readStore(key, fallback) {
   try {
@@ -296,6 +300,62 @@ async function api(path, options = {}) {
   const json = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(json.error || json?.error?.message || `请求失败 ${response.status}`);
   return json?.ok && json.data ? json.data : json;
+}
+
+// 流式聊天：读 SSE，token 事件边到边渲染，final 事件携带完整面板/估值/接地。
+// 端点不支持流式或中途出错（且还没拿到 final）时，回退到普通 JSON 请求，绝不丢回答。
+async function chatStream(body) {
+  streamingActive = false;
+  streamingText = "";
+  let finalResult = null;
+  try {
+    const resp = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...body, stream: true })
+    });
+    const ctype = resp.headers.get("content-type") || "";
+    if (!resp.ok || !resp.body || !ctype.includes("text/event-stream")) throw new Error("no-stream");
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let evt = "message";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).replace(/\r$/, "");
+        buf = buf.slice(nl + 1);
+        if (line === "") { evt = "message"; continue; }
+        if (line.startsWith("event:")) { evt = line.slice(6).trim(); continue; }
+        if (!line.startsWith("data:")) continue;
+        const data = line.slice(5).trim();
+        if (!data) continue;
+        let json;
+        try { json = JSON.parse(data); } catch { continue; }
+        if (evt === "token") {
+          if (!streamingActive) { stopBusy(); streamingActive = true; render(); }
+          streamingText += json.t || "";
+          const node = document.getElementById("stream-body");
+          if (node) node.innerHTML = `${markdownToHtml(streamingText)}<span class="stream-caret"></span>`;
+          document.querySelector(".conversation")?.scrollTo({ top: 999999 });
+        } else if (evt === "final") {
+          finalResult = json;
+        } else if (evt === "error") {
+          throw new Error(json.message || "流式作答失败");
+        }
+      }
+    }
+  } catch {
+    if (!finalResult) finalResult = await api("/api/chat", { method: "POST", body: JSON.stringify(body) });
+  } finally {
+    streamingActive = false;
+    streamingText = "";
+  }
+  return finalResult;
 }
 
 function linkifyEscaped(text = "") {
@@ -891,18 +951,16 @@ async function sendChat(question) {
   if (isBusy) busyLabel = "正在检索和思考";
   render();
 
-  const result = await api("/api/chat", {
-    method: "POST",
-    body: JSON.stringify({
-      question,
-      company,
-      sessionId: getSessionId(),
-      sessionTitle: sessionTitle(question),
-      history: apiHistory(question),
-      documents: getDocuments(),
-      memory: {}
-    })
+  const result = await chatStream({
+    question,
+    company,
+    sessionId: getSessionId(),
+    sessionTitle: sessionTitle(question),
+    history: apiHistory(question),
+    documents: getDocuments(),
+    memory: {}
   });
+  if (!result) throw new Error("本轮没有返回结果");
   if (result.sessionId) setSessionId(result.sessionId);
   if (result.decisionPanel) setPanel(result.decisionPanel);
   // Enrich bare-ticker companies (e.g. "RKLB" → "Rocket Lab USA") once the
@@ -1176,7 +1234,7 @@ function renderResearch() {
         </div>` : ""}
         <div class="conversation ${hasResearch ? "" : "is-empty"}">
           ${thread.length ? thread.map(renderMessage).join("") : renderEmptyState()}
-          ${isBusy ? renderWaitingCard() : ""}
+          ${streamingActive ? renderStreamingCard() : (isBusy ? renderWaitingCard() : "")}
         </div>
         ${renderComposer(company)}
       </section>
@@ -1251,6 +1309,17 @@ function renderWaitingCard() {
         <div class="sk-line w-85"></div>
         <div class="sk-line w-55"></div>
       </div>
+    </div>
+  </article>`;
+}
+
+// 流式作答卡：token 边到边写进 #stream-body，末尾跟一个闪烁光标。final 到达后由
+// appendMessage 渲染成带估值/分析师/接地条的正式回答卡，本卡随之消失。
+function renderStreamingCard() {
+  return `<article class="message assistant">
+    <div class="bubble answer-card stream-card">
+      <div class="answer-brand"><div class="answer-mark"><i></i><span>LUVIO</span></div></div>
+      <div class="ans-stream" id="stream-body">${markdownToHtml(streamingText)}<span class="stream-caret"></span></div>
     </div>
   </article>`;
 }

@@ -9,7 +9,7 @@ import { researchReplyFromPanel, normalizeResearchAnswer, mergeEvidenceIntoPanel
 import { displayValuation } from "../services/valuationEngine.js";
 import { PROMPTS } from "../../prompts.js";
 import { loadPortraitContext, updatePortraitFromPanel } from "../services/companyPortrait.js";
-import { runTwoStageChat } from "../services/twoStageChat.js";
+import { runTwoStageChat, runTwoStageChatStream } from "../services/twoStageChat.js";
 import { upsertPosition } from "../repositories/portfolio.js";
 
 export async function handleChatApi(req, res) {
@@ -46,11 +46,37 @@ export async function handleChatApi(req, res) {
       portraitContext: portraitTicker ? loadPortraitContext(portraitTicker) : ""
     };
     const fallback = researchReplyFromPanel(result.decisionPanel, question, result.dataSources, context);
+    const wantStream = payload.stream === true;
+    const modelReady = getProviderStatus().configured && result.decisionPanel;
     let content = fallback;
     let chatModel = null;
-    // Two-stage: search-triage agent produces a verified research note, then the
-    // answer agent writes from it. Falls back to single-stage / local reply on timeout.
-    if (getProviderStatus().configured && result.decisionPanel) {
+
+    // ── 流式（SSE）：阶段2 答案逐字推送，收尾再发一个 final 事件携带完整面板/估值/接地 ──
+    if (wantStream) {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no" // 反代不缓冲，token 才能实时吐出
+      });
+      const send = (event, data) => { try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* 客户端断开 */ } };
+      send("status", { stage: modelReady ? "generating" : "local" });
+      if (modelReady) {
+        chatModel = await runTwoStageChatStream({
+          question, panel: result.decisionPanel, dataSources: result.dataSources, context,
+          system: PROMPTS.chat.system,
+          onToken: (t) => send("token", { t })
+        });
+        if (chatModel?.content && chatModel.content.length < 9000) content = chatModel.content;
+      }
+      const finalPayload = finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel });
+      send("final", finalPayload);
+      try { res.write("event: done\ndata: {}\n\n"); res.end(); } catch { /* already closed */ }
+      return;
+    }
+
+    // ── 非流式（JSON）：保留原行为，作为前端不支持流式时的回退 ──
+    if (modelReady) {
       chatModel = await runTwoStageChat({
         question,
         panel: result.decisionPanel,
@@ -60,72 +86,87 @@ export async function handleChatApi(req, res) {
       });
       if (chatModel?.content && chatModel.content.length < 9000) content = chatModel.content;
     }
-    content = normalizeResearchAnswer(content, result.decisionPanel, result.dataSources);
-    result.webEvidence = webEvidence;
-    mergeEvidenceIntoPanel(result.decisionPanel, webEvidence);
-    if (result.decisionPanel && !valuation.cannotValueReason) result.decisionPanel.valuation = valuation;
-    // 自然语言记账：识别到成本/股数/止损/止盈就 upsert 到持仓账本（持久化）。
-    let positionSaved = false;
-    const uc = result.userContext || {};
-    if (portraitTicker && (uc.cost || uc.shares || uc.stopLoss || uc.takeProfit)) {
-      try {
-        upsertPosition(portraitTicker, {
-          companyName: result.decisionPanel?.companyName || payload.company?.nameZh,
-          shares: uc.shares != null ? Number(uc.shares) : undefined,
-          avgCost: uc.cost != null ? Number(uc.cost) : undefined,
-          stopLoss: uc.stopLoss != null ? Number(uc.stopLoss) : undefined,
-          takeProfit: uc.takeProfit != null ? Number(uc.takeProfit) : undefined
-        });
-        positionSaved = true;
-      } catch (err) {
-        console.warn("portfolio 记账失败:", err?.message || err);
-      }
-    }
-
-    // 回写长期画像：判断变化时追加事件日志，否则只累计研究轮次。
-    let portrait = null;
-    if (portraitTicker && result.decisionPanel) {
-      try {
-        portrait = updatePortraitFromPanel({
-          ticker: portraitTicker,
-          panel: result.decisionPanel,
-          valuation: valuation.cannotValueReason ? null : valuation,
-          question
-        });
-      } catch (err) {
-        console.warn("company_profile 回写失败:", err?.message || err);
-      }
-    }
-    const sessionId = persistFinalChatSession(payload, result, content, {
-      valuation: valuation.cannotValueReason ? null : valuation,
-      analyst,
-      mode: chatModel?.content ? "chat_model" : "chat_local"
-    });
-    sendJson(res, 200, {
-      mode: chatModel?.content ? "chat_model" : "chat_local",
-      stages: chatModel?.stages || "none",
-      intent,
-      provider: chatModel?.provider || result.provider,
-      model: chatModel?.model || result.model,
-      sessionId,
-      content,
-      decisionPanel: result.decisionPanel,
-      userContext: result.userContext,
-      dataSources: result.dataSources,
-      marketSnapshot: result.marketSnapshot,
-      newsSnapshot: result.newsSnapshot,
-      valuation: valuation.cannotValueReason ? null : valuation,
-      analyst,
-      webEvidence,
-      portrait: portrait
-        ? { ticker: portraitTicker, created: portrait.created, changed: portrait.changed, turnCount: portrait.profile?.turnCount || 0 }
-        : null,
-      positionSaved
-    });
+    sendJson(res, 200, finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel }));
   } catch (error) {
-    const status = error.statusCode || 500;
-    sendJson(res, status, { error: error.message || "聊天失败" });
+    // 流式已经开了头就不能再 sendJson —— 改发一个 error 事件收尾。
+    if (res.headersSent) {
+      try { res.write(`event: error\ndata: ${JSON.stringify({ message: error.message || "聊天失败" })}\n\n`); res.end(); } catch { /* closed */ }
+    } else {
+      const status = error.statusCode || 500;
+      sendJson(res, status, { error: error.message || "聊天失败" });
+    }
   }
+}
+
+// 模型作答之后的统一收口：归一化 → 证据并入面板 → 估值挂载 → 自然语言记账 → 画像回写 →
+// 落库，返回前端要的完整响应对象。流式 / 非流式共用，保证两条路径产物完全一致。
+function finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel }) {
+  const question = payload.question || "";
+  content = normalizeResearchAnswer(content, result.decisionPanel, result.dataSources);
+  result.webEvidence = webEvidence;
+  mergeEvidenceIntoPanel(result.decisionPanel, webEvidence);
+  if (result.decisionPanel && !valuation.cannotValueReason) result.decisionPanel.valuation = valuation;
+
+  // 自然语言记账：识别到成本/股数/止损/止盈就 upsert 到持仓账本（持久化）。
+  let positionSaved = false;
+  const uc = result.userContext || {};
+  if (portraitTicker && (uc.cost || uc.shares || uc.stopLoss || uc.takeProfit)) {
+    try {
+      upsertPosition(portraitTicker, {
+        companyName: result.decisionPanel?.companyName || payload.company?.nameZh,
+        shares: uc.shares != null ? Number(uc.shares) : undefined,
+        avgCost: uc.cost != null ? Number(uc.cost) : undefined,
+        stopLoss: uc.stopLoss != null ? Number(uc.stopLoss) : undefined,
+        takeProfit: uc.takeProfit != null ? Number(uc.takeProfit) : undefined
+      });
+      positionSaved = true;
+    } catch (err) {
+      console.warn("portfolio 记账失败:", err?.message || err);
+    }
+  }
+
+  // 回写长期画像：判断变化时追加事件日志，否则只累计研究轮次。
+  let portrait = null;
+  if (portraitTicker && result.decisionPanel) {
+    try {
+      portrait = updatePortraitFromPanel({
+        ticker: portraitTicker,
+        panel: result.decisionPanel,
+        valuation: valuation.cannotValueReason ? null : valuation,
+        question
+      });
+    } catch (err) {
+      console.warn("company_profile 回写失败:", err?.message || err);
+    }
+  }
+
+  const sessionId = persistFinalChatSession(payload, result, content, {
+    valuation: valuation.cannotValueReason ? null : valuation,
+    analyst,
+    mode: chatModel?.content ? "chat_model" : "chat_local"
+  });
+
+  return {
+    mode: chatModel?.content ? "chat_model" : "chat_local",
+    stages: chatModel?.stages || "none",
+    intent,
+    provider: chatModel?.provider || result.provider,
+    model: chatModel?.model || result.model,
+    sessionId,
+    content,
+    decisionPanel: result.decisionPanel,
+    userContext: result.userContext,
+    dataSources: result.dataSources,
+    marketSnapshot: result.marketSnapshot,
+    newsSnapshot: result.newsSnapshot,
+    valuation: valuation.cannotValueReason ? null : valuation,
+    analyst,
+    webEvidence,
+    portrait: portrait
+      ? { ticker: portraitTicker, created: portrait.created, changed: portrait.changed, turnCount: portrait.profile?.turnCount || 0 }
+      : null,
+    positionSaved
+  };
 }
 
 function persistFinalChatSession(payload, result, content, extra = {}) {

@@ -1748,6 +1748,33 @@ button:disabled {
   .sk-line { animation: none; }
   .conversation > .message:last-child .ans-lead,
   .conversation > .message:last-child .ans-sec { animation: none; }
+  .stream-caret { animation: none; }
+}
+
+/* Streaming answer — live tokens with a blinking caret */
+.ans-stream {
+  line-height: 1.72;
+  font-size: 15px;
+  color: var(--ink-2);
+}
+
+.ans-stream p { margin: 0 0 10px; }
+.ans-stream h3 { margin: 14px 0 6px; }
+
+.stream-caret {
+  display: inline-block;
+  width: 7px;
+  height: 15px;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  border-radius: 2px;
+  background: var(--blue);
+  animation: streamBlink 1s steps(2, jump-none) infinite;
+}
+
+@keyframes streamBlink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
 }
 
 /* Breathing research orb — calm, honest, no fake progress steps */
