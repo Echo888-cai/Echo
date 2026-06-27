@@ -151,32 +151,16 @@ function resolveUsTicker(text = "") {
   if (m && !US_STOPWORDS.has(m[1])) return { ticker: m[1], name: m[1] };
   // Bare uppercase: entire query is the ticker (e.g. "RKLB", "PLTR")
   if (/^[A-Z]{1,5}$/.test(t) && !US_STOPWORDS.has(t)) return { ticker: t, name: t };
-  // Bare uppercase word embedded in mixed text (e.g. "分析 RKLB 的基本面")
+  // Bare uppercase word embedded in mixed text (e.g. "分析 RKLB 的基本面")。
+  // 但若它后面紧跟另一个拉丁词（"SPACE X"、"OPEN AI"），那是多词公司名的一部分、不是
+  // 代码——不能把 "Space X" 抠成 SPACE（截图里"SPACE SPACE"张冠李戴的根因）。这类多词名
+  // 交给下游权威解析（FMP 名称搜索 + LLM 校验）去查它真实的上市代码，而不是硬猜。
   const w = t.match(/(?:^|[\s,])([A-Z]{2,5})(?:[\s,.]|$)/);
-  if (w && !US_STOPWORDS.has(w[1])) return { ticker: w[1], name: w[1] };
+  if (w && !US_STOPWORDS.has(w[1])) {
+    const after = t.slice(w.index + w[0].length);
+    if (!/^\s*[A-Za-z]/.test(after)) return { ticker: w[1], name: w[1] };
+  }
   return null;
-}
-
-// 知名"未上市"私人公司。问到时明确说"研究不了"，而不是被裸大写词启发式错认成某个
-// 同名 ticker —— "Space X" 被大写成 "SPACE X" 后会被抓成代码 SPACE（一只壳/ETF），
-// 这正是截图里"SPACE SPACE"张冠李戴的根因。若其中某家已 IPO，引导用户给新代码。
-const PRIVATE_COMPANIES = /space\s*x|spacex|太空探索技术|马斯克的?(航天|火箭|太空)|\bopenai\b|open\s?ai|anthropic|字节跳动|bytedance|抖音|\btiktok\b|stripe|shein|希音|databricks|\bx\.ai\b/i;
-
-function privateCompanyName(query = "") {
-  const q = String(query);
-  if (/space\s*x|spacex|太空探索技术|马斯克的?(航天|火箭|太空)/i.test(q)) return "SpaceX";
-  if (/\bopenai\b|open\s?ai/i.test(q)) return "OpenAI";
-  if (/anthropic/i.test(q)) return "Anthropic";
-  if (/字节跳动|bytedance|抖音|\btiktok\b/i.test(q)) return "字节跳动 ByteDance";
-  if (/stripe/i.test(q)) return "Stripe";
-  if (/shein|希音/i.test(q)) return "SHEIN";
-  if (/databricks/i.test(q)) return "Databricks";
-  if (/\bx\.ai\b/i.test(q)) return "xAI";
-  return companyNameResidual(q) || q.trim();
-}
-
-function mentionsPrivateCompany(query = "") {
-  return PRIVATE_COMPANIES.test(String(query));
 }
 
 let apiStatus = null;
@@ -541,7 +525,7 @@ function companyNameResidual(query = "") {
     .replace(/[？?！!，,。.；;：:、""''《》()（）]/g, " ")
     // 开场白 / 客套（"我想了解"那种）先剥掉，避免残串变成"我想 泛林集团"。
     .replace(/我想了解|我想问问|我想问|我想知道|我想看看|我想|想了解|想知道|想问问|想问|帮我看看|帮我查查|帮我查|帮我分析|帮我|麻烦你|麻烦|请问|请帮我|给我讲|给我说|能否|可以/g, " ")
-    .replace(/最近|怎么样|怎样|怎么|如何|分析|看看|一下|讲讲|说说|介绍|了解|这家公司|这家|公司|这只|股票|护城河|赚钱|不赚钱|主要风险|风险|利润|毛利|营收|估值|赔率|基本面|值得|研究|持续|能不能|是什么|有没有|多少|呢|吗|的|了/g, " ")
+    .replace(/最近|怎么样|怎样|怎么|如何|分析|看看|一下|讲讲|说说|介绍|了解|这家公司|这家|公司|这只|股票|经营质量|经营|盈利能力|盈利|现金流|现金|资产负债|负债|偿债|竞争对手|竞争|对手|格局|前景|趋势|空间|催化|管理层|管理|治理|股东回报|股东|回报|分红|回购|成长|增长|增速|业绩|运营|营运|商业模式|模式|逻辑|信号|指标|怎么看|值不值|贵不贵|便宜|护城河|赚钱|不赚钱|主要风险|风险|利润|毛利|营收|估值|赔率|基本面|值得|研究|持续|能不能|是什么|有没有|多少|呢|吗|的|了/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -552,7 +536,7 @@ const CN_COMPANY_SUFFIX = /(科技|集团|股份|控股|银行|保险|证券|基
 // 开场白前缀（"我想了解…"），判断主语位时先剥掉。
 const LEAD_IN_PREFIX = /^(我想了解|我想问问|我想问|我想知道|我想看看|我想|想了解|想知道|想问问|想问|帮我看看|帮我查查|帮我查|帮我分析|帮我|麻烦你|麻烦|请问|请帮我|了解一下|看下|看看)\s*/;
 // 追问句常见开头（指代/时间/指标）。出现在主语位说明这是对当前公司的追问，不是点名新公司。
-const FOLLOWUP_HEAD = /^(它|他|她|这|那|其|该|怎|为什么|现在|目前|当前|未来|今年|去年|最近|短期|长期|股价|估值|市值|毛利|利润|净利|营收|收入|护城河|风险|基本面|赚钱|分红|回购|增长|前景|趋势|空间|逻辑|催化|对比|相比|和|跟|与|vs)/i;
+const FOLLOWUP_HEAD = /^(它|他|她|这|那|其|该|怎|为什么|现在|目前|当前|未来|今年|去年|最近|短期|长期|股价|估值|市值|毛利|利润|净利|营收|收入|经营|盈利|现金|负债|偿债|竞争|格局|管理|治理|股东|回报|成长|增速|业绩|运营|营运|质量|护城河|风险|基本面|赚钱|分红|回购|增长|前景|趋势|空间|逻辑|催化|对比|相比|和|跟|与|vs)/i;
 
 // 这句是否在"点名一家（可能是新的）公司"。用于决定是否触发解析，以及解析失败时
 // 是否要明确告诉用户"没识别出"，而不是默默沿用上一家公司作答（张冠李戴的根因）。
@@ -569,6 +553,19 @@ function mentionsNewCompany(query = "") {
   return false;
 }
 
+// "强信号"版：明确点名了**另一家**公司（代码 / 别名 / 双重上市 / 未上市私人公司 /
+// 带后缀的公司名 / 英文专名）。已有在研公司时只认强信号才切换标的——"经营质量怎么样"
+// 这类纯追问没有强信号，会留在当前公司，连续对话才不会被打断（这是张冠李戴的反面：
+// 不是答错成别家，而是别把追问当成新公司）。
+function mentionsNewCompanyStrong(query = "") {
+  if (extractTicker(query) || extractAliasTicker(query) || resolveUsTicker(query) || resolveDualListing(query)) return true;
+  const residual = companyNameResidual(query);
+  if (residual.length < 2) return false;
+  if (CN_COMPANY_SUFFIX.test(residual)) return true;        // 美光科技 / 某某集团
+  if (/[A-Z][a-z]{2,}/.test(residual)) return true;         // 英文专名 Micron / Coinbase
+  return false;
+}
+
 function companySearchCandidates(query = "") {
   const ticker = extractTicker(query);
   const aliasTicker = extractAliasTicker(query);
@@ -577,9 +574,6 @@ function companySearchCandidates(query = "") {
 }
 
 async function resolveCompany(query) {
-  // 未上市私人公司（SpaceX / OpenAI / 字节跳动…）：明确返回 unlisted，绝不让裸大写词
-  // 启发式错认成同名 ticker（"Space X" → "SPACE" 那种张冠李戴）。
-  if (mentionsPrivateCompany(query)) return { unlisted: true, name: privateCompanyName(query) };
   // 双重上市优先：阿里巴巴 / 京东等统一走美股 ADR 口径，附带两地代码。
   const dual = resolveDualListing(query);
   if (dual) return dual;
@@ -928,9 +922,11 @@ async function clearAllSessions() {
 async function sendChat(question) {
   const prevCompany = getCompany();
   let company = prevCompany;
-  // 没有公司、或这句在点名一家公司时都要解析。后者很关键：以前只看 ticker/别名/美股别名，
-  // "美光科技怎么样"三者都不命中 → 不解析 → 默默沿用上一家公司作答（张冠李戴）。
-  const shouldResolve = !company || mentionsNewCompany(question);
+  // 没公司时必解析；已有在研公司时只在"强信号"（明确点名另一家公司）下才切换标的。
+  // 否则"经营质量怎么样""现金流呢"这类追问会被误判成新公司、解析失败后整轮拒答——
+  // 这正是"同一对话没有上下文、连续对话断掉"的根因。强信号涵盖代码/别名/双重上市/
+  // 私人公司/带后缀公司名/英文专名，"美光科技怎么样"仍能正常切换。
+  const shouldResolve = !company || mentionsNewCompanyStrong(question);
   if (shouldResolve) {
     // 中文名要走一轮 LLM 解析（2–5s），给个明确的"正在识别公司…"微状态，
     // 而不是让用户对着"正在检索和思考"干等、以为卡住了。
@@ -945,25 +941,16 @@ async function sendChat(question) {
       );
       return;
     }
-    // 未上市私人公司：明确说研究不了，并把"如果已上市/你指的是别的标的"的出口留给用户，
-    // 而不是错认成同名 ticker（截图里 SpaceX → "SPACE" 那种）。
-    if (resolved?.unlisted) {
-      appendMessage(
-        "assistant",
-        `「${resolved.name}」是**未公开上市**的私人公司，没有公开股价、市值或财报。Luvio 目前只覆盖**港股和美股的上市公司**，这家暂时研究不了。\n\n` +
-        `如果它**已经 IPO**，或你其实想问某只**已上市**的相关标的（比如航天主题 ETF、供应链上市公司），把股票代码发我（如 **$RKLB**、**$ASTS**、**$ARKX**），我就能拉真数据来研究。`
-      );
-      return;
-    }
     // 点名了一家公司却解析不出：明确说"没识别出"，绝不拿上一家公司硬答。
     if (resolved?.unresolved) {
       appendMessage(
         "assistant",
-        `我没把握「${resolved.name}」对应哪只股票，这轮就不答了，免得张冠李戴答成别的公司。\n\n` +
+        `我去权威数据源（FMP/交易所）查了「${resolved.name}」，没拿到能对上的上市代码，这轮就不硬答了，免得张冠李戴答成别的公司。\n\n` +
         `可以这样再问我一次：\n` +
         `- 美股：直接输代码，如 **MU**、**HOOD**，或写 **$MU**\n` +
         `- 港股：用代码，如 **0700.HK**\n` +
-        `- 或者写更完整、更标准的公司名`
+        `- 如果它**刚 IPO**、或是冷门标的（数据源可能还没收录），直接把股票代码发我最稳\n` +
+        `- 也可以写更完整、更标准的公司名`
       );
       return;
     }
