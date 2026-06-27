@@ -1260,6 +1260,189 @@ button:disabled {
   font-weight: 700;
 }
 
+/* Multi-method cross-validation + assumptions */
+.valuation-methods {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.valuation-methods .vm-label {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.valuation-methods .vm-tag {
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.valuation-assume {
+  margin-top: 10px;
+  font-size: 11.5px;
+}
+
+.valuation-assume summary {
+  color: var(--muted);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.valuation-assume summary::-webkit-details-marker { display: none; }
+.valuation-assume summary::before { content: "▸ "; color: var(--muted-2); }
+.valuation-assume[open] summary::before { content: "▾ "; }
+
+.valuation-assume ul {
+  margin: 8px 0 0;
+  padding-left: 16px;
+  color: var(--ink-2);
+  line-height: 1.6;
+}
+
+/* Analyst consensus — buy/hold/sell distribution + target anchor */
+.analyst-block {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  background: var(--panel-glass-strong);
+}
+
+.analyst-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.analyst-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.analyst-head em {
+  color: var(--muted-2);
+  font-size: 11.5px;
+  font-style: normal;
+  text-align: right;
+}
+
+.analyst-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--panel-soft);
+}
+
+.analyst-bar .seg { height: 100%; }
+.analyst-bar .seg.buy  { background: #1c8a4d; }
+.analyst-bar .seg.hold { background: var(--amber); }
+.analyst-bar .seg.sell { background: #c23934; }
+
+.analyst-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 9px;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.analyst-counts .buy  { color: #1c8a4d; }
+.analyst-counts .hold { color: #b8770a; }
+.analyst-counts .sell { color: #c23934; }
+
+.analyst-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 13px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+
+.analyst-chips .ac-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.analyst-chips .ac-chip b { color: var(--ink); font-weight: 700; }
+.analyst-chips .ac-chip em { font-style: normal; color: var(--muted); }
+.analyst-chips .ac-chip em.pos { color: #1c8a4d; }
+.analyst-chips .ac-chip em.neg { color: #c23934; }
+.analyst-chips .ac-chip.buy  { color: #1c8a4d; background: rgba(28, 138, 77, 0.1); }
+.analyst-chips .ac-chip.sell { color: #c23934; background: rgba(255, 59, 48, 0.1); }
+.analyst-chips .ac-chip.hold { color: #b8770a; background: rgba(245, 166, 35, 0.12); }
+.analyst-chips .ac-chip.target b { color: var(--blue-ink); }
+
+/* Grounding bar — per-slot data provenance at the top of each answer */
+.grounding-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.grounding-bar .ground-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.grounding-bar .ground-chip i { font-style: normal; font-weight: 700; }
+.grounding-bar .ground-chip.ok {
+  color: #1c8a4d;
+  background: rgba(28, 138, 77, 0.08);
+  border-color: rgba(28, 138, 77, 0.18);
+}
+.grounding-bar .ground-chip.miss {
+  color: var(--muted);
+  background: var(--panel-soft);
+  border-color: var(--line);
+}
+
+.grounding-bar .ground-complete {
+  margin-left: auto;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--blue-soft);
+  color: var(--blue-ink);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  cursor: help;
+}
+
 /* Evidence provenance cards */
 .evidence-block {
   margin-top: 18px;

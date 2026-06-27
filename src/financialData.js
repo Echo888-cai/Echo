@@ -552,11 +552,45 @@ export async function getCompanyProfile(ticker) {
   ]);
 }
 
+// 仅取一致目标价（quoteSummary/financialData）。Yahoo 偶尔反爬 403，所以只当"尽力
+// 而为"的补充：买卖分布走 Finnhub（稳定），目标价能从 Yahoo 拿到就叠加，拿不到不报错。
+async function fetchYahooPriceTarget(ticker) {
+  const symbol = normalizeTicker(ticker);
+  const data = await fetchJson(
+    `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=financialData`,
+    { timeoutMs: 6000 }
+  );
+  const fin = data.quoteSummary?.result?.[0]?.financialData || {};
+  const mean = numberOrNull(fin.targetMeanPrice?.raw);
+  if (!mean) throw new Error("Yahoo 没有返回一致目标价");
+  return {
+    consensusTargetPrice: mean,
+    targetHigh: numberOrNull(fin.targetHighPrice?.raw),
+    targetLow: numberOrNull(fin.targetLowPrice?.raw),
+    targetMedian: numberOrNull(fin.targetMedianPrice?.raw),
+    numberOfAnalysts: numberOrNull(fin.numberOfAnalystOpinions?.raw)
+  };
+}
+
 export async function getAnalystEstimates(ticker) {
-  return tryProviders([
+  // 分布/共识：FMP grades（常 gated）→ Finnhub recommendation（免费稳定）。
+  const base = await tryProviders([
     () => fetchFmpAnalystEstimates(ticker),
     () => fetchFinnhubRecommendation(ticker)
   ]);
+  // 目标价：base 没带（Finnhub 不含目标价）时用 Yahoo 兜底，叠加到分布上。
+  if (numberOrNull(base.consensusTargetPrice) === null) {
+    try {
+      const target = await fetchYahooPriceTarget(ticker);
+      const had = base.providerStatus === "ok";
+      Object.assign(base, target, {
+        providerStatus: "ok",
+        source: had ? `${base.source} + Yahoo 目标价` : "Yahoo 目标价",
+        asOf: new Date().toISOString()
+      });
+    } catch { /* 目标价拿不到：只用买卖分布即可 */ }
+  }
+  return base;
 }
 
 export async function getDividendHistory(ticker) {

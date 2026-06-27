@@ -839,6 +839,9 @@ async function sendChat(question) {
   // "美光科技怎么样"三者都不命中 → 不解析 → 默默沿用上一家公司作答（张冠李戴）。
   const shouldResolve = !company || mentionsNewCompany(question);
   if (shouldResolve) {
+    // 中文名要走一轮 LLM 解析（2–5s），给个明确的"正在识别公司…"微状态，
+    // 而不是让用户对着"正在检索和思考"干等、以为卡住了。
+    if (isBusy) { busyLabel = "正在识别公司"; render(); }
     const resolved = await resolveCompany(question);
     // A 股（沪深）暂不支持：给专门提示，而不是泛泛的"没识别出"。
     if (resolved?.unsupported) {
@@ -884,6 +887,8 @@ async function sendChat(question) {
   if (company.dualListing && (switched || !prevCompany?.ticker)) {
     toast(`${company.nameZh} 双重上市：港股 ${company.dualListing.hk}｜美股 ${company.dualListing.us}，基本面按美股 ADR 口径。`);
   }
+  // 识别完成，回到通用检索状态再发起主请求。
+  if (isBusy) busyLabel = "正在检索和思考";
   render();
 
   const result = await api("/api/chat", {
@@ -911,8 +916,12 @@ async function sendChat(question) {
     mode: result.mode,
     webCount: result.webEvidence?.evidence?.length ?? 0,
     sources: dataSourceLabels(result.dataSources),
+    grounding: dataSourceGrounding(result.dataSources),
+    completeness: typeof result.decisionPanel?.dataCompleteness === "number" ? result.decisionPanel.dataCompleteness : null,
+    missing: Array.isArray(result.decisionPanel?.missingData) ? result.decisionPanel.missingData : [],
     confidence: result.decisionPanel?.confidence || null,
     valuation: result.valuation || null,
+    analyst: result.analyst || null,
     evidence: provenanceFromPanel(result.decisionPanel)
   });
   // 长期画像反馈：建档/判断变化时轻提示，让用户感知"研究在沉淀"。
@@ -955,6 +964,15 @@ function dataSourceLabels(dataSources = {}) {
   return Object.entries(map)
     .filter(([key]) => dataSources?.[key]?.status === "ok")
     .map(([, label]) => label);
+}
+
+// 接地条用的逐槽 ✓/✗：固定 4 个核心槽（行情/财报/新闻/预期），公告只在接入时追加，
+// 避免美股恒显"公告✗"的噪音。
+function dataSourceGrounding(dataSources = {}) {
+  const core = [["market", "行情"], ["financials", "财报"], ["news", "新闻"], ["estimates", "预期"]];
+  const slots = core.map(([key, label]) => ({ label, ok: dataSources?.[key]?.status === "ok" }));
+  if (dataSources?.filings?.status === "ok") slots.push({ label: "公告", ok: true });
+  return slots;
 }
 
 async function generateDeepResearch() {
@@ -1389,6 +1407,17 @@ function renderValuation(valuation) {
   const zoneLeft = Math.min(pct(bear), pct(bull));
   const zoneWidth = Math.abs(pct(bull) - pct(bear));
 
+  // 多法交叉验证：有多个口径（PE / Forward PE / FCF / DCF）时显式标出，并把关键
+  // 假设折叠在"估值依据"里，让"这个区间怎么来的"可追溯，而不是一个孤零零的数字。
+  const methods = Array.isArray(valuation.methods) ? valuation.methods.filter(Boolean) : [];
+  const assumptions = Array.isArray(valuation.keyAssumptions) ? valuation.keyAssumptions.filter(Boolean).slice(0, 4) : [];
+  const methodsLine = methods.length > 1
+    ? `<div class="valuation-methods"><span class="vm-label">多法交叉</span>${methods.map((m) => `<span class="vm-tag">${esc(m)}</span>`).join("")}</div>`
+    : "";
+  const assumeLine = assumptions.length
+    ? `<details class="valuation-assume"><summary>估值依据 · ${assumptions.length} 条</summary><ul>${assumptions.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></details>`
+    : "";
+
   return `<div class="valuation-block">
     <div class="valuation-head"><span>估值区间</span><em>${esc(valuation.method || "PE 法")}</em></div>
     <div class="valuation-bar">
@@ -1409,18 +1438,75 @@ function renderValuation(valuation) {
       <span class="neg">看空下行 <b>${esc(downText)}</b></span>
       <span class="odds">赔率 <b>${esc(oddsText)}</b></span>
     </div>
-    ${renderAnalystAnchor(valuation.analyst, fmt)}
+    ${methodsLine}
+    ${assumeLine}
   </div>`;
 }
 
-function renderAnalystAnchor(analyst, fmt) {
-  const target = analyst?.target != null ? numFrom(analyst.target) : null;
-  if (target === null) return "";
-  const low = analyst.low != null ? numFrom(analyst.low) : null;
-  const high = analyst.high != null ? numFrom(analyst.high) : null;
-  const range = low !== null && high !== null ? ` · 区间 ${esc(fmt(low))}~${esc(fmt(high))}` : "";
-  const upside = analyst.upside ? `（较现价 ${esc(analyst.upside)}）` : "";
-  return `<div class="valuation-analyst">分析师目标价 <b>${esc(fmt(target))}</b>${upside}${range}${analyst.source ? ` · ${esc(analyst.source)}` : ""}</div>`;
+// 分析师一致预期：买卖分布条 + 共识方向 + 一致目标价/上行空间。数据由后端
+// buildAnalystSummary 收口（Finnhub recommendation 给分布、Yahoo 兜底给目标价）。
+// 估值条里不再单独重复目标价——这里是唯一、更完整的"分析师锚"。
+function renderAnalystConsensus(analyst) {
+  if (!analyst) return "";
+  const dist = analyst.distribution;
+  const target = analyst.target != null ? numFrom(analyst.target) : null;
+  const hasDist = dist && Number(dist.total) > 0;
+  if (!hasDist && target === null) return "";
+  const fmt = (v) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2));
+
+  let bar = "";
+  let counts = "";
+  if (hasDist) {
+    const total = dist.total;
+    const buyPct = Math.round((dist.buy / total) * 100);
+    const holdPct = Math.round((dist.hold / total) * 100);
+    const sellPct = Math.max(0, 100 - buyPct - holdPct);
+    bar = `<div class="analyst-bar" role="img" aria-label="买入 ${dist.buy}，持有 ${dist.hold}，卖出 ${dist.sell}">
+      ${dist.buy ? `<span class="seg buy" style="width:${buyPct}%"></span>` : ""}
+      ${dist.hold ? `<span class="seg hold" style="width:${holdPct}%"></span>` : ""}
+      ${dist.sell ? `<span class="seg sell" style="width:${sellPct}%"></span>` : ""}
+    </div>`;
+    counts = `<div class="analyst-counts">
+      <span class="buy">买入 ${dist.buy}</span>
+      <span class="hold">持有 ${dist.hold}</span>
+      <span class="sell">卖出 ${dist.sell}</span>
+    </div>`;
+  }
+
+  const tone = analyst.consensus === "偏多" ? "buy" : analyst.consensus === "偏空" ? "sell" : "hold";
+  const chips = [];
+  if (analyst.consensus) chips.push(`<span class="ac-chip ${tone}">共识 ${esc(analyst.consensus)}</span>`);
+  if (target !== null) {
+    const up = typeof analyst.upsidePct === "number" ? analyst.upsidePct : null;
+    const upTone = up == null ? "" : up > 0 ? "pos" : up < 0 ? "neg" : "";
+    const upTxt = up == null ? "" : `<em class="${upTone}">（较现价 ${up > 0 ? "+" : ""}${up}%）</em>`;
+    chips.push(`<span class="ac-chip target">目标价 <b>${esc(fmt(target))}</b>${upTxt}</span>`);
+    const lo = analyst.targetLow != null ? numFrom(analyst.targetLow) : null;
+    const hi = analyst.targetHigh != null ? numFrom(analyst.targetHigh) : null;
+    if (lo !== null && hi !== null) chips.push(`<span class="ac-chip">区间 ${esc(fmt(lo))}~${esc(fmt(hi))}</span>`);
+  }
+  if (typeof analyst.analysts === "number" && analyst.analysts > 0) chips.push(`<span class="ac-chip">${analyst.analysts} 位分析师</span>`);
+
+  return `<div class="analyst-block">
+    <div class="analyst-head"><span>分析师一致预期</span>${analyst.source ? `<em>${esc(analyst.source)}</em>` : ""}</div>
+    ${bar}${counts}
+    ${chips.length ? `<div class="analyst-chips">${chips.join("")}</div>` : ""}
+  </div>`;
+}
+
+// 数据接地条：每条回答顶部直观标注本轮用到/缺哪些数据槽（行情✓ 财报✓ 新闻✓ 预期✗），
+// 把"为什么置信度低"变得可解释——缺口同时挂在完整度上的 title 里。
+function renderGroundingBar(meta = {}) {
+  const slots = Array.isArray(meta.grounding) ? meta.grounding : [];
+  if (!slots.length) return "";
+  const chips = slots
+    .map((s) => `<span class="ground-chip ${s.ok ? "ok" : "miss"}">${esc(s.label)}<i>${s.ok ? "✓" : "✗"}</i></span>`)
+    .join("");
+  const missing = Array.isArray(meta.missing) ? meta.missing.filter(Boolean) : [];
+  const comp = typeof meta.completeness === "number"
+    ? `<span class="ground-complete" title="${missing.length ? `还缺：${esc(missing.join("、"))}` : "关键数据槽已齐备"}">完整度 ${meta.completeness}%</span>`
+    : "";
+  return `<div class="grounding-bar">${chips}${comp}</div>`;
 }
 
 function renderEvidenceBlock(evidence) {
@@ -1466,8 +1552,10 @@ function renderMessage(message) {
           <div class="answer-mark"><i></i><span>${title}</span></div>
           ${isPortfolio ? "" : `<button class="copy-answer" type="button" data-action="copy-message" data-id="${esc(messageId)}">复制</button>`}
         </div>
+        ${isPortfolio ? "" : renderGroundingBar(meta)}
         ${isPortfolio ? renderPortfolioPanel(meta.positions) : renderRichAnswer(message.content)}
         ${renderValuation(meta.valuation)}
+        ${renderAnalystConsensus(meta.analyst)}
         ${renderEvidenceBlock(meta.evidence)}
         ${isPortfolio ? "" : renderAnswerMeta(meta)}
       </div>

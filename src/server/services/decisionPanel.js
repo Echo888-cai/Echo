@@ -180,7 +180,7 @@ export function buildDecisionPanel(input) {
     ? modelPanel.action
     : composeAction({ hasPrice, hasFinancials, hasFilings, hasEstimates, newsAvailable, userContext });
 
-  const confidence = modelPanel?.confidence || (hasPrice && hasFilings && hasFinancials ? "中" : "低");
+  const confidence = modelPanel?.confidence || deriveConfidence({ hasPrice, hasFinancials, hasEstimates, hasFilings, newsAvailable });
 
   const basePanel = {
     ticker: profile.ticker,
@@ -270,6 +270,21 @@ function pickModelOverrides(model, base) {
   if (typeof out.oneLineView === "string" && out.oneLineView.length > 120) out.oneLineView = out.oneLineView.slice(0, 120);
   if (typeof out.action === "string" && out.action.length > 60) out.action = out.action.slice(0, 60);
   return out;
+}
+
+// 置信度：按已接地的数据维度打分。分析师一致预期是强信号——价格 + 财报 + 预期 即可推到
+// "高"。不再硬性要求 HKEX 公告：美股永远没有公告，旧口径（必须 price+filings+financials）
+// 让美股恒为"低"，与"数据接地后置信度应抬升"的目标相悖。
+function deriveConfidence({ hasPrice, hasFinancials, hasEstimates, hasFilings, newsAvailable }) {
+  let score = 0;
+  if (hasPrice) score += 1;
+  if (hasFinancials) score += 2;
+  if (hasEstimates) score += 2;
+  if (hasFilings) score += 1;
+  if (newsAvailable) score += 1;
+  if (score >= 5) return "高";
+  if (score >= 3) return "中";
+  return "低";
 }
 
 function deriveResearchStatus({ hasPrice, hasFinancials, hasFilings, hasEstimates, newsAvailable, userContext }) {

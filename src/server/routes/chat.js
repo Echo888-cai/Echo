@@ -34,6 +34,7 @@ export async function handleChatApi(req, res) {
     // speak the same odds.
     const valuationProfile = companyByTicker(result.decisionPanel?.ticker || payload.company?.ticker) || payload.company;
     const valuation = displayValuation(valuationProfile, result.marketSnapshot, result.financialsData, result.estimatesData);
+    const analyst = buildAnalystSummary(result.estimatesData, result.marketSnapshot?.price);
     // 长期画像：研究同一公司时自动带上上次沉淀的投资主线/证伪条件，保持连贯。
     const portraitTicker = result.decisionPanel?.ticker || payload.company?.ticker;
     const context = {
@@ -97,6 +98,7 @@ export async function handleChatApi(req, res) {
     }
     const sessionId = persistFinalChatSession(payload, result, content, {
       valuation: valuation.cannotValueReason ? null : valuation,
+      analyst,
       mode: chatModel?.content ? "chat_model" : "chat_local"
     });
     sendJson(res, 200, {
@@ -113,6 +115,7 @@ export async function handleChatApi(req, res) {
       marketSnapshot: result.marketSnapshot,
       newsSnapshot: result.newsSnapshot,
       valuation: valuation.cannotValueReason ? null : valuation,
+      analyst,
       webEvidence,
       portrait: portrait
         ? { ticker: portraitTicker, created: portrait.created, changed: portrait.changed, turnCount: portrait.profile?.turnCount || 0 }
@@ -135,8 +138,12 @@ function persistFinalChatSession(payload, result, content, extra = {}) {
     mode: extra.mode || "chat_local",
     webCount: result.webEvidence?.evidence?.length ?? 0,
     sources: dataSourceLabels(result.dataSources),
+    grounding: dataSourceGrounding(result.dataSources),
+    completeness: typeof panel?.dataCompleteness === "number" ? panel.dataCompleteness : null,
+    missing: Array.isArray(panel?.missingData) ? panel.missingData : [],
     confidence: panel?.confidence || null,
     valuation: extra.valuation || null,
+    analyst: extra.analyst || null,
     evidence: provenanceFromPanel(panel)
   };
   const thread = buildFinalThread(payload.history, payload.question, content, assistantMeta);
@@ -218,5 +225,41 @@ function dataSourceLabels(dataSources = {}) {
   return Object.entries(map)
     .filter(([key]) => dataSources?.[key]?.status === "ok")
     .map(([, label]) => label);
+}
+
+// 接地条用的逐槽 ✓/✗（前端 app.js 同名函数的服务端复刻，让恢复历史时一致）。
+// 固定 4 个核心槽，公告只在接入时追加，避免美股恒显"公告✗"。
+function dataSourceGrounding(dataSources = {}) {
+  const core = [["market", "行情"], ["financials", "财报"], ["news", "新闻"], ["estimates", "预期"]];
+  const slots = core.map(([key, label]) => ({ label, ok: dataSources?.[key]?.status === "ok" }));
+  if (dataSources?.filings?.status === "ok") slots.push({ label: "公告", ok: true });
+  return slots;
+}
+
+// 把分析师评级数据收成前端要的紧凑结构：买卖分布 + 共识方向 + 一致目标价/上行空间。
+// 分布来自 Finnhub recommendation（免费稳定），目标价来自 Yahoo 兜底（尽力而为）。
+function buildAnalystSummary(estimates, price) {
+  if (!estimates || estimates.providerStatus !== "ok") return null;
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+  const counts = [estimates.strongBuy, estimates.buy, estimates.hold, estimates.sell, estimates.strongSell];
+  const hasDist = counts.some((n) => typeof n === "number");
+  const buy = (estimates.strongBuy || 0) + (estimates.buy || 0);
+  const hold = estimates.hold || 0;
+  const sell = (estimates.sell || 0) + (estimates.strongSell || 0);
+  const total = buy + hold + sell;
+  const target = num(estimates.consensusTargetPrice) ?? num(estimates.targetMedian);
+  const p = num(price);
+  const upsidePct = target && p ? Number((((target - p) / p) * 100).toFixed(1)) : null;
+  if (!hasDist && !target) return null;
+  return {
+    distribution: hasDist && total ? { buy, hold, sell, total } : null,
+    consensus: estimates.consensus || null,
+    target,
+    targetLow: num(estimates.targetLow),
+    targetHigh: num(estimates.targetHigh),
+    analysts: num(estimates.numberOfAnalysts),
+    upsidePct,
+    source: estimates.source || "评级源"
+  };
 }
 
