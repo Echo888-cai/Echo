@@ -42,6 +42,9 @@ export function displayValuation(company, marketSnapshot, financialsData, estima
   // Analyst consensus is attached as an independent anchor whenever available —
   // it enriches even a coherent fundamental band (US gets real targets via FMP).
   const analyst = analystAnchor(estimates, price);
+  // Stage-aware（EV/Sales 情景）刻意允许整条带在现价上方或下方（这正是"高估/低估"的诚实结论）：
+  // 不套"必须 bear<price<bull"的 PE 带自洽检查，也绝不回退到以现价为中心的 PE 带（那是自循环根因）。
+  if (v.stageAware && !v.cannotValueReason) return analyst ? { ...v, analyst } : v;
   const bear = parseFloat(v.bear);
   const bull = parseFloat(v.bull);
   const coherent =
@@ -116,6 +119,79 @@ function analystAnchor(estimates, price) {
   return { target, low: numOrNull(estimates.targetLow), high: numOrNull(estimates.targetHigh), upside, source: estimates.source || "评级源" };
 }
 
+function clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }
+
+// 资产阶段分类（spec §三，先实现关键分支）：亏损股 EPS<0、PE 不适用，必须换估值口径，
+// 否则会掉到 displayValuation 里"以现价为中心 ±25% PE 带"的自循环（中性=现价、赔率~1.3:1）。
+//   loss_growth=亏损高成长、loss=亏损（低/无增长）、profitable=盈利（走传统 PE/FCF/DCF）。
+function classifyAssetStage(f) {
+  if (!f || f.providerStatus !== "ok") return "unknown";
+  const eps = numOrNull(f.eps);
+  const netMargin = numOrNull(f.netMargin);
+  const opMargin = numOrNull(f.operatingMargin);
+  const growth = numOrNull(f.revenueGrowth);
+  const lossMaking = (eps !== null && eps < 0) || (netMargin !== null && netMargin < 0) || (opMargin !== null && opMargin < 0);
+  if (lossMaking) return growth !== null && growth >= 20 ? "loss_growth" : "loss";
+  return "profitable";
+}
+
+// 亏损股的 EV/Sales 情景估值：Bear/Base/Bull 各设目标 EV/Sales 倍数 × 前瞻收入 → 隐含 EV
+// → 加净现金（现金−负债）→ ÷ 稀释股本 → 价格区间。赔率由 bull/bear vs 现价推出（非自循环），
+// 并反推"当前价隐含的 EV/Sales"（市场在押注什么）。倍数用按增速分档的行业规则默认值，每条情景
+// 显式列假设。缺收入/股本返回 null（落回传统逻辑，多半给 cannotValue）。
+function computeEvSalesValuation({ stage, price, marketCap, revenue, revenueGrowth, grossMargin, sharesOutstanding, cashAndEquivalents, totalDebt }) {
+  const rev = numOrNull(revenue);
+  const shares = numOrNull(sharesOutstanding);
+  const p = numOrNull(price);
+  if (!rev || rev <= 0 || !shares || shares <= 0 || !p || p <= 0) return null;
+  const netCash = (numOrNull(cashAndEquivalents) || 0) - (numOrNull(totalDebt) || 0);
+  const growthRaw = numOrNull(revenueGrowth);
+  const growth = growthRaw === null ? 0 : clamp(growthRaw / 100, -0.5, 1.5);
+  // 前瞻 1 年收入（高成长股用前瞻更贴市场口径）；增速缺失则退回 TTM。
+  const fwdRevenue = rev * (1 + growth);
+  // 规则默认 EV/Sales 倍数，按增速分档：成长越高，市场给的倍数越高。
+  const t = growth >= 0.4 ? { bear: 5, base: 10, bull: 16 }
+          : growth >= 0.2 ? { bear: 3, base: 6, bull: 10 }
+          : { bear: 1, base: 2.5, bull: 4 };
+  const priceAt = (mult) => (mult * fwdRevenue + netCash) / shares;
+  const bear = priceAt(t.bear);
+  const base = priceAt(t.base);
+  const bull = priceAt(t.bull);
+  if (![bear, base, bull].every((n) => Number.isFinite(n) && n > 0)) return null;
+  // 反推当前价隐含的 EV/Sales（市场在押注的成长定价），对接 spec"当前价隐含了什么预期"。
+  const ev = (numOrNull(marketCap) || p * shares) - netCash;
+  const impliedFwd = fwdRevenue > 0 ? ev / fwdRevenue : null;
+  const impliedTtm = ev / rev;
+  const gmTxt = numOrNull(grossMargin) !== null ? `，毛利率 ${Number(grossMargin).toFixed(0)}%` : "";
+  const growthTxt = growthRaw === null ? "增速未知用 TTM 收入" : `收入增速 ${growthRaw.toFixed(0)}%`;
+  const stageTxt = stage === "loss_growth" ? "亏损高成长" : "亏损";
+  return {
+    method: "EV/Sales 情景",
+    stageAware: true,
+    stage,
+    bear: bear.toFixed(2),
+    base: base.toFixed(2),
+    bull: bull.toFixed(2),
+    upside: ((base - p) / p * 100).toFixed(1) + "%",
+    downside: ((bear - p) / p * 100).toFixed(1) + "%",
+    currentPrice: p,
+    methods: ["EV/Sales 情景"],
+    methodDetail: [{ name: "EV/Sales", bear, base, bull }],
+    keyAssumptions: [
+      `阶段：${stageTxt}（利润为负、PE 不适用）→ 用 EV/Sales 情景，不套 PE 带`,
+      `前瞻收入 ≈ ${compactNumberServer(rev)} ×（1+${(growth * 100).toFixed(0)}%，${growthTxt}）= ${compactNumberServer(fwdRevenue)}${gmTxt}`,
+      `看空 ${t.bear}x EV/Sales → ${bear.toFixed(2)}；中性 ${t.base}x → ${base.toFixed(2)}；看多 ${t.bull}x → ${bull.toFixed(2)}（行业规则默认倍数）`,
+      `净现金 ${compactNumberServer(netCash)}，稀释股本 ${compactNumberServer(shares)}`,
+      impliedFwd !== null ? `当前价隐含 ≈ ${impliedFwd.toFixed(1)}x 前瞻 / ${impliedTtm.toFixed(1)}x TTM EV/Sales（市场在押注的成长定价）` : ""
+    ].filter(Boolean),
+    sensitivity: [
+      `EV/Sales 每变化 1x，目标价变化约 ${(fwdRevenue / shares).toFixed(2)}`,
+      `收入或毛利率不及指引，目标倍数与价位同步下修`
+    ],
+    cannotValueReason: null
+  };
+}
+
 export function computeValuation(company, marketSnapshot, financialsData) {
   if (!company || !marketSnapshot) {
     return {
@@ -143,6 +219,24 @@ export function computeValuation(company, marketSnapshot, financialsData) {
       sensitivity: [],
       cannotValueReason: "缺行情价格，无法估值。"
     };
+  }
+
+  // ── Stage-aware：亏损股（PE 不适用）走 EV/Sales 情景，避免下游 displayValuation 掉到
+  //    "以现价为中心 ±25% PE 带"的自循环（gap log 根因 D 在美股的复发）。成熟盈利股不受影响。
+  const stage = classifyAssetStage(financialsData);
+  if ((stage === "loss_growth" || stage === "loss") && hasFinancialsData) {
+    const ev = computeEvSalesValuation({
+      stage,
+      price,
+      marketCap,
+      revenue: hasFinancialsData.revenue,
+      revenueGrowth: hasFinancialsData.revenueGrowth,
+      grossMargin: hasFinancialsData.grossMargin ?? hasFinancialsData.grossMargins,
+      sharesOutstanding: hasFinancialsData.sharesOutstanding,
+      cashAndEquivalents: hasFinancialsData.cashAndEquivalents,
+      totalDebt: hasFinancialsData.totalDebt
+    });
+    if (ev) return ev;
   }
 
   const methods = [];

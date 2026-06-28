@@ -265,6 +265,19 @@ async function fetchFinnhubFinancials(ticker) {
     annual = fin?.financials?.[0] || null;
   } catch { /* 付费端点不可用：跳过绝对额 */ }
 
+  // 免费档兜底（B-P0 硬依赖）：profile2 给股本/市值。亏损股的 EV/Sales 情景需要 收入 + 股本 +
+  // 现金，付费的 /stock/financials 常被 gate 掉，这里用 profile2 + metric 的 per-share/PS 反推。
+  let shares = null;
+  let mktCap = null;
+  try {
+    const prof = await fetchJson(
+      `https://finnhub.io/api/v1/stock/profile2?symbol=${encodeURIComponent(symbol)}&token=${apiKey}`,
+      { timeoutMs: 5000 }
+    );
+    shares = prof?.shareOutstanding ? prof.shareOutstanding * 1e6 : null;        // Finnhub 单位：百万股
+    mktCap = prof?.marketCapitalization ? prof.marketCapitalization * 1e6 : null; // 单位：百万
+  } catch { /* profile2 不可用：跳过 */ }
+
   const pick = (...vals) => {
     for (const v of vals) {
       const n = numberOrNull(v);
@@ -273,12 +286,27 @@ async function fetchFinnhubFinancials(ticker) {
     return null;
   };
 
+  // 收入/现金/负债：付费端点能给绝对额就用；否则用 metric 的 per-share/PS × 股本反推（免费档）。
+  // 缺收入或股本会让亏损股掉回"以现价为中心"的 PE 带自循环（gap log 根因 D），故必须补齐。
+  const revPerShare = pick(m.revenuePerShareTTM, m.revenuePerShareAnnual);
+  const psRatio = pick(m.psTTM, m.psAnnual);
+  const revenue = pick(
+    annual?.revenue,
+    revPerShare && shares ? revPerShare * shares : null,
+    mktCap && psRatio ? mktCap / psRatio : null
+  );
+  const cashPerShare = pick(m.cashPerSharePerShareQuarterly, m.cashPerShareQuarterly, m.cashPerShareAnnual);
+  const cashAndEquivalents = pick(annual?.cashAndEquivalents, cashPerShare && shares ? cashPerShare * shares : null);
+  const bvps = pick(m.bookValuePerShareQuarterly, m.bookValuePerShareAnnual);
+  const de = pick(m["totalDebt/totalEquityQuarterly"], m["totalDebt/totalEquityAnnual"]);
+  const totalDebt = pick(annual?.totalDebt, bvps && shares && de !== null ? bvps * shares * de : null);
+
   return {
     source: "Finnhub",
     ticker: normalizeTicker(ticker),
     period: annual?.period || "TTM",
     currency: detectMarket(ticker) === "US" ? "USD" : "HKD",
-    revenue: pick(annual?.revenue),
+    revenue,
     revenueGrowth: pick(m.revenueGrowthTTMYoy, m.revenueGrowthQuarterlyYoy, m.revenueGrowth5Y),
     grossProfit: pick(annual?.grossIncome),
     grossMargin: pick(m.grossMarginTTM, m.grossMarginAnnual, m.grossMargin5Y),
@@ -288,6 +316,10 @@ async function fetchFinnhubFinancials(ticker) {
     netMargin: pick(m.netProfitMarginTTM, m.netProfitMarginAnnual, m.netProfitMargin5Y),
     profitGrowth: pick(m.epsGrowthTTMYoy, m.epsGrowth5Y, m.netMarginGrowth5Y),
     eps: pick(m.epsTTM, m.epsInclExtraItemsTTM, m.epsAnnual),
+    sharesOutstanding: shares,
+    marketCap: mktCap,
+    cashAndEquivalents,
+    totalDebt,
     pe: pick(m.peTTM, m.peInclExtraTTM, m.peNormalizedAnnual, m.peBasicExclExtraTTM),
     forwardPE: pick(m.forwardPE),
     ps: pick(m.psTTM, m.psAnnual),

@@ -1829,7 +1829,8 @@ function renderValuation(valuation) {
   const down = price ? (price - bear) / price : 0;
   const odds = down > 0.0001 ? (up / down) : null;
   const oddsText = odds && odds > 0 ? `${odds.toFixed(1)} : 1` : "—";
-  const upText = `+${(up * 100).toFixed(0)}%`;
+  // 带符号格式化：stage-aware 的 EV/Sales 带可能整条在现价下方（看多上行为负），不能写成 "+-34%"。
+  const upText = `${up >= 0 ? "+" : ""}${(up * 100).toFixed(0)}%`;
   const downText = `${((bear - price) / price * 100).toFixed(0)}%`;
   const zoneLeft = Math.min(pct(bear), pct(bull));
   const zoneWidth = Math.abs(pct(bull) - pct(bear));
@@ -1837,7 +1838,7 @@ function renderValuation(valuation) {
   // 多法交叉验证：有多个口径（PE / Forward PE / FCF / DCF）时显式标出，并把关键
   // 假设折叠在"估值依据"里，让"这个区间怎么来的"可追溯，而不是一个孤零零的数字。
   const methods = Array.isArray(valuation.methods) ? valuation.methods.filter(Boolean) : [];
-  const assumptions = Array.isArray(valuation.keyAssumptions) ? valuation.keyAssumptions.filter(Boolean).slice(0, 4) : [];
+  const assumptions = Array.isArray(valuation.keyAssumptions) ? valuation.keyAssumptions.filter(Boolean).slice(0, 5) : [];
   const methodsLine = methods.length > 1
     ? `<div class="valuation-methods"><span class="vm-label">多法交叉</span>${methods.map((m) => `<span class="vm-tag">${esc(m)}</span>`).join("")}</div>`
     : "";
