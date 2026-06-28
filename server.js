@@ -108,6 +108,11 @@ const server = createServer(async (req, res) => {
   }
 });
 
+// 全局兜底：单用户本地研究工具，保活 >> 崩溃。任何漏网的 unhandled rejection / uncaught
+// exception 只记日志，绝不让 Node 24 据此杀进程（A-P0.1：一条坏请求曾掀翻整个后台）。
+process.on("unhandledRejection", (reason) => console.error("[unhandledRejection]", reason));
+process.on("uncaughtException", (err) => console.error("[uncaughtException]", err));
+
 server.listen(port, "127.0.0.1", () => {
   console.log(`Luvio is running at http://127.0.0.1:${port}`);
 });

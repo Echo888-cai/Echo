@@ -430,11 +430,17 @@ async function fetchTavilyNews(company) {
 
 // 给单个抓取任务套一个超时上限：超时就当"返回空"而不是拖死整批。根治"新闻一直不可用"
 // 的关键之一——慢爬虫（Bing HTML / Yahoo RSS）不再能把整块拖超时。
+// 关键：**永不 throw**——超时和失败都 resolve 成兜底值。旧实现用 Promise.race + catch 重抛，
+// 一旦超时先赢，真正的 promise 之后再 reject 就成了无人接管的 unhandledRejection，
+// Node 24 默认会据此杀进程（A-P0.1 后台崩溃根因）。
 function withJobTimeout(promise, ms, onTimeout = []) {
-  return Promise.race([
-    Promise.resolve(promise).catch((err) => { throw err; }),
-    new Promise((resolve) => setTimeout(() => resolve(onTimeout), ms))
-  ]);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(onTimeout), ms);
+    Promise.resolve(promise).then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      () => { clearTimeout(timer); resolve(onTimeout); }   // 超时/失败统一回兜底，绝不向上抛
+    );
+  });
 }
 
 async function fetchBroadNews(company) {
@@ -469,6 +475,9 @@ async function fetchBroadNews(company) {
   // 可靠源已经给到足够相关新闻 → 立刻返回，不等慢爬虫（它们在后台跑完即弃）。
   const relevantNow = filterRelevantArticles(articles, company);
   if (relevantNow.length >= 4) {
+    // 带刺保险：提前返回会把 scraperJobs 留成孤儿后台任务。withJobTimeout 已保证它们永不 reject，
+    // 这里再兜一层 .catch 防御未来回退，绝不让孤儿任务产生 unhandledRejection。
+    scraperJobs.forEach((p) => Promise.resolve(p).catch(() => {}));
     return { articles: dedupeArticles(relevantNow).slice(0, 14), errors };
   }
 
