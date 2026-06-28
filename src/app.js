@@ -351,7 +351,11 @@ async function chatStream(body) {
           streamingText += json.t || "";
           const node = document.getElementById("stream-body");
           if (node) node.innerHTML = `${markdownToHtml(streamingText)}<span class="stream-caret"></span>`;
-          document.querySelector(".conversation")?.scrollTo({ top: 999999 });
+          // 只在用户本来就贴着底部时才跟随滚动；用户上滚回看时不再被 token 往下拽。
+          const conv = document.querySelector(".conversation");
+          if (conv && conv.scrollHeight - conv.scrollTop - conv.clientHeight < 120) {
+            conv.scrollTo({ top: conv.scrollHeight });
+          }
         } else if (evt === "reasoning") {
           // 推理期：累计字数，等待卡的 phase 行（1s tick）会读 reasoningChars 显示进度。
           reasoningChars += json.n || 0;
@@ -646,12 +650,19 @@ async function refreshSessions() {
   }
 }
 
-function appendMessage(role, content, meta = {}) {
+function appendMessage(role, content, meta = {}, opts = {}) {
   const message = { id: uid("msg"), role, content, meta, createdAt: new Date().toISOString() };
+  // 流式→最终切换时（keepScroll）：把已经流出来的文字原地定格，不要滚到底——否则用户正
+  // 读着就被甩到下面（接地条骨架已占好高度，正文位置稳定，只需保住当前 scrollTop）。
+  const conv = document.querySelector(".conversation");
+  const prevTop = conv?.scrollTop ?? 0;
   setThread([...getThread(), message]);
   render();
   requestAnimationFrame(() => {
-    document.querySelector(".conversation")?.scrollTo({ top: 999999, behavior: "smooth" });
+    const c = document.querySelector(".conversation");
+    if (!c) return;
+    if (opts.keepScroll) { c.scrollTop = prevTop; return; }
+    c.scrollTo({ top: 999999, behavior: "smooth" });
     document.querySelector(".message:last-child")?.scrollIntoView({ behavior: "smooth", block: "end" });
   });
 }
@@ -1011,7 +1022,7 @@ async function sendChat(question) {
     valuation: result.valuation || null,
     analyst: result.analyst || null,
     evidence: provenanceFromPanel(result.decisionPanel)
-  });
+  }, { keepScroll: true }); // 流式刚结束：原地定格，别把正在阅读的用户甩到底部
   // 长期画像反馈：建档/判断变化时轻提示，让用户感知"研究在沉淀"。
   if (result.positionSaved) toast(`已记账 ${company.nameZh || company.ticker} 的持仓信息。`);
   else if (result.portrait?.created) toast(`已为 ${company.nameZh || company.ticker} 建立长期画像。`);
@@ -1169,10 +1180,27 @@ function snapTool(action, label) {
   return `<button class="snapshot-tool" type="button" data-action="${action}" aria-label="${esc(label)}">${SNAP_ICONS[action]}<span>${esc(label)}</span></button>`;
 }
 
+// 市场标签：港股（数字/.HK）/ 美股（其余）。代码缺省返回空串。
+function marketLabelOf(ticker = "") {
+  if (!ticker) return "";
+  return /\.HK$|^\d/.test(ticker) ? "港股" : "美股";
+}
+
+// desk-head 副标题：永远给可读信息，绝不显示占位的"待补充"。优先市场标签，
+// 再补真实行业（排除"美股/港股/待补充"这类占位）。
+const PLACEHOLDER_INDUSTRY = new Set(["美股", "港股", "待补充", "待定", ""]);
+function companySubtitle(company) {
+  if (!company) return "问一句就开始，复杂研究再沉到底层。";
+  const mkt = marketLabelOf(company.ticker);
+  const ind = company.industry || company.sector || "";
+  const realInd = PLACEHOLDER_INDUSTRY.has(ind) ? "" : ind;
+  return [mkt, realInd].filter(Boolean).join(" · ") || mkt || company.ticker || "美股";
+}
+
 function renderSnapshotCard(company, panel, thread) {
   const name = panel?.companyName || company?.nameZh || "未选择公司";
   const ticker = company?.ticker || panel?.ticker || "";
-  const marketLabel = ticker ? (/\.HK$|^\d/.test(ticker) ? "港股" : "美股") : "";
+  const marketLabel = marketLabelOf(ticker);
   const confLevel = panel?.confidence === "高" ? "high" : panel?.confidence === "低" ? "low" : "mid";
   const confChip = panel?.confidence
     ? `<span class="conf conf-${confLevel}">置信度 ${esc(panel.confidence)}</span>`
@@ -1269,7 +1297,7 @@ function renderResearch() {
           <div>
             <p>Luvio Research</p>
             <h1>${company ? `${esc(company.nameZh)} ${esc(company.ticker)}` : "输入公司，开始判断"}</h1>
-            <span>${company ? esc(company.industry || company.sector || "待补充") : "问一句就开始，复杂研究再沉到底层。"} </span>
+            <span>${esc(companySubtitle(company))} </span>
           </div>
         </div>` : ""}
         <div class="conversation ${hasResearch ? "" : "is-empty"}">
@@ -1355,12 +1383,23 @@ function renderWaitingCard() {
   </article>`;
 }
 
+// 接地条骨架：流式期先占住接地条的位置（同结构、同高度，灰色 pending 态）。final 到达后
+// 真接地条原地替换它——高度不变，正文不会被往下顶，消除"看着看着卡片闪到下面"。
+const GROUNDING_PENDING_SLOTS = ["行情", "财报", "新闻", "预期"];
+function renderGroundingSkeleton() {
+  const chips = GROUNDING_PENDING_SLOTS
+    .map((label) => `<span class="ground-chip pending">${label}<i>·</i></span>`)
+    .join("");
+  return `<div class="grounding-bar grounding-pending" aria-hidden="true">${chips}<span class="ground-complete pending">完整度 —</span></div>`;
+}
+
 // 流式作答卡：token 边到边写进 #stream-body，末尾跟一个闪烁光标。final 到达后由
-// appendMessage 渲染成带估值/分析师/接地条的正式回答卡，本卡随之消失。
+// appendMessage 渲染成带估值/分析师/接地条的正式回答卡，本卡随之消失。顶部预留接地条骨架。
 function renderStreamingCard() {
   return `<article class="message assistant">
     <div class="bubble answer-card stream-card">
       <div class="answer-brand"><div class="answer-mark"><i></i><span>LUVIO</span></div></div>
+      ${renderGroundingSkeleton()}
       <div class="ans-stream" id="stream-body">${markdownToHtml(streamingText)}<span class="stream-caret"></span></div>
     </div>
   </article>`;

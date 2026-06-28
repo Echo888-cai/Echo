@@ -1443,6 +1443,24 @@ button:disabled {
   cursor: help;
 }
 
+/* 接地条骨架（流式期占位，灰色轻脉冲）：复用 .ground-chip 的尺寸，保证与最终接地条等高，
+   final 原地替换不产生高度跳动。 */
+.grounding-bar .ground-chip.pending,
+.grounding-bar .ground-complete.pending {
+  color: var(--muted);
+  background: var(--panel-soft);
+  border-color: var(--line);
+  animation: ground-pulse 1.4s ease-in-out infinite;
+}
+@keyframes ground-pulse {
+  0%, 100% { opacity: 0.45; }
+  50%      { opacity: 0.8; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .grounding-bar .ground-chip.pending,
+  .grounding-bar .ground-complete.pending { animation: none; }
+}
+
 /* Evidence provenance cards */
 .evidence-block {
   margin-top: 18px;
