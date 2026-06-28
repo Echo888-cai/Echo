@@ -42,7 +42,16 @@ export function buildEvidenceQueries({ company = {}, question = "", intent = cla
   const zh = company.nameZh || main;
   const ticker = company.ticker || "";
   const year = beijingYear();
-  const base = [`"${en}" ${ticker}`.trim(), `"${zh}" ${ticker}`.trim()];
+  const isUs = ticker && !/\.(HK|SS|SZ)$/i.test(ticker);
+  // B-P2：一手源优先——美股先指向 IR / 业绩新闻稿 / 8-K / SEC，而非泛新闻转述。
+  const base = [
+    `"${en}" ${ticker}`.trim(),
+    `"${zh}" ${ticker}`.trim(),
+    ...(isUs ? [
+      `${en} investor relations earnings press release guidance ${year}`,
+      `${en} ${ticker} 8-K earnings results SEC filing`
+    ] : [])
+  ];
   const templates = {
     [RESEARCH_INTENTS.competitors]: [
       `${en} competitors market share ${year}`,

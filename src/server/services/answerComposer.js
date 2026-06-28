@@ -743,7 +743,7 @@ ${hasLiveFin
 - 监控项：${monitors}
 - 竞品候选：
 ${competitorCandidates}
-- 新闻/网页竞争信号：
+- 新闻头条（仅作情绪参考，不能当基本面主证据；基本面结论以上面的财报/估值/指引等一手口径为准）：
 ${newsSignals}
 - 公开网页证据：
 ${webEvidencePrompt}

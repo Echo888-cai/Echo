@@ -1883,8 +1883,17 @@ function renderValuation(valuation) {
   const methodsLine = methods.length > 1
     ? `<div class="valuation-methods"><span class="vm-label">多法交叉</span>${methods.map((m) => `<span class="vm-tag">${esc(m)}</span>`).join("")}</div>`
     : "";
-  const assumeLine = assumptions.length
-    ? `<details class="valuation-assume"><summary>估值依据 · ${assumptions.length} 条</summary><ul>${assumptions.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></details>`
+  // A-P2.1：每种方法各自推出的隐含价（PE法→$X / FCF法→$Y / DCF→$Z；亏损股→EV/Sales 情景），
+  // 和关键假设一起放进"估值依据"展开，让区间怎么来的可追溯。兼容 PE 多法与 B-P0 的 EV/Sales 来源。
+  const detail = Array.isArray(valuation.methodDetail)
+    ? valuation.methodDetail.filter((d) => d && Number.isFinite(Number(d.base)))
+    : [];
+  const detailRows = detail
+    .map((d) => `<li class="vm-detail"><b>${esc(d.name)}</b>：看空 ${esc(fmt(Number(d.bear)))} / 中性 ${esc(fmt(Number(d.base)))} / 看多 ${esc(fmt(Number(d.bull)))}</li>`)
+    .join("");
+  const assumeCount = detail.length + assumptions.length;
+  const assumeLine = assumeCount
+    ? `<details class="valuation-assume"><summary>估值依据 · ${assumeCount} 条</summary><ul>${detailRows}${assumptions.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></details>`
     : "";
 
   return `<div class="valuation-block">

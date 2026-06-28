@@ -76,6 +76,7 @@ export function displayValuation(company, marketSnapshot, financialsData, estima
       bull: bullV.toFixed(2),
       currentPrice: p,
       methods: ["分析师目标价区间"],
+      methodDetail: [{ name: "分析师目标价", bear: bearV, base: baseV, bull: bullV }],
       keyAssumptions: [`基于分析师一致目标价：低 ${lo} / 中 ${mid ?? "—"} / 高 ${hi}（来源 ${estimates.source || "评级源"}）`],
       sensitivity: [],
       analyst,
@@ -96,6 +97,7 @@ export function displayValuation(company, marketSnapshot, financialsData, estima
       bull: (p * 1.28).toFixed(2),
       currentPrice: p,
       methods: ["PE 区间"],
+      methodDetail: [{ name: "PE 区间", bear: p * 0.78, base: p, bull: p * 1.28 }],
       keyAssumptions: [`基于现价与 PE ${Number(pe).toFixed(1)}x 的估值带（约 ±25%，反映 PE 收缩/扩张）`],
       sensitivity: [],
       analyst,
@@ -371,6 +373,8 @@ export function computeValuation(company, marketSnapshot, financialsData) {
     keyAssumptions: assumptions,
     sensitivity,
     methods: methods.map(m => m.name),
+    // A-P2.1：每种方法各自推出的 bear/base/bull，让"区间怎么来的"可追溯（前端"估值依据"展开）。
+    methodDetail: methods.map((m) => ({ name: m.name, bear: m.bear, base: m.base, bull: m.bull })),
     cannotValueReason: null
   };
 }
