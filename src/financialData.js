@@ -650,8 +650,8 @@ export function financialsToMarkdown(financials) {
     : "";
 
   return [
-    `财务数据来源：${financials.source}${period}`,
-    `收入：${fmtCompact(financials.revenue)} | 增速：${fmt(financials.revenueGrowth, "%")}`,
+    `财务数据来源：${financials.source}${period}（唯一财务事实源——下列没有的财务数字一律写"未核到"，禁止编造或估算）`,
+    `收入${financials.period ? `（${financials.period}）` : "（TTM）"}：${fmtCompact(financials.revenue)} | 增速：${fmt(financials.revenueGrowth, "%")}`,
     `毛利：${fmtCompact(financials.grossProfit)} | 毛利率：${fmtPercent(financials.grossMargin)}`,
     `经营利润：${fmtCompact(financials.operatingIncome)} | 经营利润率：${fmtPercent(financials.operatingMargin)}`,
     `净利润：${fmtCompact(financials.netIncome)} | 净利率：${fmtPercent(financials.netMargin)}`,
