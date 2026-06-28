@@ -930,9 +930,133 @@ async function clearAllSessions() {
   }
 }
 
+// 从问句里抠掉"当前公司"的名字/代码，剩下的拿去解析对比对象（另一家）。
+function stripCompanyMentions(query = "", company = null) {
+  if (!company) return query;
+  let out = String(query);
+  for (const token of [company.nameZh, company.nameEn, company.ticker].filter(Boolean)) {
+    out = out.split(token).join(" ");
+  }
+  return out;
+}
+
+// 对比意图：句子在做横向比较（"和X比/对比/vs/谁更…/哪个更…"）。配合"点名了另一家公司"
+// 一起判断，避免把"它和去年比怎么样"这种纵向追问也当成公司对比。
+function isComparisonQuestion(query = "") {
+  return /对比|相比|[和跟与][^，。？?]{1,14}(比|对比|相比|谁|哪个|哪家)|\bvs\b|谁(更|的)|哪(个|家)(更|的)?[^，。？?]{0,8}(好|强|贵|便宜|划算|赔率|值得)/i.test(String(query));
+}
+
+// 从一次 chat 结果构造助手消息的 meta（接地条/估值/分析师/证据卡/置信度）。
+// sendChat 与对话内对比 runComparison 共用，保证两条路径渲染一致。
+function answerMetaFromResult(result) {
+  return {
+    mode: result.mode,
+    webCount: result.webEvidence?.evidence?.length ?? 0,
+    sources: dataSourceLabels(result.dataSources),
+    grounding: dataSourceGrounding(result.dataSources),
+    completeness: typeof result.decisionPanel?.dataCompleteness === "number" ? result.decisionPanel.dataCompleteness : null,
+    missing: Array.isArray(result.decisionPanel?.missingData) ? result.decisionPanel.missingData : [],
+    confidence: result.decisionPanel?.confidence || null,
+    valuation: result.valuation || null,
+    analyst: result.analyst || null,
+    evidence: provenanceFromPanel(result.decisionPanel)
+  };
+}
+
+// 推荐选项消息：检测到对比意图时，不直接切换/直接答，弹一条带按钮的助手消息让用户选。
+function appendCompareChoice(current, target) {
+  const cName = current.nameZh || current.ticker;
+  const tName = target.nameZh || target.ticker;
+  appendMessage("assistant", "", {
+    type: "choice",
+    choice: {
+      prompt: `你是想把 ${cName} 和 ${tName} 做对比，还是改为只研究 ${tName}？`,
+      options: [
+        { label: `在本对话里对比：${cName} vs ${tName}`, hint: "拉两家真实数据并排比，不跳走", act: "compare", ticker: target.ticker, name: tName, recommended: true },
+        { label: `只研究 ${tName}`, hint: "切换到新公司、开新研究", act: "switch", ticker: target.ticker, name: tName }
+      ]
+    }
+  });
+}
+
+// 对话内对比：在当前对话里把当前公司与目标公司并排比较（带 compareWith，后端会把目标
+// 那家也跑一遍数据塞进 prompt）。答案落在当前线程，不跳页、不新开对话。
+async function runComparison(target) {
+  const current = getCompany();
+  if (!current?.ticker || isBusy) return;
+  const question = `把 ${current.nameZh || current.ticker} 和 ${target.name} 做个对比`;
+  appendMessage("user", question);
+  startBusy("正在对比两家公司");
+  render();
+  try {
+    const result = await chatStream({
+      question,
+      company: current,
+      compareWith: { ticker: target.ticker, nameZh: target.name },
+      sessionId: getSessionId(),
+      sessionTitle: sessionTitle(question),
+      history: apiHistory(question),
+      documents: getDocuments(),
+      memory: {}
+    });
+    if (!result) throw new Error("对比没有返回结果");
+    if (result.sessionId) setSessionId(result.sessionId);
+    if (result.decisionPanel) setPanel(result.decisionPanel);
+    appendMessage("assistant", result.content || "本轮没有生成对比。", answerMetaFromResult(result), { keepScroll: true });
+    await refreshSessions();
+  } catch (error) {
+    appendMessage("assistant", `这轮对比失败：${error.message || "未知错误"}。`);
+  } finally {
+    stopBusy();
+    render();
+  }
+}
+
+// "只研究新公司"：走正常 sendChat 切换路径（会触发软分隔+留退路）。
+async function switchAndResearch(target) {
+  if (isBusy) return;
+  const q = `${target.name}最近怎么样？`;
+  appendMessage("user", q);
+  startBusy("正在检索和思考");
+  render();
+  try {
+    await sendChat(q);
+  } catch (error) {
+    appendMessage("assistant", `这轮研究失败：${error.message || "未知错误"}。`);
+  } finally {
+    stopBusy();
+    render();
+  }
+}
+
+// 软分隔上的"回到上一家"：优先恢复那家最近的历史会话，没有就直接切回开新研究。
+async function returnToCompany(ticker, name) {
+  if (isBusy || !ticker) return;
+  const sess = recentSessions.find((s) => s.ticker === ticker);
+  if (sess) { await loadSession(sess.id); return; }
+  setSessionId(null);
+  setPanel(null);
+  setThread([]);
+  setCompany({ ticker, nameZh: name || ticker, industry: marketLabelOf(ticker) });
+  render();
+}
+
 async function sendChat(question) {
   const prevCompany = getCompany();
   let company = prevCompany;
+  // 对比意图：已有在研公司 + 句子在做对比 + 点名了另一家公司 → 不直接切换/不直接答，
+  // 弹推荐选项，让用户选"在本对话里对比"还是"只研究新公司"（避免突然跳走/张冠李戴）。
+  if (prevCompany?.ticker && isComparisonQuestion(question) && mentionsNewCompanyStrong(question)) {
+    if (isBusy) { busyLabel = "正在识别对比对象"; render(); }
+    // 关键：要解析的是**另一家**公司，不是当前这家。先把当前公司的名字/代码从问句里抠掉，
+    // 否则 "苹果和英伟达比" 会先命中"苹果"(=当前公司) → 误判成非对比、落回普通追问。
+    const target = await resolveCompany(stripCompanyMentions(question, prevCompany));
+    if (target?.ticker && target.ticker !== prevCompany.ticker) {
+      appendCompareChoice(prevCompany, target);
+      return;
+    }
+    // 解析不出 / 就是当前公司 → 落回常规流程（当作对当前公司的追问）。
+  }
   // 没公司时必解析；已有在研公司时只在"强信号"（明确点名另一家公司）下才切换标的。
   // 否则"经营质量怎么样""现金流呢"这类追问会被误判成新公司、解析失败后整轮拒答——
   // 这正是"同一对话没有上下文、连续对话断掉"的根因。强信号涵盖代码/别名/双重上市/
@@ -980,8 +1104,13 @@ async function sendChat(question) {
     const pending = thread[thread.length - 1];
     setSessionId(null);
     setPanel(null);
-    setThread(pending?.role === "user" ? [pending] : []);
-    toast(`已切到 ${company.nameZh || company.ticker}，开新研究。`);
+    // 软分隔：新线程顶部放一条"已从 X 切到 Y · 点此回到 X"，切换不突兀且留退路。
+    const divider = {
+      id: uid("msg"), role: "assistant", content: "",
+      meta: { type: "switch-divider", from: { ticker: prevCompany.ticker, name: prevCompany.nameZh || prevCompany.ticker }, to: { name: company.nameZh || company.ticker } },
+      createdAt: new Date().toISOString()
+    };
+    setThread(pending?.role === "user" ? [divider, pending] : [divider]);
   }
   setCompany(company);
   // 双重上市：首次选中时说清楚——同一家公司，基本面走美股 ADR，两地代码都给。
@@ -1011,18 +1140,8 @@ async function sendChat(question) {
     company = { ...company, nameZh: enrichedName };
     setCompany(company);
   }
-  appendMessage("assistant", result.content || "本轮没有生成有效回复。", {
-    mode: result.mode,
-    webCount: result.webEvidence?.evidence?.length ?? 0,
-    sources: dataSourceLabels(result.dataSources),
-    grounding: dataSourceGrounding(result.dataSources),
-    completeness: typeof result.decisionPanel?.dataCompleteness === "number" ? result.decisionPanel.dataCompleteness : null,
-    missing: Array.isArray(result.decisionPanel?.missingData) ? result.decisionPanel.missingData : [],
-    confidence: result.decisionPanel?.confidence || null,
-    valuation: result.valuation || null,
-    analyst: result.analyst || null,
-    evidence: provenanceFromPanel(result.decisionPanel)
-  }, { keepScroll: true }); // 流式刚结束：原地定格，别把正在阅读的用户甩到底部
+  // 流式刚结束：原地定格，别把正在阅读的用户甩到底部
+  appendMessage("assistant", result.content || "本轮没有生成有效回复。", answerMetaFromResult(result), { keepScroll: true });
   // 长期画像反馈：建档/判断变化时轻提示，让用户感知"研究在沉淀"。
   if (result.positionSaved) toast(`已记账 ${company.nameZh || company.ticker} 的持仓信息。`);
   else if (result.portrait?.created) toast(`已为 ${company.nameZh || company.ticker} 建立长期画像。`);
@@ -1693,6 +1812,31 @@ function renderAnswerMeta(meta = {}) {
 function renderMessage(message) {
   if (message.role === "assistant") {
     const meta = message.meta || {};
+    // 切换软分隔：一条细线 + "已从 X 切到 Y"，带"回到 X"退路按钮。
+    if (meta.type === "switch-divider" && meta.from && meta.to) {
+      return `<div class="switch-divider">
+        <span class="switch-line"></span>
+        <span class="switch-text">已从 <b>${esc(meta.from.name)}</b> 切到 <b>${esc(meta.to.name)}</b></span>
+        <button class="switch-back" type="button" data-action="return-company" data-ticker="${esc(meta.from.ticker)}" data-name="${esc(meta.from.name)}">回到 ${esc(meta.from.name)}</button>
+        <span class="switch-line"></span>
+      </div>`;
+    }
+    // 推荐选项消息：检测到对比意图时给用户的选择卡。
+    if (meta.type === "choice" && meta.choice) {
+      const opts = (meta.choice.options || []).map((o) =>
+        `<button class="choice-btn ${o.recommended ? "is-rec" : ""}" type="button" data-action="choice-act" data-act="${esc(o.act)}" data-ticker="${esc(o.ticker || "")}" data-name="${esc(o.name || "")}">
+          <span class="choice-label">${esc(o.label)}${o.recommended ? ' <i class="choice-rec">推荐</i>' : ""}</span>
+          ${o.hint ? `<span class="choice-hint">${esc(o.hint)}</span>` : ""}
+        </button>`
+      ).join("");
+      return `<article class="message assistant">
+        <div class="bubble answer-card choice-card">
+          <div class="answer-brand"><div class="answer-mark"><i></i><span>LUVIO</span></div></div>
+          <p class="choice-prompt">${esc(meta.choice.prompt)}</p>
+          <div class="choice-options">${opts}</div>
+        </div>
+      </article>`;
+    }
     const title = meta.type === "deep_research" ? "DEEP RESEARCH" : meta.type === "portrait" ? "公司画像" : meta.type === "digest" ? "事件提醒" : meta.type === "portfolio" ? "我的持仓" : "LUVIO";
     const messageId = message.id || "";
     const isPortfolio = meta.type === "portfolio";
@@ -1778,6 +1922,13 @@ document.addEventListener("click", async (event) => {
   if (action === "digest") await showEventDigest();
   if (action === "portfolio-view") await showPortfolio();
   if (action === "load-session") await loadSession(target.dataset.id);
+  if (action === "choice-act") {
+    const { act, ticker, name } = target.dataset;
+    if (act === "compare") await runComparison({ ticker, name });
+    else if (act === "switch") await switchAndResearch({ ticker, name });
+    return;
+  }
+  if (action === "return-company") { await returnToCompany(target.dataset.ticker, target.dataset.name); return; }
   if (action === "delete-session") await deleteSession(target.dataset.id);
   if (action === "clear-sessions") await clearAllSessions();
   if (action === "toggle-history") {

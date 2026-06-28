@@ -11,6 +11,35 @@ import { PROMPTS } from "../../prompts.js";
 import { loadPortraitContext, updatePortraitFromPanel } from "../services/companyPortrait.js";
 import { runTwoStageChat, runTwoStageChatStream } from "../services/twoStageChat.js";
 import { upsertPosition } from "../repositories/portfolio.js";
+import { getMarketSnapshot, getRangeReturns } from "../../marketData.js";
+import { getFinancials, getAnalystEstimates } from "../../financialData.js";
+
+// 对话内对比：只拉"对比对象"做并排比较真正需要的几项（行情/区间回报/财报/评级），
+// 不跑 news/filings/segments——精简后更快，避免和主公司的全量管道并发争抢时超时拿不到数据
+// （之前用 collectDataSources 全量跑，并发下常超时→对比块为空，模型只能说"未核到对方数据"）。
+async function buildCompareSummary(compareWith) {
+  const company = companyByTicker(compareWith.ticker) || compareWith;
+  if (!company?.ticker) return null;
+  const t = company.ticker;
+  const [ms, ranges, fin, est] = await Promise.all([
+    withTimeout(getMarketSnapshot(t), 6000, null),
+    withTimeout(getRangeReturns(t), 6000, { providerStatus: "missing" }),
+    withTimeout(getFinancials(t), 8000, { providerStatus: "missing" }),
+    withTimeout(getAnalystEstimates(t), 6000, { providerStatus: "missing" })
+  ]);
+  if (!ms || ms.providerStatus !== "ok") return null; // 连行情都没有就别给半截对比
+  if (ranges?.providerStatus === "ok") ms.ranges = ranges;
+  const valuation = displayValuation(companyByTicker(t) || company, ms, fin, est);
+  const analyst = buildAnalystSummary(est, ms.price);
+  return {
+    ticker: t,
+    name: company.nameZh || company.name || t,
+    marketSnapshot: ms,
+    financialsData: fin,
+    valuation: valuation.cannotValueReason ? null : valuation,
+    analyst
+  };
+}
 
 export async function handleChatApi(req, res) {
   try {
@@ -19,15 +48,19 @@ export async function handleChatApi(req, res) {
     const intent = classifyResearchIntent(question);
     const companyForEvidence = companyByTicker(payload.company?.ticker) || payload.company || {};
 
+    // 对话内对比：用户点了"在本对话里对比"时带上 compareWith，并行把对比对象也跑一遍。
+    const compareWith = payload.compareWith?.ticker ? payload.compareWith : null;
+
     // Single pipeline: data + deterministic local panel (no model, no persist here) runs in
     // parallel with web-evidence retrieval. The model is only called once, for the prose below.
-    const [result, webEvidence] = await Promise.all([
+    const [result, webEvidence, compareData] = await Promise.all([
       runAgent(payload, { persist: false, useModelPanel: false }),
       withTimeout(
         researchWebEvidence({ company: companyForEvidence, question, intent }),
         9000,
         { intent, queries: [], evidence: [], gaps: ["网页证据检索超时，本轮先使用本地档案和已接入数据。"], provider: "timeout", searchedAt: new Date().toISOString() }
-      )
+      ),
+      compareWith ? withTimeout(buildCompareSummary(compareWith), 12000, null) : Promise.resolve(null)
     ]);
 
     // Compute valuation before the model call so the prose and the visual bar
@@ -45,7 +78,9 @@ export async function handleChatApi(req, res) {
       valuation: valuation.cannotValueReason ? null : valuation,
       portraitContext: portraitTicker ? loadPortraitContext(portraitTicker) : "",
       // 最近几轮对话，注入作答 prompt 让追问能承接上文（连续对话能力）。
-      history: Array.isArray(payload.history) ? payload.history : []
+      history: Array.isArray(payload.history) ? payload.history : [],
+      // 对话内对比对象（拿到才有；buildChatPrompt 会渲染并排比较块 + 切到对比作答规则）。
+      compare: compareData
     };
     const fallback = researchReplyFromPanel(result.decisionPanel, question, result.dataSources, context);
     const wantStream = payload.stream === true;
