@@ -1026,6 +1026,7 @@ function answerMetaFromResult(result) {
     confidence: result.decisionPanel?.confidence || null,
     valuation: result.valuation || null,
     analyst: result.analyst || null,
+    comparison: result.comparison || null,
     evidence: provenanceFromPanel(result.decisionPanel)
   };
 }
@@ -1810,6 +1811,46 @@ function renderPortfolioPanel(positions = []) {
     <p class="pf-foot">${foot}</p>`;
 }
 
+// A-P1.1：对话内对比的两列并排表。后端 finalizeChat 收口 comparison={left,right}，每家含现价/
+// 涨跌/PE/赔率/利润质量/区间回报/目标价。散文保留在表下，让"两家谁更优"一眼可比。
+function renderComparisonTable(comparison) {
+  const left = comparison?.left;
+  const right = comparison?.right;
+  if (!left || !right) return "";
+  const fmtNum = (v, d = 2) => (Number.isFinite(Number(v)) ? Number(v).toFixed(d) : "—");
+  const fmtPct = (v) => (Number.isFinite(Number(v)) ? `${Number(v) >= 0 ? "+" : ""}${Number(v).toFixed(1)}%` : "—");
+  const fmtPe = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? `${Number(v).toFixed(1)}x` : "—");
+  const fmtOdds = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? `${Number(v).toFixed(1)}:1` : "—");
+  const fmtScore = (v) => (Number.isFinite(Number(v)) ? `${Number(v).toFixed(0)}/100` : "—");
+  // 每行：[标签, 取值函数, 该行"更优"判定（数值越大越优 / 越小越优 / 不判定）]。
+  const rows = [
+    ["现价", (s) => fmtNum(s.price), null],
+    ["今日涨跌", (s) => fmtPct(s.changePct), null],
+    ["PE", (s) => fmtPe(s.pe), null],
+    ["赔率（回报:风险）", (s) => fmtOdds(s.odds), (s) => (Number.isFinite(s.odds) ? s.odds : -Infinity)],
+    ["利润质量", (s) => fmtScore(s.qualityScore), (s) => (Number.isFinite(s.qualityScore) ? s.qualityScore : -Infinity)],
+    ["近 1 月", (s) => fmtPct(s.oneMonthPct), (s) => (Number.isFinite(s.oneMonthPct) ? s.oneMonthPct : -Infinity)],
+    ["年初至今", (s) => fmtPct(s.ytdPct), (s) => (Number.isFinite(s.ytdPct) ? s.ytdPct : -Infinity)],
+    ["目标价", (s) => fmtNum(s.target), null],
+    ["较目标上行", (s) => fmtPct(s.upsidePct), (s) => (Number.isFinite(s.upsidePct) ? s.upsidePct : -Infinity)]
+  ];
+  const cell = (row, side, other) => {
+    const better = row[2] && row[2](side) !== row[2](other) && row[2](side) > row[2](other);
+    return `<td class="${better ? "cmp-better" : ""}">${row[1](side)}</td>`;
+  };
+  const body = rows.map((row) => `<tr>
+      <th scope="row">${row[0]}</th>
+      ${cell(row, left, right)}
+      ${cell(row, right, left)}
+    </tr>`).join("");
+  return `<div class="comparison-block">
+    <table class="comparison-table">
+      <thead><tr><th></th><th>${esc(left.name || left.ticker || "—")}<span>${esc(left.ticker || "")}</span></th><th>${esc(right.name || right.ticker || "—")}<span>${esc(right.ticker || "")}</span></th></tr></thead>
+      <tbody>${body}</tbody>
+    </table>
+  </div>`;
+}
+
 function renderValuation(valuation) {
   if (!valuation) return "";
   const bear = numFrom(valuation.bear);
@@ -2006,6 +2047,7 @@ function renderMessage(message) {
           ${isPortfolio ? "" : `<button class="copy-answer" type="button" data-action="copy-message" data-id="${esc(messageId)}">复制</button>`}
         </div>
         ${isPortfolio ? "" : renderGroundingBar(meta)}
+        ${isPortfolio ? "" : renderComparisonTable(meta.comparison)}
         ${isPortfolio ? renderPortfolioPanel(meta.positions) : renderRichAnswer(message.content)}
         ${renderValuation(meta.valuation)}
         ${renderAnalystConsensus(meta.analyst)}

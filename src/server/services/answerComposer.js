@@ -652,12 +652,19 @@ function buildCompareBlock(compare) {
   const anaStr = compare.analyst?.target
     ? `分析师一致目标价 ${compare.analyst.target}${compare.analyst.upsidePct != null ? `（较现价 ${compare.analyst.upsidePct}%）` : ""}`
     : "暂无一致预期";
+  // A-P1.2：对比对象的近期头条（2-3 条），让对比散文能引用对方一手事件，而非只比行情/财报。
+  const news = compare.newsSnapshot?.providerStatus === "ok" ? compare.newsSnapshot.articles || [] : [];
+  const newsStr = news.length
+    ? news.slice(0, 3).map((a) => `- ${a.title}${a.source ? `（${String(a.source).split(" · ")[0]}）` : ""}`).join("\n")
+    : "近期新闻未核到";
   return `
 【对比对象：${compare.name}（${compare.ticker}）——本轮已核到的真实数据，用于并排比较】
 现价：${price}${rangeStr}
 估值：${valStr}
 分析师：${anaStr}
 财务（实时口径）：${finStr}
+近期头条：
+${newsStr}
 `;
 }
 

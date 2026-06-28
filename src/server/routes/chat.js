@@ -7,12 +7,14 @@ import { classifyResearchIntent } from "../services/intentClassifier.js";
 import { researchWebEvidence } from "../services/webEvidenceService.js";
 import { researchReplyFromPanel, normalizeResearchAnswer, mergeEvidenceIntoPanel } from "../services/answerComposer.js";
 import { displayValuation } from "../services/valuationEngine.js";
+import { computeFinancialQuality } from "../services/financialQuality.js";
 import { PROMPTS } from "../../prompts.js";
 import { loadPortraitContext, updatePortraitFromPanel } from "../services/companyPortrait.js";
 import { runTwoStageChat, runTwoStageChatStream } from "../services/twoStageChat.js";
 import { upsertPosition } from "../repositories/portfolio.js";
 import { getMarketSnapshot, getRangeReturns } from "../../marketData.js";
 import { getFinancials, getAnalystEstimates } from "../../financialData.js";
+import { getNewsSnapshot } from "../../newsData.js";
 
 // 对话内对比：只拉"对比对象"做并排比较真正需要的几项（行情/区间回报/财报/评级），
 // 不跑 news/filings/segments——精简后更快，避免和主公司的全量管道并发争抢时超时拿不到数据
@@ -21,11 +23,14 @@ async function buildCompareSummary(compareWith) {
   const company = companyByTicker(compareWith.ticker) || compareWith;
   if (!company?.ticker) return null;
   const t = company.ticker;
-  const [ms, ranges, fin, est] = await Promise.all([
+  // A-P1.2：对比对象也并发拉新闻（带超时护栏）。A-P0.1 修完后新闻管线不会再崩，可安全补——
+  // 之前为避超时故意没拉，导致对比回答只有行情/财报、缺一手事件。整块仍在外层 12s 预算内。
+  const [ms, ranges, fin, est, news] = await Promise.all([
     withTimeout(getMarketSnapshot(t), 6000, null),
     withTimeout(getRangeReturns(t), 6000, { providerStatus: "missing" }),
     withTimeout(getFinancials(t), 8000, { providerStatus: "missing" }),
-    withTimeout(getAnalystEstimates(t), 6000, { providerStatus: "missing" })
+    withTimeout(getAnalystEstimates(t), 6000, { providerStatus: "missing" }),
+    withTimeout(getNewsSnapshot({ ticker: t, nameZh: company.nameZh, nameEn: company.nameEn }), 6000, { providerStatus: "missing", articles: [] })
   ]);
   if (!ms || ms.providerStatus !== "ok") return null; // 连行情都没有就别给半截对比
   if (ranges?.providerStatus === "ok") ms.ranges = ranges;
@@ -37,8 +42,62 @@ async function buildCompareSummary(compareWith) {
     marketSnapshot: ms,
     financialsData: fin,
     valuation: valuation.cannotValueReason ? null : valuation,
-    analyst
+    analyst,
+    newsSnapshot: news
   };
+}
+
+const numOrNull = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+
+// 回报:风险赔率（bull 上行 vs bear 下行），与前端估值条/answerComposer 口径一致。
+function oddsFromValuation(v) {
+  if (!v) return null;
+  const price = Number(v.currentPrice), bear = Number(v.bear), bull = Number(v.bull);
+  if (![price, bear, bull].every(Number.isFinite) || price <= bear) return null;
+  const o = (bull - price) / (price - bear);
+  return o > 0 ? Number(o.toFixed(1)) : null;
+}
+
+// 把一家公司收口成对照表一列：现价/涨跌/PE/利润质量/赔率/区间回报/目标价/上行。
+function comparisonSide({ name, ticker, marketSnapshot, financialsData, valuation, analyst }) {
+  const ms = marketSnapshot || {};
+  const q = computeFinancialQuality(financialsData);
+  return {
+    name,
+    ticker,
+    price: numOrNull(ms.price),
+    changePct: numOrNull(ms.changePercent),
+    pe: numOrNull(ms.pe ?? financialsData?.pe),
+    qualityScore: q.quality?.qualityScore ?? null,
+    odds: oddsFromValuation(valuation),
+    oneMonthPct: numOrNull(ms.ranges?.oneMonthPct),
+    ytdPct: numOrNull(ms.ranges?.ytdPct),
+    target: analyst?.target ?? null,
+    upsidePct: analyst?.upsidePct ?? null
+  };
+}
+
+// A-P1.1：把主公司与对比对象的结构化数据收口成 { left, right } 两列，前端 renderComparisonTable
+// 直接渲染并排表（散文保留在表下）。只有带了 compareWith 且对比对象拿到行情时才有。
+function buildComparison({ payload, result, valuation, analyst, compareData }) {
+  if (!compareData?.ticker) return null;
+  const left = comparisonSide({
+    name: result.decisionPanel?.companyName || payload.company?.nameZh || payload.company?.ticker || "主公司",
+    ticker: result.decisionPanel?.ticker || payload.company?.ticker,
+    marketSnapshot: result.marketSnapshot,
+    financialsData: result.financialsData,
+    valuation: valuation?.cannotValueReason ? null : valuation,
+    analyst
+  });
+  const right = comparisonSide({
+    name: compareData.name,
+    ticker: compareData.ticker,
+    marketSnapshot: compareData.marketSnapshot,
+    financialsData: compareData.financialsData,
+    valuation: compareData.valuation,
+    analyst: compareData.analyst
+  });
+  return { left, right };
 }
 
 export async function handleChatApi(req, res) {
@@ -107,7 +166,7 @@ export async function handleChatApi(req, res) {
         });
         if (chatModel?.content && chatModel.content.length < 9000) content = chatModel.content;
       }
-      const finalPayload = finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel });
+      const finalPayload = finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData });
       send("final", finalPayload);
       try { res.write("event: done\ndata: {}\n\n"); res.end(); } catch { /* already closed */ }
       return;
@@ -124,7 +183,7 @@ export async function handleChatApi(req, res) {
       });
       if (chatModel?.content && chatModel.content.length < 9000) content = chatModel.content;
     }
-    sendJson(res, 200, finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel }));
+    sendJson(res, 200, finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData }));
   } catch (error) {
     // 流式已经开了头就不能再 sendJson —— 改发一个 error 事件收尾。
     if (res.headersSent) {
@@ -138,7 +197,7 @@ export async function handleChatApi(req, res) {
 
 // 模型作答之后的统一收口：归一化 → 证据并入面板 → 估值挂载 → 自然语言记账 → 画像回写 →
 // 落库，返回前端要的完整响应对象。流式 / 非流式共用，保证两条路径产物完全一致。
-function finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel }) {
+function finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData }) {
   const question = payload.question || "";
   content = normalizeResearchAnswer(content, result.decisionPanel, result.dataSources);
   result.webEvidence = webEvidence;
@@ -178,9 +237,13 @@ function finalizeChat({ payload, result, webEvidence, valuation, analyst, portra
     }
   }
 
+  // A-P1.1：结构化对比（带 compareWith 时）—— 前端渲染两列并排表，散文保留在表下。
+  const comparison = buildComparison({ payload, result, valuation, analyst, compareData });
+
   const sessionId = persistFinalChatSession(payload, result, content, {
     valuation: valuation.cannotValueReason ? null : valuation,
     analyst,
+    comparison,
     mode: chatModel?.content ? "chat_model" : "chat_local"
   });
 
@@ -199,6 +262,7 @@ function finalizeChat({ payload, result, webEvidence, valuation, analyst, portra
     newsSnapshot: result.newsSnapshot,
     valuation: valuation.cannotValueReason ? null : valuation,
     analyst,
+    comparison,
     webEvidence,
     portrait: portrait
       ? { ticker: portraitTicker, created: portrait.created, changed: portrait.changed, turnCount: portrait.profile?.turnCount || 0 }
@@ -223,6 +287,7 @@ function persistFinalChatSession(payload, result, content, extra = {}) {
     confidence: panel?.confidence || null,
     valuation: extra.valuation || null,
     analyst: extra.analyst || null,
+    comparison: extra.comparison || null,
     evidence: provenanceFromPanel(panel)
   };
   const thread = buildFinalThread(payload.history, payload.question, content, assistantMeta);
