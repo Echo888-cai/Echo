@@ -615,7 +615,7 @@ function companySearchCandidates(query = "") {
   return [...new Set([ticker, aliasTicker, cleaned, query].filter(Boolean))];
 }
 
-async function resolveCompany(query) {
+async function resolveCompany(query, opts = {}) {
   // 双重上市优先：阿里巴巴 / 京东等统一走美股 ADR 口径，附带两地代码。
   const dual = resolveDualListing(query);
   if (dual) return dual;
@@ -629,7 +629,19 @@ async function resolveCompany(query) {
   }
   // US tickers aren't in the HK searchable DB — build a minimal company so the
   // research pipeline (live quote + FMP fundamentals) can run.
-  if (!company && us) return { ticker: us.ticker, nameZh: us.name, nameEn: us.name, industry: "美股" };
+  if (!company && us) {
+    // 别名表命中（带真名，us.name!==ticker）→ 信任短路，不加 verify 延迟。
+    // 裸代码/显式记法（us.name===ticker，纯猜）才在研究前过 verify 闸门，挡住 DRUM 这种打错的码。
+    const needsVerify = opts.verify && us.name === us.ticker;
+    if (!needsVerify) return { ticker: us.ticker, nameZh: us.name, nameEn: us.name, industry: "美股" };
+    try {
+      const v = await api(`/api/companies/verify?ticker=${encodeURIComponent(us.ticker)}`);
+      if (v.status === "verified") return { ticker: us.ticker, nameZh: v.name || us.ticker, nameEn: v.name || "", industry: "美股" };
+      if (v.status === "not_found") return { unverifiedTicker: us.ticker, suggestions: v.suggestions || [] };
+      // status === "error"（FMP 限流/网络）→ 信任用户放行，避免误杀刚 IPO 的新股（"新上市自愈"）。
+    } catch { /* verify 不可用 → 放行 */ }
+    return { ticker: us.ticker, nameZh: us.name, nameEn: us.name, industry: "美股" };
+  }
   const fallbackTicker = candidates.find((candidate) => /^\d{4,5}\.HK$/.test(candidate));
   if (!company && fallbackTicker) return { ticker: fallbackTicker, nameZh: fallbackTicker, industry: "待补充" };
   // 没命中别名表/港股库时，走智能解析兜底：英文/拼音→FMP，中文名→LLM（如
@@ -1055,6 +1067,63 @@ function appendCompareChoice(current, target) {
   });
 }
 
+// did-you-mean 纠错卡：裸代码没在美股主板查到（打错的码）→ 不硬研究，弹候选 + 退路。
+// 候选按钮研究确认过的真票；退路"仍按 X 研究"兜冷门/刚 IPO 还没被收录的票。
+function appendDidYouMeanChoice(badTicker, suggestions = []) {
+  const options = suggestions.slice(0, 4).map((s, i) => ({
+    label: `研究 ${s.ticker}${s.name && s.name !== s.ticker ? ` · ${s.name}` : ""}`,
+    hint: "你可能想找这家",
+    act: "research",
+    ticker: s.ticker,
+    name: s.name || s.ticker,
+    recommended: i === 0
+  }));
+  options.push({ label: `仍按 ${badTicker} 研究`, hint: "冷门 / 刚 IPO 的票数据源可能还没收录", act: "force", ticker: badTicker, name: badTicker });
+  appendMessage("assistant", "", {
+    type: "choice",
+    choice: {
+      prompt: suggestions.length
+        ? `我没在美股主板查到代码 ${badTicker}，你是不是想找下面这些？也可以直接输更完整的公司名，或港股 xxxx.HK / 正确的美股代码。`
+        : `我没在美股主板查到代码 ${badTicker}。可以换个写法：输更完整的公司名，或港股 xxxx.HK / 正确的美股代码；确认没打错就点"仍按 ${badTicker} 研究"。`,
+      options
+    }
+  });
+}
+
+// 纠错卡"研究某候选"：候选是确认过的真票，直接带已知公司进研究（跳过再 verify）。
+async function researchSuggested(ticker, name) {
+  if (!ticker || isViewBusy()) return;
+  const company = { ticker, nameZh: name || ticker, nameEn: name || "", industry: "美股" };
+  const q = `${name || ticker}最近怎么样？`;
+  appendMessage("user", q);
+  resolving = true; resolvingLabel = "正在检索和思考"; render();
+  try {
+    await sendChat(q, company);
+  } catch (error) {
+    appendMessage("assistant", `这轮研究失败：${error.message || "未知错误"}。`);
+  } finally {
+    resolving = false;
+    render();
+  }
+}
+
+// 纠错卡"仍按 X 研究"：用户坚持研究这个未校验代码（冷门/新票）→ 绕过 verify 闸门直接研究。
+async function forceResearch(ticker) {
+  if (!ticker || isViewBusy()) return;
+  const company = { ticker, nameZh: ticker, nameEn: ticker, industry: "美股" };
+  const q = `研究 ${ticker}`;
+  appendMessage("user", q);
+  resolving = true; resolvingLabel = "正在检索和思考"; render();
+  try {
+    await sendChat(q, company);
+  } catch (error) {
+    appendMessage("assistant", `这轮研究失败：${error.message || "未知错误"}。`);
+  } finally {
+    resolving = false;
+    render();
+  }
+}
+
 // 对话内对比：在当前对话里把当前公司与目标公司并排比较（带 compareWith，后端会把目标
 // 那家也跑一遍数据塞进 prompt）。答案落在当前线程，不跳页、不新开对话。
 async function runComparison(target) {
@@ -1119,9 +1188,12 @@ async function returnToCompany(ticker, name) {
   render();
 }
 
-async function sendChat(question) {
+// preResolved：已确定的公司（did-you-mean 选了候选 / "仍按 X 研究"），跳过解析与 verify 闸门，
+// 直接进研究流程。普通调用 preResolved=null，照常解析。
+async function sendChat(question, preResolved = null) {
   const prevCompany = getCompany();
-  let company = prevCompany;
+  let company = preResolved || prevCompany;
+  if (!preResolved) {
   // 对比意图：已有在研公司 + 句子在做对比 + 点名了另一家公司 → 不直接切换/不直接答，
   // 弹推荐选项，让用户选"在本对话里对比"还是"只研究新公司"（避免突然跳走/张冠李戴）。
   if (prevCompany?.ticker && isComparisonQuestion(question) && mentionsNewCompanyStrong(question)) {
@@ -1144,7 +1216,7 @@ async function sendChat(question) {
     // 中文名要走一轮 LLM 解析（2–5s），给个明确的"正在识别公司…"微状态，
     // 而不是让用户对着"正在检索和思考"干等、以为卡住了。
     resolving = true; resolvingLabel = "正在识别公司"; render();
-    const resolved = await resolveCompany(question);
+    const resolved = await resolveCompany(question, { verify: true });
     // A 股（沪深）暂不支持：给专门提示，而不是泛泛的"没识别出"。
     if (resolved?.unsupported) {
       appendMessage(
@@ -1167,8 +1239,14 @@ async function sendChat(question) {
       );
       return;
     }
+    // 裸代码没在美股主板查到（DRUM 这种打错的）→ 弹纠错卡（候选 + 退路），不硬研究、不崩。
+    if (resolved?.unverifiedTicker) {
+      appendDidYouMeanChoice(resolved.unverifiedTicker, resolved.suggestions);
+      return;
+    }
     if (resolved) company = resolved;
   }
+  } // end if (!preResolved)
   if (!company) {
     appendMessage("assistant", "我还没有识别出公司。请补充公司名、港股代码或美股代码，例如 0700.HK 腾讯、AAPL 苹果。");
     return;
@@ -2020,6 +2098,8 @@ document.addEventListener("click", async (event) => {
     const { act, ticker, name } = target.dataset;
     if (act === "compare") await runComparison({ ticker, name });
     else if (act === "switch") await switchAndResearch({ ticker, name });
+    else if (act === "research") await researchSuggested(ticker, name);
+    else if (act === "force") await forceResearch(ticker);
     return;
   }
   if (action === "return-company") { await returnToCompany(target.dataset.ticker, target.dataset.name); return; }

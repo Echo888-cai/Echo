@@ -112,6 +112,34 @@ async function verifyUsTicker(ticker) {
   return { status: fmpErrored ? "error" : "not_found" };
 }
 
+// did-you-mean 候选：打错代码（如 DRUM）没校验过时，给几个相近的美股主板普通股。
+// 两条腿并发：FMP 名称搜索（覆盖主流）+ Finnhub 符号搜索（覆盖 FMP 漏掉的新上市）。
+// 主板过滤 + 去掉带后缀的海外/OTC 代码 + 去重，返回 top 候选 [{ticker,name}]。
+async function suggestUsTickers(query) {
+  const out = new Map(); // ticker -> name（先到先得，FMP 优先）
+  const [fmpRows, finnhubRows] = await Promise.all([
+    fmpGet("/stable/search-name", { query }, { ttl: FMP_TTL.profile, timeoutMs: 5000 }).catch(() => []),
+    finnhubSearch(query)
+  ]);
+  for (const r of Array.isArray(fmpRows) ? fmpRows : []) {
+    if (!r.symbol || !r.name) continue;
+    if ((r.currency || "USD") !== "USD") continue;
+    if (US_EXCHANGE_RANK[r.exchange] === undefined) continue;
+    if (NON_EQUITY_HINT.test(r.name)) continue;
+    const sym = String(r.symbol).toUpperCase();
+    if (sym.includes(".")) continue; // 带后缀的多为海外同名，主板纠错不需要
+    if (!out.has(sym)) out.set(sym, String(r.name));
+  }
+  for (const r of finnhubRows) {
+    const sym = String(r.symbol || "").toUpperCase();
+    if (!sym || sym.includes(".")) continue;
+    if (!/common stock/i.test(r.type || "Common Stock")) continue;
+    if (NON_EQUITY_HINT.test(r.description || "")) continue;
+    if (!out.has(sym)) out.set(sym, r.description || sym);
+  }
+  return [...out.entries()].slice(0, 5).map(([ticker, name]) => ({ ticker, name }));
+}
+
 // 知名品牌 → 真实上市代码的别名。这不是"私人公司黑名单"（那种会过时、且会把已 IPO 的
 // 公司错判成研究不了）——这里登记的是**已上市公司的真实代码**，而且每次都经下面的
 // listing 探针实时校验：若某天退市/改名，校验失败会自动回退。只收录"搜索引擎按品牌词
@@ -253,6 +281,34 @@ export async function handleCompanySearch(req, res) {
     sendOk(res, { companies: results, total: results.length });
   } catch (error) {
     sendError(res, 500, error.message || "搜索失败");
+  }
+}
+
+/**
+ * 美股代码 verify 闸门 + did-you-mean。前端对"裸代码/显式记法"（未收录在别名表）在研究前先调它。
+ * GET /api/companies/verify?ticker=DRUM →
+ *   { status: "verified", name }                         真票 → 放行（用真实公司名）
+ *   { status: "not_found", suggestions: [{ticker,name}] } 打错了 → 不研究，弹纠错卡
+ *   { status: "error" }                                   FMP 限流/网络 → 上层信任用户放行（不误杀新股）
+ */
+export async function handleCompanyVerify(req, res) {
+  try {
+    const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
+    const ticker = (url.searchParams.get("ticker") || url.searchParams.get("q") || "").toUpperCase().trim();
+    if (!/^[A-Z][A-Z.\-]{0,6}$/.test(ticker)) {
+      sendOk(res, { status: "not_found", suggestions: [] });
+      return;
+    }
+    const check = await verifyUsTicker(ticker);
+    if (check.status !== "not_found") {
+      sendOk(res, check); // verified（含 name）或 error 原样返回
+      return;
+    }
+    // 打错的代码 → 附上相近候选供 did-you-mean。
+    const suggestions = await suggestUsTickers(ticker);
+    sendOk(res, { status: "not_found", suggestions });
+  } catch (error) {
+    sendError(res, 500, error.message || "代码校验失败");
   }
 }
 
