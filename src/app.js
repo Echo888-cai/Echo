@@ -286,6 +286,38 @@ function setSessionId(id) {
   else clearStore(storeKeys.sessionId);
 }
 
+// 研究开始前生成稳定 sessionId（前缀 s_ 与后端 s_<uuid> 同形）。取代旧的"全程 null、跑完才落库"——
+// 那会导致：生成期侧栏没条目、且每条 null 消息后端都 INSERT 新行 → 同公司重复。
+function genSessionId() {
+  return (typeof crypto !== "undefined" && crypto.randomUUID) ? `s_${crypto.randomUUID()}` : uid("s");
+}
+
+// 确保当前视图有稳定 sessionId：有就复用、没有就新生成并落地。研究/对比/深研开始前都先调它，
+// 这样 run 全程用真实 id 当键、chat 体带上它 → 后端 ON CONFLICT(id) upsert 同一行（不再重复）。
+function ensureSessionId() {
+  let id = getSessionId();
+  if (!id) { id = genSessionId(); setSessionId(id); }
+  return id;
+}
+
+// 乐观插入/更新一条本地 session 到侧栏列表（不等服务端）。转圈靠 renderSessionItem 里的
+// running.has(id)；服务端刷新时按 id 合并、服务端版覆盖乐观版（见 refreshSessions）。
+// 已存在同 id（追问/深研）时保留原标题，只前置 + 标记 optimistic 让它转圈。
+function optimisticSession(id, { company, question } = {}) {
+  const existing = recentSessions.find((s) => s.id === id);
+  const entry = {
+    ...existing,
+    id,
+    title: existing?.title || String(question || "新研究").slice(0, 80),
+    question: existing?.question || question || "",
+    companyName: company?.nameZh || company?.ticker || existing?.companyName || "",
+    ticker: company?.ticker || existing?.ticker || "",
+    updatedAt: new Date().toISOString(),
+    optimistic: true
+  };
+  recentSessions = [entry, ...recentSessions.filter((s) => s.id !== id)];
+}
+
 function busyElapsedSeconds() {
   const startedAt = activeRun()?.startedAt || 0;
   if (!startedAt) return 0;
@@ -641,16 +673,20 @@ async function refreshStatus() {
 async function refreshSessions() {
   try {
     const data = await api("/api/research/sessions?limit=30");
-    recentSessions = data.sessions || [];
-    // Only reset if our active session was explicitly deleted server-side (the DB
-    // has other sessions but not ours). Never wipe live research just because the
-    // list is empty — that would discard an in-progress thread.
+    const server = data.sessions || [];
+    const serverIds = new Set(server.map((s) => s.id));
+    // 按 id 合并：仍在跑、服务端还没落库的乐观条目（在途新研究）留在最前并继续转圈；
+    // 服务端版覆盖同 id 乐观版（跑完即被真实数据替换）。
+    const pending = recentSessions.filter((s) => s.optimistic && running.has(s.id) && !serverIds.has(s.id));
+    recentSessions = [...pending, ...server];
+    // Only reset if our active session was explicitly deleted server-side:既不在服务端、
+    // 也不在跑（不是在途乐观）才算被删。绝不因列表为空或在途未落库就清掉在研线程。
     const activeId = getSessionId();
-    if (activeId && recentSessions.length && !recentSessions.some((s) => s.id === activeId)) {
+    if (activeId && server.length && !serverIds.has(activeId) && !running.has(activeId)) {
       setSessionId(null);
     }
   } catch {
-    recentSessions = [];
+    // 拉取失败：保留现有列表（含在途乐观条目），别让侧栏闪没。
   } finally {
     sessionsLoaded = true;
   }
@@ -1026,7 +1062,9 @@ async function runComparison(target) {
   if (!current?.ticker || isViewBusy()) return;
   const question = `把 ${current.nameZh || current.ticker} 和 ${target.name} 做个对比`;
   appendMessage("user", question);
-  const key = runKey(getSessionId(), current.ticker);
+  const sessionId = ensureSessionId();
+  optimisticSession(sessionId, { company: current, question });
+  const key = runKey(sessionId, current.ticker);
   startRun(key, "正在对比两家公司");
   render();
   try {
@@ -1034,7 +1072,7 @@ async function runComparison(target) {
       question,
       company: current,
       compareWith: { ticker: target.ticker, nameZh: target.name },
-      sessionId: getSessionId(),
+      sessionId,
       sessionTitle: sessionTitle(question),
       history: apiHistory(question),
       documents: getDocuments(),
@@ -1042,11 +1080,11 @@ async function runComparison(target) {
     }, key);
     if (result) applyChatResult(result, key, current);
     else if (key === activeRunKey()) appendMessage("assistant", "本轮没有生成对比。");
-    await refreshSessions();
   } catch (error) {
     if (key === activeRunKey()) appendMessage("assistant", `这轮对比失败：${error.message || "未知错误"}。`);
   } finally {
     endRun(key);
+    await refreshSessions();
     render();
   }
 }
@@ -1072,7 +1110,9 @@ async function returnToCompany(ticker, name) {
   if (!ticker) return;
   const sess = recentSessions.find((s) => s.ticker === ticker);
   if (sess) { await loadSession(sess.id); return; }
-  setSessionId(null);
+  // 找不到历史会话 → 明确新建一条干净研究（稳定 id），不再遗留 null。否则下一句追问会以
+  // null 落库另起一条重复行（问题 3 的 returnToCompany 分支根因）。
+  setSessionId(genSessionId());
   setPanel(null);
   setThread([]);
   setCompany({ ticker, nameZh: name || ticker, industry: marketLabelOf(ticker) });
@@ -1155,16 +1195,19 @@ async function sendChat(question) {
   if (company.dualListing && (switched || !prevCompany?.ticker)) {
     toast(`${company.nameZh} 双重上市：港股 ${company.dualListing.hk}｜美股 ${company.dualListing.us}，基本面按美股 ADR 口径。`);
   }
-  // 识别完成 → 起一条 run（key 锚到目标会话），进入检索/作答。run 让推理中可切到别的对话、
-  // 并行再发；结果按 key 落回对应会话（见 applyChatResult）。
-  const key = runKey(getSessionId(), company.ticker);
+  // 识别完成 → 研究开始前先落地稳定 sessionId（新研究/切换后都是全新一条），run 全程用它当键、
+  // chat 体带上它 → 后端 upsert 同一行；并乐观插入侧栏 → 新研究立刻出现（转圈），不等服务端。
+  // 推理中可切到别的对话、并行再发；结果按 key 落回对应会话（见 applyChatResult）。
+  const sessionId = ensureSessionId();
+  optimisticSession(sessionId, { company, question });
+  const key = runKey(sessionId, company.ticker);
   startRun(key, "正在检索和思考");
   render();
   try {
     const result = await chatStream({
       question,
       company,
-      sessionId: getSessionId(),
+      sessionId,
       sessionTitle: sessionTitle(question),
       history: apiHistory(question),
       documents: getDocuments(),
@@ -1172,9 +1215,11 @@ async function sendChat(question) {
     }, key);
     if (result) applyChatResult(result, key, company);
     else if (key === activeRunKey()) appendMessage("assistant", "本轮没有生成有效回复。");
-    await refreshSessions();
   } finally {
     endRun(key);
+    // 统一对账侧栏：成功→服务端真实条目替换乐观版；失败（纯新研究没落库）→死乐观条目被剪掉。
+    // 放在 endRun 之后、render 之前——一次 render 直接到位，无中间闪动。
+    await refreshSessions();
     render();
   }
 }
@@ -1231,17 +1276,19 @@ async function generateDeepResearch() {
     return;
   }
 
-  const key = runKey(getSessionId(), company.ticker);
+  const lastQuestion = [...thread].reverse().find((m) => m.role === "user")?.content || `分析 ${company.ticker}`;
+  const sessionId = ensureSessionId();
+  optimisticSession(sessionId, { company, question: lastQuestion });
+  const key = runKey(sessionId, company.ticker);
   startRun(key, "正在生成深度研究");
   render();
   try {
-    const lastQuestion = [...thread].reverse().find((m) => m.role === "user")?.content || `分析 ${company.ticker}`;
     const result = await api("/api/report/generate", {
       method: "POST",
       body: JSON.stringify({
         question: lastQuestion,
         company,
-        sessionId: getSessionId(),
+        sessionId,
         sessionTitle: sessionTitle(lastQuestion),
         documents: getDocuments(),
         history: thread.slice(-16).map((m) => ({ role: m.role, content: m.content })),
@@ -1255,11 +1302,11 @@ async function generateDeepResearch() {
     } else {
       toast(`${company.nameZh || company.ticker} 的深度研究完成了，点左侧查看。`);
     }
-    await refreshSessions();
   } catch (error) {
     if (key === activeRunKey()) appendMessage("assistant", `深度研究失败：${error.message || "未知错误"}。`);
   } finally {
     endRun(key);
+    await refreshSessions();
     render();
   }
 }
