@@ -251,6 +251,66 @@ export async function getMarketSnapshot(ticker) {
   };
 }
 
+// 拉日线收盘价（统一整成 newest-first），用于算区间回报。免费档历史价美股可得
+// （TwelveData 主、FMP light 兜底）；港股普遍拿不到 → 返回空数组，上层优雅跳过。
+async function fetchDailyCloses(ticker) {
+  const normalize = (rows) =>
+    rows
+      .filter((v) => v && v.date && Number.isFinite(v.close))
+      .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)); // newest-first
+
+  // TwelveData（美股 + 部分港股，但港股 free 多 404）
+  if (env("TWELVEDATA_API_KEY")) {
+    try {
+      const symbol = toTwelveDataSymbol(ticker);
+      const data = await fetchJson(
+        `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=1day&outputsize=260&apikey=${env("TWELVEDATA_API_KEY")}`,
+        { timeoutMs: 6000 }
+      );
+      const closes = normalize((Array.isArray(data?.values) ? data.values : []).map((v) => ({ date: v.datetime, close: Number(v.close) })));
+      if (closes.length >= 20) return closes;
+    } catch { /* fall through to FMP */ }
+  }
+
+  // FMP light（美股；免费档不覆盖港股）
+  if (detectMarket(ticker) === "US" && env("FMP_API_KEY")) {
+    try {
+      const data = await fetchJson(
+        `https://financialmodelingprep.com/stable/historical-price-eod/light?symbol=${encodeURIComponent(ticker)}&apikey=${env("FMP_API_KEY")}`,
+        { timeoutMs: 6000 }
+      );
+      const rows = Array.isArray(data) ? data : (Array.isArray(data?.historical) ? data.historical : []);
+      const closes = normalize(rows.map((r) => ({ date: r.date, close: Number(r.price ?? r.close ?? r.adjClose) })));
+      if (closes.length >= 20) return closes;
+    } catch { /* fall through */ }
+  }
+  return [];
+}
+
+// 区间回报：近 1 月 / 年初至今。给估值与动量一个时间维度（"现价相对一个月前/年初的位置"）。
+// 美股可得，港股免费档拿不到 → providerStatus:"missing"（接地条/UI 不显示，诚实跳过）。
+export async function getRangeReturns(ticker) {
+  const closes = await fetchDailyCloses(ticker);
+  if (closes.length < 20) return { providerStatus: "missing", oneMonthPct: null, ytdPct: null };
+  const latest = closes[0];
+  const pctFrom = (base) => (base && base.close ? Number((((latest.close - base.close) / base.close) * 100).toFixed(1)) : null);
+  const latestDate = new Date(latest.date);
+  const monthAgo = new Date(latestDate);
+  monthAgo.setDate(monthAgo.getDate() - 30);
+  const monthAgoStr = monthAgo.toISOString().slice(0, 10);
+  const yearStart = `${latestDate.getFullYear()}-01-01`;
+  // 近 1 月：最近一个日期 ≤ 30 天前的收盘；年初至今：上一年最后一个交易日收盘（date < 今年元旦）。
+  const m1 = closes.find((c) => c.date <= monthAgoStr);
+  const ytdBase = closes.find((c) => c.date < yearStart);
+  return {
+    providerStatus: "ok",
+    asOf: latest.date,
+    latest: latest.close,
+    oneMonthPct: pctFrom(m1),
+    ytdPct: pctFrom(ytdBase)
+  };
+}
+
 export function marketSnapshotToMarkdown(snapshot) {
   if (!snapshot || snapshot.providerStatus !== "ok") {
     return "实时行情：尚未接入可用行情源。";

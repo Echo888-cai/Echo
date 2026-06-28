@@ -8,7 +8,7 @@
  */
 
 import { withTimeout } from "../utils/async.js";
-import { getMarketSnapshot } from "../../marketData.js";
+import { getMarketSnapshot, getRangeReturns } from "../../marketData.js";
 import { getNewsSnapshot } from "../../newsData.js";
 import { getFinancials, getAnalystEstimates, getCompanyProfile, getDividendHistory, getRevenueSegments } from "../../financialData.js";
 import { getRecentFilings } from "../../filingData.js";
@@ -82,11 +82,16 @@ export async function collectDataSources({ company, suppliedMarketSnapshot = nul
     // Revenue segmentation (cloud / AI / product lines) — US only, best-effort.
     isUS(company.ticker)
       ? withTimeout(getRevenueSegments(company.ticker), 6000, { providerStatus: "missing" })
-      : Promise.resolve({ providerStatus: "missing" })
+      : Promise.resolve({ providerStatus: "missing" }),
+    // 区间回报（近1月/年初至今）——美股可得、港股免费档拿不到时返回 missing。
+    withTimeout(getRangeReturns(company.ticker), 6500, { providerStatus: "missing" })
   ]);
 
-  const [market, news, financials, filings, estimates, profileResult, segmentsResult] = tasks;
+  const [market, news, financials, filings, estimates, profileResult, segmentsResult, rangesResult] = tasks;
   const marketSnapshot = market.status === "fulfilled" ? market.value : fallbackMarketSnapshot(company.ticker, market.reason?.message || "行情失败");
+  // 区间回报挂到行情快照上，随 marketSnapshot 一路流到 prompt / 前端 / 决策面板。
+  const ranges = rangesResult?.status === "fulfilled" ? rangesResult.value : null;
+  if (ranges?.providerStatus === "ok") marketSnapshot.ranges = ranges;
   // Cache successful snapshots
   if (marketSnapshot.providerStatus === "ok") {
     try { saveMarketSnapshot(marketSnapshot); } catch {}
@@ -99,7 +104,7 @@ export async function collectDataSources({ company, suppliedMarketSnapshot = nul
     financialsData.segments = segments;
   }
   return {
-    marketSnapshot: market.status === "fulfilled" ? market.value : fallbackMarketSnapshot(company.ticker, market.reason?.message || "行情失败"),
+    marketSnapshot, // 已含 ranges（区间回报）
     newsSnapshot: news.status === "fulfilled" ? news.value : fallbackNewsSnapshot(company, news.reason?.message || "新闻失败"),
     financialsData,
     filingsData: filings.status === "fulfilled" ? filings.value : { providerStatus: "missing", filings: [], errors: [filings.reason?.message || "公告失败"] },

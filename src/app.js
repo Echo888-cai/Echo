@@ -1193,6 +1193,15 @@ function renderSnapshotCard(company, panel, thread) {
   };
   const pe = metricValue("PE");
   const cap = metricValue("市值");
+  // 区间回报（近1月/年初至今）——美股可得，港股缺则不显示。带涨跌色。
+  const ranges = panel?.price?.ranges || null;
+  const pctChip = (label, pct) => {
+    if (pct === null || pct === undefined || Number.isNaN(Number(pct))) return "";
+    const n = Number(pct);
+    const dir = n > 0 ? "is-up" : n < 0 ? "is-down" : "is-flat";
+    return `<div class="snapshot-metric"><span>${label}</span><strong class="rng ${dir}">${n > 0 ? "+" : ""}${n}%</strong></div>`;
+  };
+  const rangeChips = ranges ? `${pctChip("近1月", ranges.oneMonthPct)}${pctChip("年初至今", ranges.ytdPct)}` : "";
 
   const quoteBlock = priceNum
     ? `<div class="snapshot-quote">
@@ -1201,10 +1210,11 @@ function renderSnapshotCard(company, panel, thread) {
       </div>`
     : "";
 
-  const metricChips = (pe || cap)
+  const metricChips = (pe || cap || rangeChips)
     ? `<div class="snapshot-metrics">
         ${pe ? `<div class="snapshot-metric"><span>TTM PE</span><strong>${esc(pe)}</strong></div>` : ""}
         ${cap ? `<div class="snapshot-metric"><span>市值</span><strong>${esc(cap)}</strong></div>` : ""}
+        ${rangeChips}
       </div>`
     : "";
 

@@ -246,6 +246,31 @@ function evidenceSignalsFromNews(newsSnapshot = null) {
     });
 }
 
+// 通用"已验证外部信号"：从本轮校验过的网页证据 + 实时新闻里取最相关的几条，供**本地兜底**
+// 的事实/判断直接引用——之前证据只进了模型 prompt，本地兜底（模型超时/无 key 时）完全没用
+// 上证据，对着 seed 档案空谈。这里让本地兜底也接地：带来源与日期，永远有出处。
+function validatedSignalLines(context = {}, limit = 3) {
+  const out = [];
+  const seen = new Set();
+  const push = (title, src, date, url) => {
+    const key = String(title || "").trim().toLowerCase();
+    if (!title || seen.has(key)) return;
+    seen.add(key);
+    out.push(`${title}（${src}${date ? `，${date}` : ""}）${url ? `：${url}` : ""}`);
+  };
+  for (const item of Array.isArray(context.webEvidence?.evidence) ? context.webEvidence.evidence : []) {
+    if (out.length >= limit) break;
+    push(item.title || item.url, item.source || item.sourceType || "网页证据", item.publishedAt, item.url);
+  }
+  if (out.length < limit && context.newsSnapshot?.providerStatus === "ok") {
+    for (const a of context.newsSnapshot.articles || []) {
+      if (out.length >= limit) break;
+      push(a.title, a.source || "新闻", a.publishedAt, a.url);
+    }
+  }
+  return out;
+}
+
 function competitorReplyFromPanel(panel, question = "", dataSources = {}, context = {}) {
   const profile = companyByTicker(panel?.ticker) || {};
   const name = panel?.companyName || profile.nameZh || panel?.ticker || "这家公司";
@@ -508,6 +533,16 @@ export function researchReplyFromPanel(panel, question = "", dataSources = {}, c
   const holding = panel.userContext?.cost || panel.userContext?.shares
     ? `你提供的持仓是成本 ${panel.userContext?.cost || "未提供"}，持股 ${panel.userContext?.shares || "未提供"}，这会影响回本赔率和仓位风险。`
     : "你还没有提供成本、持股和周期，所以我先按公司质量和研究赔率判断。";
+  // 已验证外部信号（网页证据 + 实时新闻）——让本地兜底也基于真实证据，不只是 seed 档案。
+  const signals = validatedSignalLines(context);
+  const signalsFact = signals.length
+    ? `6. 外部信号（本轮已验证，来自网页证据/实时新闻）：${signals.join("；")}。`
+    : null;
+  // 区间回报（近1月/年初至今）——美股可得时给动量上下文。
+  const ranges = context.marketSnapshot?.ranges;
+  const rangeFact = ranges?.providerStatus === "ok" && (ranges.oneMonthPct !== null || ranges.ytdPct !== null)
+    ? `区间回报：近 1 月 ${fmtPct(ranges.oneMonthPct)}、年初至今 ${fmtPct(ranges.ytdPct)}（截至 ${ranges.asOf}）。这是市场位置，不等于公司价值。`
+    : null;
 
   const lines = [
     `北京时间 ${formatBeijingMinute()}，${name} 最近的状态是：${String(panel.oneLineView || `研究状态为${status}`).replace(/。$/, "")}。我不会因为数据缺口就停止判断，但会把置信度和证据缺口说清楚。`,
@@ -517,10 +552,12 @@ export function researchReplyFromPanel(panel, question = "", dataSources = {}, c
     "",
     "事实",
     `1. 行情：当前可用价格口径是 ${price}，来源 ${panel.price?.source || dataSources.market?.provider || "未接入"}，时间 ${priceTime}。这只能说明市场状态，不能直接等同于公司价值。`,
+    rangeFact,
     `2. 基本面：${humanStatus(fundamental?.status)}。${fundamentalText}。`,
     `3. 估值：${humanStatus(valuation?.status)}。${valuationText}。`,
     `4. 股东回报：${humanStatus(shareholder?.status)}。${shareholderText}。`,
     `5. 风险：${humanStatus(risk?.status)}。${riskText}。`,
+    signalsFact,
     "",
     "推断",
     buildInferenceSection({ panel, question, dataSources }),
@@ -542,7 +579,7 @@ export function researchReplyFromPanel(panel, question = "", dataSources = {}, c
     `3. ${valuation?.summary ? "估值修复没有基本面支撑" : "估值口径补齐后发现并不便宜"}。`,
     `4. ${missing.length ? `关键证据长期补不上：${missing.slice(0, 4).join("、")}` : "新增公告出现与当前判断相反的信息"}。`,
     "",
-    `我的判断：${name} 现在不能只看价格，也不能因为缺几项数据就放弃判断。更准确的说法是：商业逻辑先成立一部分，但最终要靠利润质量、自由现金流和股东回报来兑现。关键不是赌一个反弹，而是确认业务增长、利润质量和现金流能不能穿透当前风险。`,
+    `我的判断：${name} 现在不能只看价格，也不能因为缺几项数据就放弃判断。${signals.length ? `本轮已把 ${signals.length} 条已验证外部信号纳入交叉印证（见“事实”第 6 条），而非只对着本地档案空谈；` : ""}更准确的说法是：商业逻辑先成立一部分，但最终要靠利润质量、自由现金流和股东回报来兑现。关键不是赌一个反弹，而是确认业务增长、利润质量和现金流能不能穿透当前风险。`,
     "",
     "还缺什么（不影响当前判断，只影响置信度）",
     backendGapLines(panel, dataSources)[0] || "关键证据基本到位，下一步主要做交叉校验。",
@@ -569,6 +606,13 @@ export function normalizeResearchAnswer(content, panel, dataSources = {}) {
     text += `\n\n来源：\n${sourceLines(panel, dataSources).join("\n")}`;
   }
   return text;
+}
+
+// 涨跌百分比格式化（带 +/- 号）。null → "—"。
+function fmtPct(pct) {
+  if (pct === null || pct === undefined || !Number.isFinite(Number(pct))) return "—";
+  const n = Number(pct);
+  return `${n > 0 ? "+" : ""}${n}%`;
 }
 
 // 对话上文：把最近几轮对话压缩进 prompt，让追问能承接（"它的竞对是谁""那第二个呢"）。
@@ -632,6 +676,10 @@ export function buildChatPrompt(question, panel, dataSources = {}, context = {})
   const webEvidencePrompt = webEvidenceToPrompt(context.webEvidence);
   const portraitBlock = context.portraitContext ? `\n${context.portraitContext}\n` : "";
   const historyBlock = conversationHistoryBlock(context.history);
+  const ranges = context.marketSnapshot?.ranges;
+  const rangeLine = ranges?.providerStatus === "ok" && (ranges.oneMonthPct !== null || ranges.ytdPct !== null)
+    ? `区间回报：近1月 ${fmtPct(ranges.oneMonthPct)}、年初至今 ${fmtPct(ranges.ytdPct)}（截至 ${ranges.asOf}）`
+    : "";
   return `用户问题：${question}
 ${historyBlock}${portraitBlock}
 当前研究对象：${panel.companyName}（${panel.ticker}）
@@ -647,7 +695,7 @@ ${drivers}
 已接入数据：${connected}
 缺失数据：${missing}
 行情：${dataSources.market?.provider || panel.price?.source || "缺失"}，${panel.price?.value || "缺失"}${panel.price?.change && panel.price.change !== "暂不可用" ? `（${panel.price.change}）` : ""}${panel.price?.timestamp ? `，截至 ${panel.price.timestamp}` : ""}
-来源候选：
+${rangeLine ? `${rangeLine}\n` : ""}来源候选：
 ${sources}
 ${hasLiveFin
     ? `已核到的实时财报（来源 ${context.financialsData.source}${context.financialsData.period ? ` · 截至 ${context.financialsData.period}` : ""}）——本轮所有财务数字的唯一事实源：\n${liveFinancialsBlock}`

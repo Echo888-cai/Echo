@@ -196,6 +196,10 @@ export function buildDecisionPanel(input) {
       change: changeValue,
       source: hasPrice ? marketSnapshot.source : "行情源不可用",
       timestamp: hasPrice ? marketSnapshot.asOf || "" : "",
+      // 区间回报（近1月/年初至今）随面板持久化，前端快照卡渲染、恢复历史时一致。
+      ranges: hasPrice && marketSnapshot.ranges?.providerStatus === "ok"
+        ? { oneMonthPct: marketSnapshot.ranges.oneMonthPct, ytdPct: marketSnapshot.ranges.ytdPct }
+        : null,
       evidence: [
         evidence({
           source: hasPrice ? marketSnapshot.source : "行情源",
