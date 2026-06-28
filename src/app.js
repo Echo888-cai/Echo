@@ -164,20 +164,39 @@ function resolveUsTicker(text = "") {
 }
 
 let apiStatus = null;
-let isBusy = false;
-let busyStartedAt = 0;
-let busyLabel = "模型思考中";
-let busyTimer = null;
 let recentSessions = [];
 let sessionsLoaded = false;
 let historyOpen = true;
-// 流式作答：tokens 边到边渲染。streamingActive 时用 renderStreamingCard 顶掉骨架屏，
-// 后续 token 只改 #stream-body 的 innerHTML（不整页重渲，避免抖动）。
-let streamingActive = false;
+// 并行会话：每个在跑的请求一条 run（key=sessionId；新研究用 new:<ticker>）。这样推理中可以
+// 切到别的对话、甚至并行再发；正在跑的会话在侧栏显示转圈，结果按 key 落回对应会话。
+const running = new Map(); // key -> { label, startedAt, reasoningChars, snapshot }
+let busyTimer = null;
+// 解析阶段（识别公司/对比对象，2-5s）的瞬时指示，不绑定具体 run。
+let resolving = false;
+let resolvingLabel = "正在检索和思考";
+// 流式作答：只渲染"前台（当前激活）"那条 run 的 tokens；切到别的会话后，后台 run 的
+// token 不再落到当前视图（避免把 A 的流写进 B）。streamingKey 标记当前在前台流的 run。
+let streamingKey = null;
 let streamingText = "";
-// 思考型模型（deepseek-v4）出首个答案 token 前会先推理一阵，期间没有内容 token。
-// 累计推理字数，让等待卡显示"正在推理 · 已 N 字"，而不是干等一片骨架屏。
-let reasoningChars = 0;
+
+function runKey(sessionId, ticker) { return sessionId || (ticker ? `new:${ticker}` : "new"); }
+function activeRunKey() { return runKey(getSessionId(), getCompany()?.ticker); }
+function activeRun() { return running.get(activeRunKey()) || null; }
+function isActiveBusy() { return running.has(activeRunKey()); }
+// 当前视图是否在"忙"（解析阶段 或 当前会话有在跑的 run）——决定是否显示等待/流式卡。
+function isViewBusy() { return resolving || isActiveBusy(); }
+function snapshotActive() { return { thread: getThread(), company: getCompany(), panel: getPanel(), sessionId: getSessionId() }; }
+
+function startRun(key, label = "正在检索和思考") {
+  running.set(key, { label, startedAt: Date.now(), reasoningChars: 0, snapshot: snapshotActive() });
+  resolving = false;
+  if (!busyTimer) busyTimer = setInterval(updateBusyClock, 1000);
+}
+function endRun(key) {
+  running.delete(key);
+  if (streamingKey === key) { streamingKey = null; streamingText = ""; }
+  if (!running.size && busyTimer) { clearInterval(busyTimer); busyTimer = null; }
+}
 
 function readStore(key, fallback) {
   try {
@@ -268,8 +287,9 @@ function setSessionId(id) {
 }
 
 function busyElapsedSeconds() {
-  if (!busyStartedAt) return 0;
-  return Math.max(0, Math.floor((Date.now() - busyStartedAt) / 1000));
+  const startedAt = activeRun()?.startedAt || 0;
+  if (!startedAt) return 0;
+  return Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
 }
 
 function updateBusyClock() {
@@ -281,21 +301,6 @@ function updateBusyClock() {
   document.querySelectorAll("[data-busy-phase]").forEach((node) => {
     if (node.textContent !== phase) node.textContent = phase;
   });
-}
-
-function startBusy(label = "模型思考中") {
-  isBusy = true;
-  busyLabel = label;
-  busyStartedAt = Date.now();
-  clearInterval(busyTimer);
-  busyTimer = setInterval(updateBusyClock, 1000);
-}
-
-function stopBusy() {
-  isBusy = false;
-  busyStartedAt = 0;
-  clearInterval(busyTimer);
-  busyTimer = null;
 }
 
 async function api(path, options = {}) {
@@ -313,11 +318,11 @@ async function api(path, options = {}) {
 
 // 流式聊天：读 SSE，token 事件边到边渲染，final 事件携带完整面板/估值/接地。
 // 端点不支持流式或中途出错（且还没拿到 final）时，回退到普通 JSON 请求，绝不丢回答。
-async function chatStream(body) {
-  streamingActive = false;
-  streamingText = "";
-  reasoningChars = 0;
+// key：这条 run 的会话键。只有当它还是"前台"（当前激活会话）时才把 token 渲染到视图；
+// 切到别的会话后 token 静默累计、不污染当前视图，final 仍按 key 落回对应会话。
+async function chatStream(body, key) {
   let finalResult = null;
+  const isFg = () => key && key === activeRunKey(); // 这条 run 此刻是否在前台
   try {
     const resp = await fetch("/api/chat", {
       method: "POST",
@@ -347,7 +352,8 @@ async function chatStream(body) {
         let json;
         try { json = JSON.parse(data); } catch { continue; }
         if (evt === "token") {
-          if (!streamingActive) { stopBusy(); streamingActive = true; render(); }
+          if (!isFg()) continue; // 后台 run：静默，不渲染到当前视图
+          if (streamingKey !== key) { streamingKey = key; streamingText = ""; render(); }
           streamingText += json.t || "";
           const node = document.getElementById("stream-body");
           if (node) node.innerHTML = `${markdownToHtml(streamingText)}<span class="stream-caret"></span>`;
@@ -357,9 +363,10 @@ async function chatStream(body) {
             conv.scrollTo({ top: conv.scrollHeight });
           }
         } else if (evt === "reasoning") {
-          // 推理期：累计字数，等待卡的 phase 行（1s tick）会读 reasoningChars 显示进度。
-          reasoningChars += json.n || 0;
-          updateBusyClock();
+          // 推理期：累计字数到这条 run；前台时等待卡的 phase 行（1s tick）会读出来。
+          const r = running.get(key);
+          if (r) r.reasoningChars += json.n || 0;
+          if (isFg()) updateBusyClock();
         } else if (evt === "final") {
           finalResult = json;
         } else if (evt === "error") {
@@ -370,8 +377,7 @@ async function chatStream(body) {
   } catch {
     if (!finalResult) finalResult = await api("/api/chat", { method: "POST", body: JSON.stringify(body) });
   } finally {
-    streamingActive = false;
-    streamingText = "";
+    if (streamingKey === key) { streamingKey = null; streamingText = ""; }
   }
   return finalResult;
 }
@@ -826,7 +832,7 @@ async function showPortrait() {
 }
 
 function clearResearch() {
-  stopBusy();
+  // 不动后台在跑的 run（并行）。只把当前视图切到一个干净的新研究。
   setThread([]);
   setPanel(null);
   setCompany(null);
@@ -862,7 +868,20 @@ function fallbackThreadFromSession(session) {
 }
 
 async function loadSession(id) {
-  if (!id || isBusy) return;
+  if (!id) return;
+  // 切到一个仍在生成的会话：从 run 快照恢复（含待答问题 + 等待/流式卡），不去拉服务端旧状态
+  // （服务端要等它完成才有新答案）。这让"推理中切走再切回"看到的是正在跑、而不是空。
+  const run = running.get(id);
+  if (run?.snapshot) {
+    const s = run.snapshot;
+    setSessionId(s.sessionId || id);
+    setCompany(s.company);
+    setPanel(s.panel);
+    setThread(s.thread);
+    location.hash = "#/";
+    render();
+    return;
+  }
   try {
     const data = await api(`/api/research/sessions/${encodeURIComponent(id)}`);
     const session = data.session;
@@ -887,7 +906,8 @@ async function loadSession(id) {
 }
 
 async function deleteSession(id) {
-  if (!id || isBusy) return;
+  if (!id) return;
+  if (running.has(id)) { toast("这条研究正在生成，完成后再删。"); return; }
   const item = recentSessions.find((session) => session.id === id);
   const title = item?.title || item?.question || "这条研究";
   const ok = window.confirm(`删除“${title}”？\n\n这会从本地 SQLite 里移除这条历史研究。`);
@@ -895,7 +915,6 @@ async function deleteSession(id) {
   try {
     await api(`/api/research/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
     if (getSessionId() === id) {
-      stopBusy();
       setThread([]);
       setPanel(null);
       setCompany(null);
@@ -911,12 +930,12 @@ async function deleteSession(id) {
 }
 
 async function clearAllSessions() {
-  if (isBusy || !recentSessions.length) return;
+  if (!recentSessions.length) return;
+  if (running.size) { toast("有研究正在生成，完成后再清空。"); return; }
   const ok = window.confirm("清空全部历史研究？\n\n这会删除本地 SQLite 里的所有历史记录。");
   if (!ok) return;
   try {
     await api("/api/research/sessions", { method: "DELETE" });
-    stopBusy();
     setThread([]);
     setPanel(null);
     setCompany(null);
@@ -963,6 +982,27 @@ function answerMetaFromResult(result) {
   };
 }
 
+// 把一次结果落地：若这条 run 仍在前台（当前会话）→ 更新视图并 appendMessage；否则它已在
+// 后台完成、服务端已存 → 只提示+刷新侧栏，不动当前视图（并行对话的核心路由）。
+function applyChatResult(result, key, company) {
+  const label = company?.nameZh || company?.ticker || "研究";
+  if (key === activeRunKey()) {
+    if (result.sessionId) setSessionId(result.sessionId);
+    if (result.decisionPanel) setPanel(result.decisionPanel);
+    const enrichedName = result.decisionPanel?.companyName;
+    if (company && enrichedName && company.nameZh === company.ticker && enrichedName !== company.ticker) {
+      setCompany({ ...company, nameZh: enrichedName });
+    }
+    appendMessage("assistant", result.content || "本轮没有生成有效回复。", answerMetaFromResult(result), { keepScroll: true });
+    if (result.positionSaved) toast(`已记账 ${label} 的持仓信息。`);
+    else if (result.portrait?.created) toast(`已为 ${label} 建立长期画像。`);
+    else if (result.portrait?.changed) toast(`已更新 ${label} 的长期画像（判断有变化）。`);
+    return true;
+  }
+  toast(`${label} 的研究完成了，点左侧查看。`);
+  return false;
+}
+
 // 推荐选项消息：检测到对比意图时，不直接切换/直接答，弹一条带按钮的助手消息让用户选。
 function appendCompareChoice(current, target) {
   const cName = current.nameZh || current.ticker;
@@ -983,10 +1023,11 @@ function appendCompareChoice(current, target) {
 // 那家也跑一遍数据塞进 prompt）。答案落在当前线程，不跳页、不新开对话。
 async function runComparison(target) {
   const current = getCompany();
-  if (!current?.ticker || isBusy) return;
+  if (!current?.ticker || isViewBusy()) return;
   const question = `把 ${current.nameZh || current.ticker} 和 ${target.name} 做个对比`;
   appendMessage("user", question);
-  startBusy("正在对比两家公司");
+  const key = runKey(getSessionId(), current.ticker);
+  startRun(key, "正在对比两家公司");
   render();
   try {
     const result = await chatStream({
@@ -998,40 +1039,37 @@ async function runComparison(target) {
       history: apiHistory(question),
       documents: getDocuments(),
       memory: {}
-    });
-    if (!result) throw new Error("对比没有返回结果");
-    if (result.sessionId) setSessionId(result.sessionId);
-    if (result.decisionPanel) setPanel(result.decisionPanel);
-    appendMessage("assistant", result.content || "本轮没有生成对比。", answerMetaFromResult(result), { keepScroll: true });
+    }, key);
+    if (result) applyChatResult(result, key, current);
+    else if (key === activeRunKey()) appendMessage("assistant", "本轮没有生成对比。");
     await refreshSessions();
   } catch (error) {
-    appendMessage("assistant", `这轮对比失败：${error.message || "未知错误"}。`);
+    if (key === activeRunKey()) appendMessage("assistant", `这轮对比失败：${error.message || "未知错误"}。`);
   } finally {
-    stopBusy();
+    endRun(key);
     render();
   }
 }
 
-// "只研究新公司"：走正常 sendChat 切换路径（会触发软分隔+留退路）。
+// "只研究新公司"：走正常 sendChat 切换路径（会触发软分隔+留退路；sendChat 自己管 run 生命周期）。
 async function switchAndResearch(target) {
-  if (isBusy) return;
+  if (isViewBusy()) return;
   const q = `${target.name}最近怎么样？`;
   appendMessage("user", q);
-  startBusy("正在检索和思考");
-  render();
+  resolving = true; resolvingLabel = "正在检索和思考"; render();
   try {
     await sendChat(q);
   } catch (error) {
     appendMessage("assistant", `这轮研究失败：${error.message || "未知错误"}。`);
   } finally {
-    stopBusy();
+    resolving = false;
     render();
   }
 }
 
 // 软分隔上的"回到上一家"：优先恢复那家最近的历史会话，没有就直接切回开新研究。
 async function returnToCompany(ticker, name) {
-  if (isBusy || !ticker) return;
+  if (!ticker) return;
   const sess = recentSessions.find((s) => s.ticker === ticker);
   if (sess) { await loadSession(sess.id); return; }
   setSessionId(null);
@@ -1047,7 +1085,7 @@ async function sendChat(question) {
   // 对比意图：已有在研公司 + 句子在做对比 + 点名了另一家公司 → 不直接切换/不直接答，
   // 弹推荐选项，让用户选"在本对话里对比"还是"只研究新公司"（避免突然跳走/张冠李戴）。
   if (prevCompany?.ticker && isComparisonQuestion(question) && mentionsNewCompanyStrong(question)) {
-    if (isBusy) { busyLabel = "正在识别对比对象"; render(); }
+    resolving = true; resolvingLabel = "正在识别对比对象"; render();
     // 关键：要解析的是**另一家**公司，不是当前这家。先把当前公司的名字/代码从问句里抠掉，
     // 否则 "苹果和英伟达比" 会先命中"苹果"(=当前公司) → 误判成非对比、落回普通追问。
     const target = await resolveCompany(stripCompanyMentions(question, prevCompany));
@@ -1065,7 +1103,7 @@ async function sendChat(question) {
   if (shouldResolve) {
     // 中文名要走一轮 LLM 解析（2–5s），给个明确的"正在识别公司…"微状态，
     // 而不是让用户对着"正在检索和思考"干等、以为卡住了。
-    if (isBusy) { busyLabel = "正在识别公司"; render(); }
+    resolving = true; resolvingLabel = "正在识别公司"; render();
     const resolved = await resolveCompany(question);
     // A 股（沪深）暂不支持：给专门提示，而不是泛泛的"没识别出"。
     if (resolved?.unsupported) {
@@ -1117,37 +1155,28 @@ async function sendChat(question) {
   if (company.dualListing && (switched || !prevCompany?.ticker)) {
     toast(`${company.nameZh} 双重上市：港股 ${company.dualListing.hk}｜美股 ${company.dualListing.us}，基本面按美股 ADR 口径。`);
   }
-  // 识别完成，回到通用检索状态再发起主请求。
-  if (isBusy) busyLabel = "正在检索和思考";
+  // 识别完成 → 起一条 run（key 锚到目标会话），进入检索/作答。run 让推理中可切到别的对话、
+  // 并行再发；结果按 key 落回对应会话（见 applyChatResult）。
+  const key = runKey(getSessionId(), company.ticker);
+  startRun(key, "正在检索和思考");
   render();
-
-  const result = await chatStream({
-    question,
-    company,
-    sessionId: getSessionId(),
-    sessionTitle: sessionTitle(question),
-    history: apiHistory(question),
-    documents: getDocuments(),
-    memory: {}
-  });
-  if (!result) throw new Error("本轮没有返回结果");
-  if (result.sessionId) setSessionId(result.sessionId);
-  if (result.decisionPanel) setPanel(result.decisionPanel);
-  // Enrich bare-ticker companies (e.g. "RKLB" → "Rocket Lab USA") once the
-  // backend returns a real name from the FMP profile fetch.
-  const enrichedName = result.decisionPanel?.companyName;
-  if (enrichedName && company.nameZh === company.ticker && enrichedName !== company.ticker) {
-    company = { ...company, nameZh: enrichedName };
-    setCompany(company);
+  try {
+    const result = await chatStream({
+      question,
+      company,
+      sessionId: getSessionId(),
+      sessionTitle: sessionTitle(question),
+      history: apiHistory(question),
+      documents: getDocuments(),
+      memory: {}
+    }, key);
+    if (result) applyChatResult(result, key, company);
+    else if (key === activeRunKey()) appendMessage("assistant", "本轮没有生成有效回复。");
+    await refreshSessions();
+  } finally {
+    endRun(key);
+    render();
   }
-  // 流式刚结束：原地定格，别把正在阅读的用户甩到底部
-  appendMessage("assistant", result.content || "本轮没有生成有效回复。", answerMetaFromResult(result), { keepScroll: true });
-  // 长期画像反馈：建档/判断变化时轻提示，让用户感知"研究在沉淀"。
-  if (result.positionSaved) toast(`已记账 ${company.nameZh || company.ticker} 的持仓信息。`);
-  else if (result.portrait?.created) toast(`已为 ${company.nameZh || company.ticker} 建立长期画像。`);
-  else if (result.portrait?.changed) toast(`已更新 ${company.nameZh || company.ticker} 的长期画像（判断有变化）。`);
-  await refreshSessions();
-  render();
 }
 
 function hostFromUrl(url = "") {
@@ -1194,7 +1223,7 @@ function dataSourceGrounding(dataSources = {}) {
 }
 
 async function generateDeepResearch() {
-  if (isBusy) return;
+  if (isViewBusy()) return;
   const company = getCompany();
   const thread = getThread();
   if (!company) {
@@ -1202,7 +1231,8 @@ async function generateDeepResearch() {
     return;
   }
 
-  startBusy("正在生成深度研究");
+  const key = runKey(getSessionId(), company.ticker);
+  startRun(key, "正在生成深度研究");
   render();
   try {
     const lastQuestion = [...thread].reverse().find((m) => m.role === "user")?.content || `分析 ${company.ticker}`;
@@ -1218,18 +1248,18 @@ async function generateDeepResearch() {
         memory: {}
       })
     });
-    if (result.sessionId) setSessionId(result.sessionId);
-    if (result.decisionPanel) setPanel(result.decisionPanel);
-    appendMessage("assistant", result.markdown || "深度研究没有生成有效内容。", {
-      type: "deep_research",
-      mode: result.mode,
-      model: result.model
-    });
+    if (key === activeRunKey()) {
+      if (result.sessionId) setSessionId(result.sessionId);
+      if (result.decisionPanel) setPanel(result.decisionPanel);
+      appendMessage("assistant", result.markdown || "深度研究没有生成有效内容。", { type: "deep_research", mode: result.mode, model: result.model }, { keepScroll: true });
+    } else {
+      toast(`${company.nameZh || company.ticker} 的深度研究完成了，点左侧查看。`);
+    }
     await refreshSessions();
   } catch (error) {
-    appendMessage("assistant", `深度研究失败：${error.message || "未知错误"}。`);
+    if (key === activeRunKey()) appendMessage("assistant", `深度研究失败：${error.message || "未知错误"}。`);
   } finally {
-    stopBusy();
+    endRun(key);
     render();
   }
 }
@@ -1421,7 +1451,7 @@ function renderResearch() {
         </div>` : ""}
         <div class="conversation ${hasResearch ? "" : "is-empty"}">
           ${thread.length ? thread.map(renderMessage).join("") : renderEmptyState()}
-          ${streamingActive ? renderStreamingCard() : (isBusy ? renderWaitingCard() : "")}
+          ${(streamingKey && streamingKey === activeRunKey()) ? renderStreamingCard() : (isViewBusy() ? renderWaitingCard() : "")}
         </div>
         ${renderComposer(company)}
       </section>
@@ -1453,12 +1483,13 @@ function renderSessionItem(session, activeSessionId) {
   const active = session.id === activeSessionId;
   const title = session.title || session.question || session.companyName || session.ticker || "未命名研究";
   const company = session.companyName || session.company_name || session.ticker || "研究对象";
-  return `<div class="session-item ${active ? "is-active" : ""}">
+  const isRunning = running.has(session.id); // 这条会话正在后台生成 → 显示转圈
+  return `<div class="session-item ${active ? "is-active" : ""} ${isRunning ? "is-running" : ""}">
     <button class="session-open" type="button" data-action="load-session" data-id="${esc(session.id)}">
       <strong>${esc(title)}</strong>
-      <span>${esc(company)}</span>
+      <span>${isRunning ? '<i class="session-spin" aria-hidden="true"></i>正在生成…' : esc(company)}</span>
     </button>
-    <button class="session-delete" type="button" data-action="delete-session" data-id="${esc(session.id)}" aria-label="删除历史研究">×</button>
+    ${isRunning ? "" : `<button class="session-delete" type="button" data-action="delete-session" data-id="${esc(session.id)}" aria-label="删除历史研究">×</button>`}
   </div>`;
 }
 
@@ -1471,7 +1502,9 @@ const WAIT_PHASES = [
 
 function waitPhase() {
   // 模型已经在推理（思考型模型出答案前的阶段）：显示活的推理字数，比静态骨架更诚实。
-  if (reasoningChars > 0 && !streamingActive) return `模型正在推理 · 已 ${reasoningChars} 字`;
+  const rc = activeRun()?.reasoningChars || 0;
+  const streaming = streamingKey && streamingKey === activeRunKey();
+  if (rc > 0 && !streaming) return `模型正在推理 · 已 ${rc} 字`;
   return WAIT_PHASES[Math.min(WAIT_PHASES.length - 1, Math.floor(busyElapsedSeconds() / 5))];
 }
 
@@ -1483,7 +1516,7 @@ function renderWaitingCard() {
       </div>
       <div class="wait-row">
         <span class="wait-orb" aria-hidden="true"></span>
-        <strong>${esc(busyLabel)}</strong>
+        <strong>${esc(activeRun()?.label || resolvingLabel)}</strong>
         <em>已等待 <span data-busy-seconds>${busyElapsedSeconds()}</span>s</em>
       </div>
       <p class="wait-phase" data-busy-phase>${esc(waitPhase())}</p>
@@ -1525,8 +1558,8 @@ function renderStreamingCard() {
 }
 
 function renderComposer(company) {
-  const status = isBusy
-    ? `${esc(busyLabel)} · 已等待 <b data-busy-seconds>${busyElapsedSeconds()}</b>s`
+  const status = isViewBusy()
+    ? `${esc(activeRun()?.label || resolvingLabel)} · 已等待 <b data-busy-seconds>${busyElapsedSeconds()}</b>s`
     : company
       ? `${esc(company.nameZh || company.ticker)} · ${esc(company.ticker)}`
       : "先输入公司名、港股或美股代码";
@@ -1886,8 +1919,22 @@ function renderSettings() {
 }
 
 function render() {
+  // 后台会话完成会触发 render() 重建视图——若用户正在 composer 里打字，full innerHTML 会清掉
+  // 输入。渲染前抓住 textarea 内容/光标，渲染后还原，避免并行场景下"打字打一半被清空"。
+  const ta = document.querySelector(".composer textarea");
+  const preserved = ta ? { value: ta.value, start: ta.selectionStart, end: ta.selectionEnd, focused: document.activeElement === ta } : null;
   if (currentRoute() === "/settings") renderSettings();
   else renderResearch();
+  if (preserved && preserved.value) {
+    const next = document.querySelector(".composer textarea");
+    if (next) {
+      next.value = preserved.value;
+      if (preserved.focused) {
+        next.focus();
+        try { next.setSelectionRange(preserved.start, preserved.end); } catch { /* ignore */ }
+      }
+    }
+  }
 }
 
 document.addEventListener("submit", async (event) => {
@@ -1896,17 +1943,17 @@ document.addEventListener("submit", async (event) => {
   event.preventDefault();
   const input = form.elements.query;
   const question = input.value.trim();
-  if (!question || isBusy) return;
+  // 只挡"当前会话正忙"——别的会话在后台跑不影响在这条/新建里发问（并行）。
+  if (!question || isViewBusy()) return;
   input.value = "";
   appendMessage("user", question);
-  startBusy("正在检索和思考");
-  render();
+  resolving = true; resolvingLabel = "正在检索和思考"; render();
   try {
     await sendChat(question);
   } catch (error) {
     appendMessage("assistant", `这轮研究失败：${error.message || "未知错误"}。`);
   } finally {
-    stopBusy();
+    resolving = false;
     render();
   }
 });
@@ -1944,7 +1991,7 @@ document.addEventListener("click", async (event) => {
     }
   }
   if (action === "example") {
-    if (isBusy) return;
+    if (isViewBusy()) return;
     const input = document.querySelector(".composer textarea");
     if (input) {
       input.value = target.dataset.query || "";
