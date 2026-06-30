@@ -1044,6 +1044,8 @@ function answerMetaFromResult(result) {
     comparison: result.comparison || null,
     // ② 本轮识别到的其他标的（各带紧凑估值/盈亏），用于"本轮聚焦"多卡渲染。
     otherHoldings: Array.isArray(result.otherHoldings) ? result.otherHoldings : null,
+    // B2 港美双上市：港股口径实时价 + HKD 盈亏（asked=HK 且拉到才有）。
+    dualQuote: result.dualQuote || null,
     evidence: provenanceFromPanel(result.decisionPanel)
   };
 }
@@ -1564,10 +1566,12 @@ function renderSnapshotCard(company, panel, thread) {
     : "";
 
   const dual = company?.dualListing;
+  // 智能默认：基本面/估值始终走美股 ADR（数据全）；用户问的若是港股代码，则点明盈亏按港股口径。
+  const askedHk = !!(dual && dual.asked && /\.HK$/i.test(dual.asked));
   const dualNote = dual
-    ? `<div class="snapshot-dual" title="同一家公司在港股和美股双重上市；FMP 免费档只覆盖美股 ADR，所以基本面与估值统一按美股口径，行情两地可分别查。">
+    ? `<div class="snapshot-dual" title="同一家公司在港股和美股双重上市；FMP 免费档只覆盖美股 ADR，所以基本面与估值统一按美股口径。${askedHk ? "你问的是港股，盈亏请按港股价 + HKD 成本算。" : "行情两地可分别查。"}">
         <span class="dual-badge">双重上市</span>
-        <span class="dual-text">港股 ${esc(dual.hk)}｜美股 ${esc(dual.us)} · 基本面按美股 ADR 口径</span>
+        <span class="dual-text">港股 ${esc(dual.hk)}｜美股 ${esc(dual.us)} · 基本面按美股 ADR 口径${askedHk ? "；你问港股 → 盈亏按港股口径" : ""}</span>
       </div>`
     : "";
 
@@ -1949,6 +1953,22 @@ function renderFocusStrip(meta) {
   </div>`;
 }
 
+// B2 港美双上市：用户问港股那一边时，单独给一张"港股口径"小卡——港股实时价 + 按 HKD 成本算的
+// 精确盈亏。和下方 ADR 口径的估值条并存，明确区分"盈亏看港股、估值看 ADR"，不再用美元价错算港股盈亏。
+function renderDualQuote(dq) {
+  if (!dq || !Number.isFinite(Number(dq.price))) return "";
+  const chg = fmtSigned(dq.changePct);
+  const parts = [`<span class="dq-price">${esc(fmtMoney(dq.price))} <em class="dq-ccy">${esc(dq.currency || "HKD")}</em>${chg ? ` <em class="${dirClass(dq.changePct)}">${esc(chg)}</em>` : ""}</span>`];
+  if (Number.isFinite(Number(dq.cost))) {
+    const pnl = fmtSigned(dq.pnlPct);
+    parts.push(`<span class="dq-pnl">持仓 ${Number.isFinite(Number(dq.shares)) ? `${esc(String(dq.shares))}股 @ ` : ""}${esc(fmtMoney(dq.cost))}${pnl ? ` · 浮动 <em class="${dirClass(dq.pnlPct)}">${esc(pnl)}</em>` : ""}</span>`);
+  }
+  return `<div class="dual-quote">
+    <div class="dq-head">港股口径 · ${esc(dq.ticker)}<span>盈亏按港股价 + HKD 成本；估值/基本面见下方 ADR 口径</span></div>
+    <div class="dq-body">${parts.join("")}</div>
+  </div>`;
+}
+
 // ① 估值被护栏抑制时的诚实占位（绝不画错带子）：说明"数据不足/存疑"，与降级后的置信度一致。
 function renderValuationNote(note) {
   if (!note) return "";
@@ -2167,6 +2187,7 @@ function renderMessage(message) {
         ${isPortfolio ? "" : renderGroundingBar(meta)}
         ${isPortfolio ? "" : renderComparisonTable(meta.comparison)}
         ${isPortfolio ? "" : renderFocusStrip(meta)}
+        ${isPortfolio ? "" : renderDualQuote(meta.dualQuote)}
         ${isPortfolio ? renderPortfolioPanel(meta.positions) : renderRichAnswer(message.content)}
         ${renderValuation(meta.valuation, { name: meta.otherHoldings && meta.otherHoldings.length ? meta.valuationName : null })}
         ${meta.valuation ? "" : renderValuationNote(meta.valuationNote)}

@@ -1433,6 +1433,44 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+/* B2 港美双上市：港股口径小卡（盈亏看港股，估值看 ADR） */
+.dual-quote {
+  margin: 14px 0 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--panel-glass-strong);
+}
+.dq-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+}
+.dq-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.dq-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 16px;
+  margin-top: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.dq-price { color: var(--ink); font-size: 16px; font-weight: 800; }
+.dq-ccy { font-style: normal; font-size: 11px; font-weight: 700; color: var(--muted-2); }
+.dq-pnl { color: var(--muted); font-size: 12px; font-weight: 600; }
+.dq-body em { font-style: normal; font-weight: 700; }
+.dq-body em.up { color: #1c8a4d; }
+.dq-body em.down { color: #c23934; }
+.dq-body em.flat { color: var(--muted); }
+
 /* ① 估值不可用的诚实占位卡 */
 .valuation-na .valuation-head { margin-bottom: 8px; }
 .val-na-text {

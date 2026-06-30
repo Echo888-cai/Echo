@@ -152,6 +152,10 @@ const BRAND_ALIASES = {
   "space exploration": "SPCX"
 };
 
+// 别名目标代码 → 品牌规范名。用户直接打代码（"10股SPCX"）时，给个干净的品牌名，
+// 而不是数据源里同代码可能撞到的衍生品/ETF 全称。键用大写代码。
+const ALIAS_TICKER_NAME = { SPCX: "SpaceX 太空探索" };
+
 // 品牌别名 → 实时校验过的上市代码。**必须在 FMP 名称搜索之前**调用：这些品牌词正是
 // FMP/搜索引擎会撞到衍生品/壳/同名小票的（"SpaceX"→杠杆 ETF SPCF、港股 Metaspacex），
 // 先用别名锚定正主再实时校验，确认上市才返回。返回 {ticker,name} 或 null。
@@ -333,6 +337,20 @@ export async function resolveCompanyFromQuery(query = "") {
   //    （"SpaceX"→杠杆 ETF SPCF），先锚定正主。这是 SpaceX→SPCX 能识别的关键。
   const alias = await resolveBrandAlias(q);
   if (alias) return { company: { ticker: alias.ticker, nameZh: alias.name, nameEn: alias.name, industry: "美股" } };
+  // 1.5) 裸代码快路：用户直接打了一个全大写代码（如对话里"10股SPCX"、"NVDA 贵不贵"）。
+  //    代码不是"名字"——名称搜索/普通股探针都会漏掉刚 IPO 的新票（SPCX→SpaceX 就栽在这）。
+  //    这里走与【新建研究】verify 闸门完全一致的 verifyUsTicker（FMP 精确符号 + Finnhub
+  //    profile 新上市自愈），确认上市就直接放行，根除"对话里提到的裸代码识别不出→模型凭旧
+  //    知识硬答它不是股票"的幻觉。only-uppercase 门控避免把普通英文名（Apple）误当代码。
+  const bareTicker = String(q).replace(TRAILING_QUERY_WORDS, "").trim();
+  if (/^[A-Z][A-Z.\-]{0,6}$/.test(bareTicker)) {
+    const check = await verifyUsTicker(bareTicker);
+    if (check.status === "verified") {
+      // 已知品牌别名的目标代码（SPCX=SpaceX）用品牌规范名，避免误显同名衍生品/ETF 名。
+      const brandName = ALIAS_TICKER_NAME[bareTicker];
+      return { company: { ticker: bareTicker, nameZh: brandName || check.name || bareTicker, nameEn: check.name || "", industry: "美股" } };
+    }
+  }
   // 2) 含拉丁字母 → 走 FMP（英文名/拼音/代码命中率高，且不耗模型额度）。
   if (/[A-Za-z]/.test(q)) {
     const fmp = await fmpUsNameSearch(q);

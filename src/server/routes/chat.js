@@ -67,6 +67,32 @@ async function buildOtherHoldings(question, sessionCompany) {
 
 const numOrNull = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
 
+// B2 港美双上市：用户问的是港股那一边吗？是 → 返回港股代码（拉港股实时价用），否则 null。
+function askedHkTickerOf(dualListing) {
+  if (!dualListing?.hk || !dualListing?.asked) return null;
+  return /\.HK$/i.test(String(dualListing.asked)) ? dualListing.hk : null;
+}
+
+// B2：把港股快照 + 用户成本/持股收成"港股口径"的盈亏锚（注入作答 prompt + 前端小卡片）。
+// 港股价拿不到（providerStatus≠ok / 缺价）就返回 null，落回 B1（只说口径、不硬算）。
+function buildDualQuote(hkTicker, hkSnapshot, userContext) {
+  if (!hkTicker || !hkSnapshot || hkSnapshot.providerStatus !== "ok") return null;
+  const price = numOrNull(hkSnapshot.price);
+  if (price == null) return null;
+  const cost = numOrNull(userContext?.cost);
+  const shares = numOrNull(userContext?.shares);
+  const pnlPct = cost ? Number((((price - cost) / cost) * 100).toFixed(1)) : null;
+  return {
+    ticker: hkTicker,
+    price,
+    currency: hkSnapshot.currency || "HKD",
+    changePct: numOrNull(hkSnapshot.changePercent),
+    cost,
+    shares,
+    pnlPct
+  };
+}
+
 // 回报:风险赔率（bull 上行 vs bear 下行），与前端估值条/answerComposer 口径一致。
 function oddsFromValuation(v) {
   if (!v) return null;
@@ -128,9 +154,13 @@ export async function handleChatApi(req, res) {
     // 对话内对比：用户点了"在本对话里对比"时带上 compareWith，并行把对比对象也跑一遍。
     const compareWith = payload.compareWith?.ticker ? payload.compareWith : null;
 
+    // B2 港美双上市：用户问的是港股那一边时，并行拉港股实时价（腾讯免费源），用于按港股口径
+    // 算精确盈亏；基本面/估值仍走 ADR。拿不到就降级为 null（落回"只说口径、不硬算"的 B1 行为）。
+    const askedHkTicker = askedHkTickerOf(payload.company?.dualListing);
+
     // Single pipeline: data + deterministic local panel (no model, no persist here) runs in
     // parallel with web-evidence retrieval. The model is only called once, for the prose below.
-    const [result, webEvidence, compareData, otherHoldings] = await Promise.all([
+    const [result, webEvidence, compareData, otherHoldings, hkSnapshot] = await Promise.all([
       runAgent(payload, { persist: false, useModelPanel: false }),
       withTimeout(
         researchWebEvidence({ company: companyForEvidence, question, intent }),
@@ -139,7 +169,8 @@ export async function handleChatApi(req, res) {
       ),
       compareWith ? withTimeout(buildCompareSummary(compareWith), 12000, null) : Promise.resolve(null),
       // 对话内对比模式专注两列，不再叠加多标的抽取；其余场景才跑 otherHoldings（含超时降级为 []）。
-      compareWith ? Promise.resolve([]) : withTimeout(buildOtherHoldings(question, payload.company), 12000, [])
+      compareWith ? Promise.resolve([]) : withTimeout(buildOtherHoldings(question, payload.company), 12000, []),
+      askedHkTicker ? withTimeout(getMarketSnapshot(askedHkTicker), 5000, null) : Promise.resolve(null)
     ]);
 
     // Compute valuation before the model call so the prose and the visual bar
@@ -149,6 +180,8 @@ export async function handleChatApi(req, res) {
     const analyst = buildAnalystSummary(result.estimatesData, result.marketSnapshot?.price);
     // 长期画像：研究同一公司时自动带上上次沉淀的投资主线/证伪条件，保持连贯。
     const portraitTicker = result.decisionPanel?.ticker || payload.company?.ticker;
+    // B2：港股口径的实时价 + 按 HKD 成本算出的精确盈亏（拿到才有）。
+    const dualQuote = buildDualQuote(askedHkTicker, hkSnapshot, result.userContext);
     const context = {
       newsSnapshot: result.newsSnapshot,
       webEvidence,
@@ -158,6 +191,10 @@ export async function handleChatApi(req, res) {
       portraitContext: portraitTicker ? loadPortraitContext(portraitTicker) : "",
       // 最近几轮对话，注入作答 prompt 让追问能承接上文（连续对话能力）。
       history: Array.isArray(payload.history) ? payload.history : [],
+      // 港美双重上市口径：基本面/估值走 ADR，盈亏按用户问的那一边——让作答明确口径、不算错币种盈亏。
+      dualListing: payload.company?.dualListing || null,
+      // B2：港股实时价 + HKD 口径精确盈亏（asked=HK 且拉到港股价才有；否则 null 落回 B1）。
+      dualQuote,
       // 对话内对比对象（拿到才有；buildChatPrompt 会渲染并排比较块 + 切到对比作答规则）。
       compare: compareData,
       // P0 对话内多标的：当前公司之外、问句里提到的其他持仓/标的（已解析+拉到真实数据）。
@@ -188,7 +225,7 @@ export async function handleChatApi(req, res) {
         });
         if (chatModel?.content && chatModel.content.length < 9000) content = chatModel.content;
       }
-      const finalPayload = finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData, otherHoldings });
+      const finalPayload = finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData, otherHoldings, dualQuote });
       send("final", finalPayload);
       try { res.write("event: done\ndata: {}\n\n"); res.end(); } catch { /* already closed */ }
       return;
@@ -205,7 +242,7 @@ export async function handleChatApi(req, res) {
       });
       if (chatModel?.content && chatModel.content.length < 9000) content = chatModel.content;
     }
-    sendJson(res, 200, finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData, otherHoldings }));
+    sendJson(res, 200, finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData, otherHoldings, dualQuote }));
   } catch (error) {
     // 流式已经开了头就不能再 sendJson —— 改发一个 error 事件收尾。
     if (res.headersSent) {
@@ -246,7 +283,7 @@ function lightHoldings(otherHoldings = []) {
 
 // 模型作答之后的统一收口：归一化 → 证据并入面板 → 估值挂载 → 自然语言记账 → 画像回写 →
 // 落库，返回前端要的完整响应对象。流式 / 非流式共用，保证两条路径产物完全一致。
-function finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData, otherHoldings }) {
+function finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData, otherHoldings, dualQuote }) {
   const question = payload.question || "";
   content = normalizeResearchAnswer(content, result.decisionPanel, result.dataSources);
   result.webEvidence = webEvidence;
@@ -321,6 +358,7 @@ function finalizeChat({ payload, result, webEvidence, valuation, analyst, portra
     analyst,
     comparison,
     otherHoldings: lightHoldings(otherHoldings),
+    dualQuote: dualQuote || null,
     mode: chatModel?.content ? "chat_model" : "chat_local"
   });
 
@@ -350,6 +388,8 @@ function finalizeChat({ payload, result, webEvidence, valuation, analyst, portra
       : null,
     // P0/②：对话里识别到的其他标的（紧凑结构 + 各自估值，前端渲染"本轮聚焦"多卡）。
     otherHoldings: lightHoldings(otherHoldings),
+    // B2：港股口径实时价 + HKD 盈亏（asked=HK 且拉到才有），前端渲染"港股口径"小卡。
+    dualQuote: dualQuote || null,
     positionSaved
   };
 }
@@ -374,6 +414,7 @@ function persistFinalChatSession(payload, result, content, extra = {}) {
     analyst: extra.analyst || null,
     comparison: extra.comparison || null,
     otherHoldings: extra.otherHoldings || null,
+    dualQuote: extra.dualQuote || null,
     evidence: provenanceFromPanel(panel)
   };
   const thread = buildFinalThread(payload.history, payload.question, content, assistantMeta);

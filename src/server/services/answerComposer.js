@@ -743,6 +743,9 @@ export function buildChatPrompt(question, panel, dataSources = {}, context = {})
     ? `区间回报：近1月 ${fmtPct(ranges.oneMonthPct)}、年初至今 ${fmtPct(ranges.ytdPct)}（截至 ${ranges.asOf}）`
     : "";
   const compareBlock = buildCompareBlock(context.compare);
+  const dual = context.dualListing;
+  const dualQuote = context.dualQuote;
+  const dualAskedHk = !!(dual && dual.asked && /\.HK$/i.test(dual.asked));
   const holdingsBlock = buildHoldingsBlock(context.otherHoldings);
   const hasHoldings = !context.compare && Boolean(context.otherHoldings?.length);
   return `用户问题：${question}
@@ -788,6 +791,7 @@ ${webEvidencePrompt}
 - “事实”尽量编号，引用当前可用数据；不能编造具体数值。若某项缺失，写“当前未核到/来源缺失”，但继续给推断。
 - 凡涉及收入/利润/利润率/现金流/EPS/回购分红的具体数字，只能引用上面“已核到的实时财报”块；本地档案只提供定性判断（护城河/商业模式/多空逻辑），不得作为财务数字来源。${hasLiveFin ? "本轮已有实时财报，必须用真实数字支撑财务判断，不要再写“未核到完整三表/仅本地档案口径”。" : "本轮无实时财报：严禁给出任何具体财务数字或其估算值（包括收入/利润/EPS/利润率/现金流的绝对值，以及“约”“大约”“行业常见范围”这类措辞），只能定性描述赚钱机制与风险并说明置信度下降；要数字就明说“需核最新财报”。"}
 - 不要使用“暂不评分”“完整度xx%”“需要补充材料”“未接入”这种产品状态词，改成研究语言：当前未核到、置信度下降。
+- 用户提到的任何股票代码/公司，即使你印象里它“没上市/不是标准代码/是私人公司”，也**绝不**断言它不存在、拒绝评估、或建议换成别的代码——它很可能是你知识截止后才上市的新票（如刚 IPO 的标的）。本轮没核到它的实时数据时，只说“本轮未能核到 X 的实时数据、置信度下降”，照常基于其余已核到的标的给判断。${dual ? `\n- 本标的港美双重上市（港股 ${dual.hk}｜美股 ${dual.us}）。基本面/估值本轮一律按**美股 ADR ${dual.us}** 口径（数据更全）。${dualQuote ? `用户问的是港股，已核到**港股 ${dualQuote.ticker} 实时价 ${dualQuote.price} ${dualQuote.currency}${dualQuote.changePct != null ? `（${dualQuote.changePct >= 0 ? "+" : ""}${dualQuote.changePct}%）` : ""}**：盈亏**必须**用这个港股价 + 用户 HKD 成本算${dualQuote.cost != null ? `（成本 ${dualQuote.cost}${dualQuote.shares != null ? `、持股 ${dualQuote.shares}` : ""}${dualQuote.pnlPct != null ? ` → 浮动 ${dualQuote.pnlPct >= 0 ? "+" : ""}${dualQuote.pnlPct}%` : ""}）` : ""}，**绝不**用 ADR 美元价算港股盈亏；估值/基本面继续用 ADR ${dual.us} 口径。` : dualAskedHk ? `用户问的是**港股 ${dual.hk}**：本轮未取到港股实时价，盈亏只说明口径（按港股价 + HKD 成本），**不要**用 ADR 美元价硬算港股盈亏，提示用户可按港股实时价换算。` : `若用户持有的是港股 ${dual.hk}，提示其盈亏需按港股价 + HKD 成本另算，不要用 ADR 美元价硬套。`}` : ""}
 - “还缺什么”只在末尾出现一段，且只说还缺哪些事实会提高置信度（如完整三表、最新公告、一致预期），不要写产品后台/数据源厂商名字，不要让缺口抢正文。
 - “推断”必须是全回答的信息密度最高部分，不能少于 4 个自然段；必须依次讲：赚钱机制、护城河是否能转成利润、财务兑现路径、估值重估变量。必须使用上面的本地公司档案，不能只写“第一层/第二层”的空框架。
 - 对“赚不赚钱”，必须先回答赚钱机制和盈利质量：是否有收入来源、利润是否稳定、现金流是否支撑。
