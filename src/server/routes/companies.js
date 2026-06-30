@@ -322,38 +322,36 @@ export async function handleCompanyVerify(req, res) {
  *   { company: null }                   识别不出
  *   { company: null, reason, name }     特殊情况（如 A 股暂不支持 cn_unsupported）
  */
+// 解析主体（HTTP handler 与对话内多实体抽取共用）。同样的 alias→FMP→Finnhub→LLM 四级，
+// 这样"对话里提到的第二只股"走的是与【新建研究】入口完全一致的解析（含 SpaceX→SPCX 别名
+// 与新上市自愈），不再绕过解析、凭模型旧知识硬答。返回：
+//   { company } 成功 ｜ { company: null } 识别不出 ｜ { company: null, reason, name } 特殊（cn_unsupported）
+export async function resolveCompanyFromQuery(query = "") {
+  const q = String(query || "").trim();
+  if (q.length < 2) return { company: null };
+  // 1) 品牌别名（实时校验过的上市代码）。必须最先——这些词 FMP/搜索引擎会撞衍生品/壳
+  //    （"SpaceX"→杠杆 ETF SPCF），先锚定正主。这是 SpaceX→SPCX 能识别的关键。
+  const alias = await resolveBrandAlias(q);
+  if (alias) return { company: { ticker: alias.ticker, nameZh: alias.name, nameEn: alias.name, industry: "美股" } };
+  // 2) 含拉丁字母 → 走 FMP（英文名/拼音/代码命中率高，且不耗模型额度）。
+  if (/[A-Za-z]/.test(q)) {
+    const fmp = await fmpUsNameSearch(q);
+    if (fmp) return { company: { ticker: fmp.ticker, nameZh: fmp.name, nameEn: fmp.name, industry: "美股" } };
+  }
+  // 3) Finnhub 符号搜索探针（实时上市校验）。覆盖 FMP 名称搜索漏掉的新上市标的。
+  const probed = await finnhubSearchProbe(q);
+  if (probed) return { company: { ticker: probed.ticker, nameZh: probed.name, nameEn: probed.name, industry: "美股" } };
+  // 4) LLM 解析（中文名主力路径；也兜住 FMP 漏掉的英文名）。
+  const llm = await llmResolveCompany(q);
+  return llm.company ? { company: llm.company } : { company: null, reason: llm.reason, name: llm.name };
+}
+
 export async function handleCompanyResolve(req, res) {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
     const query = (url.searchParams.get("q") || "").trim();
-    if (query.length < 2) {
-      sendOk(res, { company: null });
-      return;
-    }
-    // 1) 品牌别名（实时校验过的上市代码）。必须最先——这些词 FMP/搜索引擎会撞衍生品/壳
-    //    （"SpaceX"→杠杆 ETF SPCF），先锚定正主。这是 SpaceX→SPCX 能识别的关键。
-    const alias = await resolveBrandAlias(query);
-    if (alias) {
-      sendOk(res, { company: { ticker: alias.ticker, nameZh: alias.name, nameEn: alias.name, industry: "美股" } });
-      return;
-    }
-    // 2) 含拉丁字母 → 走 FMP（英文名/拼音/代码命中率高，且不耗模型额度）。
-    if (/[A-Za-z]/.test(query)) {
-      const fmp = await fmpUsNameSearch(query);
-      if (fmp) {
-        sendOk(res, { company: { ticker: fmp.ticker, nameZh: fmp.name, nameEn: fmp.name, industry: "美股" } });
-        return;
-      }
-    }
-    // 3) Finnhub 符号搜索探针（实时上市校验）。覆盖 FMP 名称搜索漏掉的新上市标的。
-    const probed = await finnhubSearchProbe(query);
-    if (probed) {
-      sendOk(res, { company: { ticker: probed.ticker, nameZh: probed.name, nameEn: probed.name, industry: "美股" } });
-      return;
-    }
-    // 4) LLM 解析（中文名主力路径；也兜住 FMP 漏掉的英文名）。
-    const llm = await llmResolveCompany(query);
-    sendOk(res, llm.company ? { company: llm.company } : { company: null, reason: llm.reason, name: llm.name });
+    const result = await resolveCompanyFromQuery(query);
+    sendOk(res, result.company ? { company: result.company } : { company: null, reason: result.reason, name: result.name });
   } catch (error) {
     sendError(res, 500, error.message || "公司解析失败");
   }

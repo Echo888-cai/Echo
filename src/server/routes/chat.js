@@ -12,6 +12,7 @@ import { PROMPTS } from "../../prompts.js";
 import { loadPortraitContext, updatePortraitFromPanel } from "../services/companyPortrait.js";
 import { runTwoStageChat, runTwoStageChatStream } from "../services/twoStageChat.js";
 import { upsertPosition } from "../repositories/portfolio.js";
+import { extractOtherHoldings } from "../services/entityExtractor.js";
 import { getMarketSnapshot, getRangeReturns } from "../../marketData.js";
 import { getFinancials, getAnalystEstimates } from "../../financialData.js";
 import { getNewsSnapshot } from "../../newsData.js";
@@ -45,6 +46,23 @@ async function buildCompareSummary(compareWith) {
     analyst,
     newsSnapshot: news
   };
+}
+
+// P0 对话内多标的：抽取问句里"当前公司之外"的其他标的，逐个拉轻量真实数据（复用 buildCompareSummary）。
+// 这样作答 agent 能看到 SpaceX/第二只股的**真实行情**，根除"凭模型旧知识说某股没上市"的幻觉。
+// 连行情都没拿到的标的也保留壳（summary=null），让回答能说"已识别但本轮未核到 X 实时数据"，而非装作没提过。
+async function buildOtherHoldings(question, sessionCompany) {
+  if (!sessionCompany?.ticker) return [];
+  const others = await extractOtherHoldings(question, sessionCompany);
+  if (!others.length) return [];
+  return Promise.all(
+    others.slice(0, 4).map(async (h) => ({
+      company: h.company,
+      shares: h.shares,
+      cost: h.cost,
+      summary: await withTimeout(buildCompareSummary({ ticker: h.company.ticker, nameZh: h.company.nameZh }), 8000, null)
+    }))
+  );
 }
 
 const numOrNull = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
@@ -112,14 +130,16 @@ export async function handleChatApi(req, res) {
 
     // Single pipeline: data + deterministic local panel (no model, no persist here) runs in
     // parallel with web-evidence retrieval. The model is only called once, for the prose below.
-    const [result, webEvidence, compareData] = await Promise.all([
+    const [result, webEvidence, compareData, otherHoldings] = await Promise.all([
       runAgent(payload, { persist: false, useModelPanel: false }),
       withTimeout(
         researchWebEvidence({ company: companyForEvidence, question, intent }),
         9000,
         { intent, queries: [], evidence: [], gaps: ["网页证据检索超时，本轮先使用本地档案和已接入数据。"], provider: "timeout", searchedAt: new Date().toISOString() }
       ),
-      compareWith ? withTimeout(buildCompareSummary(compareWith), 12000, null) : Promise.resolve(null)
+      compareWith ? withTimeout(buildCompareSummary(compareWith), 12000, null) : Promise.resolve(null),
+      // 对话内对比模式专注两列，不再叠加多标的抽取；其余场景才跑 otherHoldings（含超时降级为 []）。
+      compareWith ? Promise.resolve([]) : withTimeout(buildOtherHoldings(question, payload.company), 12000, [])
     ]);
 
     // Compute valuation before the model call so the prose and the visual bar
@@ -139,7 +159,9 @@ export async function handleChatApi(req, res) {
       // 最近几轮对话，注入作答 prompt 让追问能承接上文（连续对话能力）。
       history: Array.isArray(payload.history) ? payload.history : [],
       // 对话内对比对象（拿到才有；buildChatPrompt 会渲染并排比较块 + 切到对比作答规则）。
-      compare: compareData
+      compare: compareData,
+      // P0 对话内多标的：当前公司之外、问句里提到的其他持仓/标的（已解析+拉到真实数据）。
+      otherHoldings
     };
     const fallback = researchReplyFromPanel(result.decisionPanel, question, result.dataSources, context);
     const wantStream = payload.stream === true;
@@ -166,7 +188,7 @@ export async function handleChatApi(req, res) {
         });
         if (chatModel?.content && chatModel.content.length < 9000) content = chatModel.content;
       }
-      const finalPayload = finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData });
+      const finalPayload = finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData, otherHoldings });
       send("final", finalPayload);
       try { res.write("event: done\ndata: {}\n\n"); res.end(); } catch { /* already closed */ }
       return;
@@ -183,7 +205,7 @@ export async function handleChatApi(req, res) {
       });
       if (chatModel?.content && chatModel.content.length < 9000) content = chatModel.content;
     }
-    sendJson(res, 200, finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData }));
+    sendJson(res, 200, finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData, otherHoldings }));
   } catch (error) {
     // 流式已经开了头就不能再 sendJson —— 改发一个 error 事件收尾。
     if (res.headersSent) {
@@ -195,14 +217,51 @@ export async function handleChatApi(req, res) {
   }
 }
 
+// 把 otherHoldings 收成前端可渲染的紧凑结构 + 算出每个标的的浮盈亏%（有成本/现价时）。
+function lightHoldings(otherHoldings = []) {
+  if (!Array.isArray(otherHoldings)) return [];
+  return otherHoldings.map((h) => {
+    const ms = h.summary?.marketSnapshot || {};
+    const price = numOrNull(ms.price);
+    const cost = numOrNull(h.cost);
+    const pnlPct = price != null && cost ? Number((((price - cost) / cost) * 100).toFixed(1)) : null;
+    // ② 每只 other 带上各自的紧凑估值（已走 ①护栏，脏的为 null）+ 赔率 + 分析师目标，供"本轮聚焦"多卡渲染。
+    const val = h.summary?.valuation || null; // buildCompareSummary 已把 cannotValueReason 的置为 null
+    const an = h.summary?.analyst || null;
+    return {
+      ticker: h.company.ticker,
+      name: h.company.nameZh || h.summary?.name || h.company.ticker,
+      price,
+      changePct: numOrNull(ms.changePercent),
+      shares: numOrNull(h.shares),
+      cost,
+      pnlPct,
+      odds: oddsFromValuation(val),
+      valuation: val ? { method: val.method, bear: numOrNull(val.bear), base: numOrNull(val.base), bull: numOrNull(val.bull), currentPrice: numOrNull(val.currentPrice) } : null,
+      target: an?.target ?? null,
+      upsidePct: an?.upsidePct ?? null
+    };
+  });
+}
+
 // 模型作答之后的统一收口：归一化 → 证据并入面板 → 估值挂载 → 自然语言记账 → 画像回写 →
 // 落库，返回前端要的完整响应对象。流式 / 非流式共用，保证两条路径产物完全一致。
-function finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData }) {
+function finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData, otherHoldings }) {
   const question = payload.question || "";
   content = normalizeResearchAnswer(content, result.decisionPanel, result.dataSources);
   result.webEvidence = webEvidence;
   mergeEvidenceIntoPanel(result.decisionPanel, webEvidence);
   if (result.decisionPanel && !valuation.cannotValueReason) result.decisionPanel.valuation = valuation;
+
+  // ① 估值因数据存疑被护栏抑制（如 SpaceX 新上市数据缺口）：诚实降级，绝不让脏估值挂"置信度高"。
+  //    置信度封顶到"中"、原因并入数据缺口，并附 valuationNote 让前端出一行"数据不足"说明（而非静默隐藏）。
+  const valuationSuspect = Boolean(valuation?.cannotValueReason && valuation?.dataSuspect);
+  if (valuationSuspect && result.decisionPanel) {
+    if (result.decisionPanel.confidence === "高") result.decisionPanel.confidence = "中";
+    const miss = Array.isArray(result.decisionPanel.missingData) ? result.decisionPanel.missingData : [];
+    if (!miss.includes(valuation.cannotValueReason)) miss.push(valuation.cannotValueReason);
+    result.decisionPanel.missingData = miss;
+  }
 
   // 自然语言记账：识别到成本/股数/止损/止盈就 upsert 到持仓账本（持久化）。
   let positionSaved = false;
@@ -219,6 +278,21 @@ function finalizeChat({ payload, result, webEvidence, valuation, analyst, portra
       positionSaved = true;
     } catch (err) {
       console.warn("portfolio 记账失败:", err?.message || err);
+    }
+  }
+
+  // P0 多笔记账：除会话公司外，把对话里识别到的其他持仓也各自入账（修"只记一笔、第二笔被丢弃"）。
+  for (const h of Array.isArray(otherHoldings) ? otherHoldings : []) {
+    if (!h?.company?.ticker || (h.shares == null && h.cost == null)) continue;
+    try {
+      upsertPosition(h.company.ticker, {
+        companyName: h.company.nameZh || h.summary?.name,
+        shares: h.shares != null ? Number(h.shares) : undefined,
+        avgCost: h.cost != null ? Number(h.cost) : undefined
+      });
+      positionSaved = true;
+    } catch (err) {
+      console.warn("portfolio 多笔记账失败:", err?.message || err);
     }
   }
 
@@ -242,8 +316,11 @@ function finalizeChat({ payload, result, webEvidence, valuation, analyst, portra
 
   const sessionId = persistFinalChatSession(payload, result, content, {
     valuation: valuation.cannotValueReason ? null : valuation,
+    valuationNote: valuationSuspect ? valuation.cannotValueReason : null,
+    valuationName: result.decisionPanel?.companyName || payload.company?.nameZh || payload.company?.ticker || null,
     analyst,
     comparison,
+    otherHoldings: lightHoldings(otherHoldings),
     mode: chatModel?.content ? "chat_model" : "chat_local"
   });
 
@@ -261,12 +338,18 @@ function finalizeChat({ payload, result, webEvidence, valuation, analyst, portra
     marketSnapshot: result.marketSnapshot,
     newsSnapshot: result.newsSnapshot,
     valuation: valuation.cannotValueReason ? null : valuation,
+    // ① 估值被护栏抑制时给前端一行诚实说明（"数据不足，暂不给可信估值"），而非静默隐藏。
+    valuationNote: valuationSuspect ? valuation.cannotValueReason : null,
+    // ② 底部主估值条的归属公司名（消歧：多公司轮里明确"这条带子是谁的"）。
+    valuationName: result.decisionPanel?.companyName || payload.company?.nameZh || payload.company?.ticker || null,
     analyst,
     comparison,
     webEvidence,
     portrait: portrait
       ? { ticker: portraitTicker, created: portrait.created, changed: portrait.changed, turnCount: portrait.profile?.turnCount || 0 }
       : null,
+    // P0/②：对话里识别到的其他标的（紧凑结构 + 各自估值，前端渲染"本轮聚焦"多卡）。
+    otherHoldings: lightHoldings(otherHoldings),
     positionSaved
   };
 }
@@ -286,8 +369,11 @@ function persistFinalChatSession(payload, result, content, extra = {}) {
     missing: Array.isArray(panel?.missingData) ? panel.missingData : [],
     confidence: panel?.confidence || null,
     valuation: extra.valuation || null,
+    valuationNote: extra.valuationNote || null,
+    valuationName: extra.valuationName || null,
     analyst: extra.analyst || null,
     comparison: extra.comparison || null,
+    otherHoldings: extra.otherHoldings || null,
     evidence: provenanceFromPanel(panel)
   };
   const thread = buildFinalThread(payload.history, payload.question, content, assistantMeta);

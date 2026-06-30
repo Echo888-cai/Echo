@@ -1013,6 +1013,17 @@ function isComparisonQuestion(query = "") {
   return /对比|相比|[和跟与][^，。？?]{1,14}(比|对比|相比|谁|哪个|哪家)|\bvs\b|谁(更|的)|哪(个|家)(更|的)?[^，。？?]{0,8}(好|强|贵|便宜|划算|赔率|值得)/i.test(String(query));
 }
 
+// 多持仓/多标的问句："列举（和/、…）+ 持仓信号"或"≥2 个'股'"。与后端 entityExtractor.looksMultiHolding
+// 保持一致：检测到就让它作为当前公司的追问直发，后端补齐其他标的，避免被误判成切换/对比而跳走。
+function isMultiHoldingQuestion(query = "") {
+  const text = String(query || "");
+  if (text.length < 4) return false;
+  const multiShare = (text.match(/股/g) || []).length >= 2;
+  const hasList = /[、,，&]|和|与|跟|以及|还有|及/.test(text);
+  const holdingHint = /持有|持仓|组合|仓位|分别|各|股票|加上|拿着|拿了|都拿|买了|买入|入手|加仓|建仓|都有|手里|手上/.test(text);
+  return multiShare || (hasList && holdingHint);
+}
+
 // 从一次 chat 结果构造助手消息的 meta（接地条/估值/分析师/证据卡/置信度）。
 // sendChat 与对话内对比 runComparison 共用，保证两条路径渲染一致。
 function answerMetaFromResult(result) {
@@ -1025,8 +1036,14 @@ function answerMetaFromResult(result) {
     missing: Array.isArray(result.decisionPanel?.missingData) ? result.decisionPanel.missingData : [],
     confidence: result.decisionPanel?.confidence || null,
     valuation: result.valuation || null,
+    // ① 估值被护栏抑制时的诚实说明（前端出一行"数据不足"，而非静默无卡）。
+    valuationNote: result.valuationNote || null,
+    // ② 底部主估值条归属的公司名（多公司轮里消歧）。
+    valuationName: result.valuationName || null,
     analyst: result.analyst || null,
     comparison: result.comparison || null,
+    // ② 本轮识别到的其他标的（各带紧凑估值/盈亏），用于"本轮聚焦"多卡渲染。
+    otherHoldings: Array.isArray(result.otherHoldings) ? result.otherHoldings : null,
     evidence: provenanceFromPanel(result.decisionPanel)
   };
 }
@@ -1195,6 +1212,10 @@ async function sendChat(question, preResolved = null) {
   const prevCompany = getCompany();
   let company = preResolved || prevCompany;
   if (!preResolved) {
+  const multiHolding = Boolean(prevCompany?.ticker) && isMultiHoldingQuestion(question);
+  // 多持仓/多标的问句（"我持有 A 和 B…能赚钱吗"）：保持当前在研公司为主，跳过切换/对比选择卡，
+  // 直接当作对当前公司的追问发送；后端 extractOtherHoldings 会补齐其他标的（otherHoldings）。
+  if (!multiHolding) {
   // 对比意图：已有在研公司 + 句子在做对比 + 点名了另一家公司 → 不直接切换/不直接答，
   // 弹推荐选项，让用户选"在本对话里对比"还是"只研究新公司"（避免突然跳走/张冠李戴）。
   if (prevCompany?.ticker && isComparisonQuestion(question) && mentionsNewCompanyStrong(question)) {
@@ -1247,6 +1268,7 @@ async function sendChat(question, preResolved = null) {
     }
     if (resolved) company = resolved;
   }
+  } // end if (!multiHolding)
   } // end if (!preResolved)
   if (!company) {
     appendMessage("assistant", "我还没有识别出公司。请补充公司名、港股代码或美股代码，例如 0700.HK 腾讯、AAPL 苹果。");
@@ -1481,6 +1503,26 @@ function renderSnapshotCard(company, panel, thread) {
     ? `<span class="conf conf-${confLevel}">置信度 ${esc(panel.confidence)}</span>`
     : "";
 
+  // ② 对话化侧栏：从最近一条带多标的的回答里取"本轮聚焦"，把"研究公司（单一）"软化为"本轮聚焦（1/N）"。
+  const focusOthers = (() => {
+    if (!Array.isArray(thread)) return [];
+    for (let i = thread.length - 1; i >= 0; i--) {
+      const m = thread[i];
+      if (m?.role === "assistant" && Array.isArray(m.meta?.otherHoldings) && m.meta.otherHoldings.length) return m.meta.otherHoldings;
+    }
+    return [];
+  })();
+  const focusLabel = focusOthers.length ? "本轮聚焦" : "研究公司";
+  const focusChips = focusOthers.length
+    ? `<div class="focus-mini">
+        <span class="fm-chip fm-main">${esc(ticker || name)}</span>
+        ${focusOthers.map((h) => {
+          const pnl = isNum(h.pnlPct) ? ` <em class="${dirClass(h.pnlPct)}">${fmtSigned(h.pnlPct)}</em>` : "";
+          return `<span class="fm-chip">${esc(h.ticker || h.name)}${pnl}</span>`;
+        }).join("")}
+      </div>`
+    : "";
+
   const priceRaw = panel?.price?.value && panel.price.value !== "暂不可用" ? String(panel.price.value) : "";
   const [priceNum, ...ccyParts] = priceRaw.split(" ");
   const ccy = ccyParts.join(" ");
@@ -1539,12 +1581,13 @@ function renderSnapshotCard(company, panel, thread) {
   return `<section class="research-snapshot">
     <div class="snapshot-head">
       <div class="snapshot-id">
-        <p>研究公司</p>
+        <p>${focusLabel}</p>
         <h2>${esc(name)}</h2>
         <span>${ticker ? `${esc(ticker)}${marketLabel ? ` · ${marketLabel}` : ""}` : "输入公司名、港股或美股代码"}</span>
       </div>
       ${confChip}
     </div>
+    ${focusChips}
     ${dualNote}
     ${quoteBlock}
     ${metricChips}
@@ -1851,8 +1894,74 @@ function renderComparisonTable(comparison) {
   </div>`;
 }
 
-function renderValuation(valuation) {
+// ② "本轮聚焦"多卡：会话主标的之外、本轮识别到的每只股各出一张紧凑卡（迷你估值条 + 现价涨跌 +
+// 持仓盈亏 + 赔率 + 分析师目标），让"底部一条估值条到底是谁的"不再有歧义——主标的下方走完整判断，
+// 其他标的在此一目了然。数据由后端 lightHoldings 收口（各自估值已走 ① 护栏，脏的为 null）。
+// null/"" 经 Number() 会变成 0（finite），不能直接用 Number.isFinite 判存在性——isNum 显式挡掉空值，
+// 否则缺失的目标价/盈亏会渲染成误导的 "0.00 / +0.0%"。
+const isNum = (v) => v != null && v !== "" && Number.isFinite(Number(v));
+const fmtMoney = (v) => (isNum(v) ? (Math.abs(Number(v)) >= 100 ? Number(v).toFixed(0) : Number(v).toFixed(2)) : "—");
+const fmtSigned = (v) => (isNum(v) ? `${Number(v) >= 0 ? "+" : ""}${Number(v).toFixed(1)}%` : null);
+const dirClass = (v) => (Number(v) > 0 ? "up" : Number(v) < 0 ? "down" : "flat");
+
+function miniValBar(v) {
+  if (!v) return "";
+  const bear = numFrom(v.bear), base = numFrom(v.base), bull = numFrom(v.bull), price = numFrom(v.currentPrice);
+  if ([bear, base, bull, price].some((n) => n === null)) return "";
+  const lo = Math.min(bear, bull, price), hi = Math.max(bear, bull, price), span = hi - lo || 1;
+  const pct = (x) => Math.max(0, Math.min(100, ((x - lo) / span) * 100));
+  const zl = Math.min(pct(bear), pct(bull)), zw = Math.abs(pct(bull) - pct(bear));
+  return `<div class="fc-valbar" title="看空 ${esc(fmtMoney(bear))} / 中性 ${esc(fmtMoney(base))} / 看多 ${esc(fmtMoney(bull))}，现价 ${esc(fmtMoney(price))}">
+      <div class="fc-bar"><div class="fc-zone" style="left:${zl}%;width:${zw}%"></div><div class="fc-pr" style="left:${pct(price)}%"></div></div>
+      <div class="fc-scale"><span class="bear">看空 ${esc(fmtMoney(bear))}</span><span class="base">中性 ${esc(fmtMoney(base))}</span><span class="bull">看多 ${esc(fmtMoney(bull))}</span></div>
+    </div>`;
+}
+
+function focusCard(h) {
+  const chg = fmtSigned(h.changePct);
+  const chips = [];
+  if (isNum(h.shares) && isNum(h.cost)) {
+    const pnl = fmtSigned(h.pnlPct);
+    chips.push(`<span class="fc-chip">持仓 ${esc(String(h.shares))}股 @ ${esc(fmtMoney(h.cost))}${pnl ? ` · <em class="${dirClass(h.pnlPct)}">${esc(pnl)}</em>` : ""}</span>`);
+  }
+  if (isNum(h.odds) && Number(h.odds) > 0) chips.push(`<span class="fc-chip">赔率 ${Number(h.odds).toFixed(1)}:1</span>`);
+  if (isNum(h.target)) {
+    const up = fmtSigned(h.upsidePct);
+    chips.push(`<span class="fc-chip">目标 ${esc(fmtMoney(h.target))}${up ? `（${esc(up)}）` : ""}</span>`);
+  }
+  return `<article class="focus-card">
+    <div class="fc-head">
+      <b>${esc(h.name || h.ticker)}</b><span>${esc(h.ticker || "")}</span>
+      ${isNum(h.price) ? `<strong class="fc-price">${esc(fmtMoney(h.price))}${chg ? ` <em class="${dirClass(h.changePct)}">${esc(chg)}</em>` : ""}</strong>` : ""}
+    </div>
+    ${h.valuation ? miniValBar(h.valuation) : `<div class="fc-noval">估值数据不足，暂不给可信区间</div>`}
+    ${chips.length ? `<div class="fc-chips">${chips.join("")}</div>` : ""}
+  </article>`;
+}
+
+function renderFocusStrip(meta) {
+  const others = Array.isArray(meta.otherHoldings) ? meta.otherHoldings : [];
+  if (!others.length) return "";
+  const mainName = meta.valuationName || "主标的";
+  return `<div class="focus-strip">
+    <div class="focus-head">本轮聚焦 · ${others.length + 1} 家<span>主标的 ${esc(mainName)} 见下方完整判断</span></div>
+    <div class="focus-cards">${others.map(focusCard).join("")}</div>
+  </div>`;
+}
+
+// ① 估值被护栏抑制时的诚实占位（绝不画错带子）：说明"数据不足/存疑"，与降级后的置信度一致。
+function renderValuationNote(note) {
+  if (!note) return "";
+  return `<div class="valuation-block valuation-na">
+    <div class="valuation-head"><span>估值区间</span><em>暂不可用</em></div>
+    <p class="val-na-text">${esc(note)}</p>
+  </div>`;
+}
+
+function renderValuation(valuation, opts = {}) {
   if (!valuation) return "";
+  // ② 归属公司名：多公司轮里明确"这条带子是谁的"（单公司轮 name 为空，标题保持"估值区间"）。
+  const headLabel = opts.name ? `${esc(opts.name)} · 估值区间` : "估值区间";
   const bear = numFrom(valuation.bear);
   const base = numFrom(valuation.base);
   const bull = numFrom(valuation.bull);
@@ -1897,7 +2006,7 @@ function renderValuation(valuation) {
     : "";
 
   return `<div class="valuation-block">
-    <div class="valuation-head"><span>估值区间</span><em>${esc(valuation.method || "PE 法")}</em></div>
+    <div class="valuation-head"><span>${headLabel}</span><em>${esc(valuation.method || "PE 法")}</em></div>
     <div class="valuation-bar">
       <div class="val-zone" style="left:${zoneLeft}%;width:${zoneWidth}%"></div>
       <div class="val-tick bear" style="left:${pct(bear)}%"></div>
@@ -2057,8 +2166,10 @@ function renderMessage(message) {
         </div>
         ${isPortfolio ? "" : renderGroundingBar(meta)}
         ${isPortfolio ? "" : renderComparisonTable(meta.comparison)}
+        ${isPortfolio ? "" : renderFocusStrip(meta)}
         ${isPortfolio ? renderPortfolioPanel(meta.positions) : renderRichAnswer(message.content)}
-        ${renderValuation(meta.valuation)}
+        ${renderValuation(meta.valuation, { name: meta.otherHoldings && meta.otherHoldings.length ? meta.valuationName : null })}
+        ${meta.valuation ? "" : renderValuationNote(meta.valuationNote)}
         ${renderAnalystConsensus(meta.analyst)}
         ${renderEvidenceBlock(meta.evidence)}
         ${isPortfolio ? "" : renderAnswerMeta(meta)}

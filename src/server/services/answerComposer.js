@@ -668,6 +668,36 @@ ${newsStr}
 `;
 }
 
+// P0 对话内多标的块：把"当前公司之外、用户提到的其他持仓"各自本轮已核到的真实数据收成一段。
+// 关键反幻觉约束：以这里的真实行情为准，即使模型印象里某公司"尚未上市/是私人公司"。
+function buildHoldingsBlock(otherHoldings) {
+  if (!Array.isArray(otherHoldings) || !otherHoldings.length) return "";
+  const lines = otherHoldings.map((h) => {
+    const c = h.company || {};
+    const ms = h.summary?.marketSnapshot || {};
+    const price = ms.price != null
+      ? `${ms.price}${ms.currency ? ` ${ms.currency}` : ""}${ms.changePercent != null ? `（${Number(ms.changePercent).toFixed(2)}%）` : ""}`
+      : "本轮未核到实时行情";
+    const pos = [];
+    if (h.shares != null) pos.push(`持股 ${h.shares}`);
+    if (h.cost != null) pos.push(`成本 ${h.cost}`);
+    if (ms.price != null && h.cost != null) {
+      const pnlPct = ((ms.price - h.cost) / h.cost) * 100;
+      pos.push(`浮动 ${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(1)}%`);
+    }
+    const valStr = h.summary?.valuation ? valuationPromptLine(h.summary.valuation) : "暂无自洽估值口径";
+    const anaStr = h.summary?.analyst?.target
+      ? `分析师一致目标价 ${h.summary.analyst.target}${h.summary.analyst.upsidePct != null ? `（较现价 ${h.summary.analyst.upsidePct}%）` : ""}`
+      : "暂无一致预期";
+    return `- ${c.nameZh || h.summary?.name || c.ticker}（${c.ticker}）：现价 ${price}${pos.length ? `；${pos.join("、")}` : ""}；估值 ${valStr}；${anaStr}`;
+  }).join("\n");
+  return `
+【本轮已核到的其他标的（用户在本对话里提到的其他持仓）——以下行情/估值是真实数据，是这些标的的唯一事实源】
+${lines}
+（重要：上面这些公司都是**已校验的上市标的**，请直接基于这里的真实行情判断；即使你印象里某家"尚未上市/是私人公司"，也以本轮已核到的真实代码与行情为准，绝不据旧知识否定它已上市。）
+`;
+}
+
 export function buildChatPrompt(question, panel, dataSources = {}, context = {}) {
   const drivers = (panel.keyDrivers || []).map((d) => `- ${d.name}：${d.status}。${d.summary}`).join("\n");
   const missing = (panel.missingData || []).join("、") || "无";
@@ -713,6 +743,8 @@ export function buildChatPrompt(question, panel, dataSources = {}, context = {})
     ? `区间回报：近1月 ${fmtPct(ranges.oneMonthPct)}、年初至今 ${fmtPct(ranges.ytdPct)}（截至 ${ranges.asOf}）`
     : "";
   const compareBlock = buildCompareBlock(context.compare);
+  const holdingsBlock = buildHoldingsBlock(context.otherHoldings);
+  const hasHoldings = !context.compare && Boolean(context.otherHoldings?.length);
   return `用户问题：${question}
 ${historyBlock}${portraitBlock}
 当前研究对象：${panel.companyName}（${panel.ticker}）
@@ -728,7 +760,7 @@ ${drivers}
 已接入数据：${connected}
 缺失数据：${missing}
 行情：${dataSources.market?.provider || panel.price?.source || "缺失"}，${panel.price?.value || "缺失"}${panel.price?.change && panel.price.change !== "暂不可用" ? `（${panel.price.change}）` : ""}${panel.price?.timestamp ? `，截至 ${panel.price.timestamp}` : ""}
-${rangeLine ? `${rangeLine}\n` : ""}${compareBlock}来源候选：
+${rangeLine ? `${rangeLine}\n` : ""}${compareBlock}${holdingsBlock}来源候选：
 ${sources}
 ${hasLiveFin
     ? `已核到的实时财报（来源 ${context.financialsData.source}${context.financialsData.period ? ` · 截至 ${context.financialsData.period}` : ""}）——本轮所有财务数字的唯一事实源：\n${liveFinancialsBlock}`
@@ -752,7 +784,7 @@ ${webEvidencePrompt}
 - 输出中文纯文本，可以用短标题，但不要 Markdown 表格。
 - 第一行必须以“北京时间 ${formatBeijingMinute()}，”开头。若是泛研究问题，用“${panel.companyName} 最近的状态是：……”；若是单点追问，直接回答用户问的那个点。
 - 保持像真实投研对话，不要写成产品说明，不要说“我将/我会获取”。
-- ${context.compare ? `本轮是【对比任务】：把当前研究对象 ${panel.companyName} 与上面"对比对象 ${context.compare.name}"并排比较。段落固定用：简单结论、现价与估值、利润质量、护城河与商业模式、区间回报与动量、分析师预期、风险与赔率、我的判断。每个维度都要两家都讲、点明谁更优及原因；"我的判断"明确给出谁的赔率/质量更好以及成立前提。只用两家已核到的真实数据，缺的维度说一句即可。禁止买卖建议。不要输出单公司的完整研究模板。` : businessMode ? "用户问的是靠什么赚钱/商业模式/收入来源。只回答这个问题，段落用：简单说、拆开看、关键判断、主要风险、来源。不要输出完整研究模板。" : competitorMode ? "用户问的是竞争对手/竞品/竞争格局。只回答竞争格局，段落用：简单结论、主要竞争对手、怎么理解竞争格局、我的判断、接下来重点看、来源。不要输出完整研究模板，不要写估值/动作大模板。" : moatMode ? "用户问的是护城河/竞争优势。只围绕护城河回答，段落用：结论、护城河拆解、商业模式、我的判断、风险 / 证伪、下一步看什么、来源。不要输出完整行情模板。" : financialMode ? "用户问的是赚不赚钱/盈利质量/利润/现金流。只回答财务质量，段落用：我的判断、靠什么赚钱、利润质量、现金流、主要风险、下一步看什么、来源。先给判断再讲依据，优先使用上面‘已核到的实时财务口径’，缺数据只说一句、放到末尾，不要输出完整研究模板。" : falsifyMode ? "用户问的是什么情况会证伪/会推翻逻辑。只回答证伪，段落用：我的判断、会推翻逻辑的关键事实、怎么提前观察、来源。先点明当前多头逻辑成立的前提，再列出哪些事实出现就要重估，使用 Bull/Bear/监控项档案，不要输出完整研究模板。" : "必须包含这些段落，顺序固定：结论、事实、推断、估值 / 风险、动作、证伪条件、我的判断、还缺什么（折叠在末尾、只影响置信度）、来源。"}
+- ${context.compare ? `本轮是【对比任务】：把当前研究对象 ${panel.companyName} 与上面"对比对象 ${context.compare.name}"并排比较。段落固定用：简单结论、现价与估值、利润质量、护城河与商业模式、区间回报与动量、分析师预期、风险与赔率、我的判断。每个维度都要两家都讲、点明谁更优及原因；"我的判断"明确给出谁的赔率/质量更好以及成立前提。只用两家已核到的真实数据，缺的维度说一句即可。禁止买卖建议。不要输出单公司的完整研究模板。` : hasHoldings ? `本轮用户同时问了多只持仓/标的，这是【多标的/组合任务】。必须**逐只**基于上面"本轮已核到的其他标的"的真实行情/估值给判断，并给出**组合合计**视角。段落固定用：结论（点明组合整体盈亏方向 + 各标的浮动）、分标的看（每只一段：性质/估值/赔率/各自浮动盈亏）、组合视角（集中度与风险结构、谁稳谁弹）、动作（研究语言、禁买卖建议）、证伪条件、来源。合计盈亏要把当前研究对象的成本/持股 + 上面其他标的的成本/持股一起算。严禁因旧知识否定任何已核到的标的（例如说某股"还没上市"）。不要输出单公司的完整研究模板。` : businessMode ? "用户问的是靠什么赚钱/商业模式/收入来源。只回答这个问题，段落用：简单说、拆开看、关键判断、主要风险、来源。不要输出完整研究模板。" : competitorMode ? "用户问的是竞争对手/竞品/竞争格局。只回答竞争格局，段落用：简单结论、主要竞争对手、怎么理解竞争格局、我的判断、接下来重点看、来源。不要输出完整研究模板，不要写估值/动作大模板。" : moatMode ? "用户问的是护城河/竞争优势。只围绕护城河回答，段落用：结论、护城河拆解、商业模式、我的判断、风险 / 证伪、下一步看什么、来源。不要输出完整行情模板。" : financialMode ? "用户问的是赚不赚钱/盈利质量/利润/现金流。只回答财务质量，段落用：我的判断、靠什么赚钱、利润质量、现金流、主要风险、下一步看什么、来源。先给判断再讲依据，优先使用上面‘已核到的实时财务口径’，缺数据只说一句、放到末尾，不要输出完整研究模板。" : falsifyMode ? "用户问的是什么情况会证伪/会推翻逻辑。只回答证伪，段落用：我的判断、会推翻逻辑的关键事实、怎么提前观察、来源。先点明当前多头逻辑成立的前提，再列出哪些事实出现就要重估，使用 Bull/Bear/监控项档案，不要输出完整研究模板。" : "必须包含这些段落，顺序固定：结论、事实、推断、估值 / 风险、动作、证伪条件、我的判断、还缺什么（折叠在末尾、只影响置信度）、来源。"}
 - “事实”尽量编号，引用当前可用数据；不能编造具体数值。若某项缺失，写“当前未核到/来源缺失”，但继续给推断。
 - 凡涉及收入/利润/利润率/现金流/EPS/回购分红的具体数字，只能引用上面“已核到的实时财报”块；本地档案只提供定性判断（护城河/商业模式/多空逻辑），不得作为财务数字来源。${hasLiveFin ? "本轮已有实时财报，必须用真实数字支撑财务判断，不要再写“未核到完整三表/仅本地档案口径”。" : "本轮无实时财报：严禁给出任何具体财务数字或其估算值（包括收入/利润/EPS/利润率/现金流的绝对值，以及“约”“大约”“行业常见范围”这类措辞），只能定性描述赚钱机制与风险并说明置信度下降；要数字就明说“需核最新财报”。"}
 - 不要使用“暂不评分”“完整度xx%”“需要补充材料”“未接入”这种产品状态词，改成研究语言：当前未核到、置信度下降。

@@ -42,6 +42,14 @@ export function displayValuation(company, marketSnapshot, financialsData, estima
   // Analyst consensus is attached as an independent anchor whenever available —
   // it enriches even a coherent fundamental band (US gets real targets via FMP).
   const analyst = analystAnchor(estimates, price);
+  // Stage-aware 数据存疑：EV/Sales 被可信度护栏判为脏（与市场定价/现价严重脱节，多半新上市数据缺口）→
+  // 只允许回退到「可信的分析师目标价带」；没有就诚实地不给估值。绝不掉进下方"以现价为中心的 PE 带"——
+  // 那对亏损股会拿负 PE 硬凑，又是"中性=现价"的自循环根因。
+  if (v.stageAware && v.dataSuspect) {
+    const band = buildAnalystBand(marketSnapshot, company, estimates);
+    if (band) return analyst ? { ...band, analyst } : band;
+    return analyst ? { ...v, analyst } : v;
+  }
   // Stage-aware（EV/Sales 情景）刻意允许整条带在现价上方或下方（这正是"高估/低估"的诚实结论）：
   // 不套"必须 bear<price<bull"的 PE 带自洽检查，也绝不回退到以现价为中心的 PE 带（那是自循环根因）。
   if (v.stageAware && !v.cannotValueReason) return analyst ? { ...v, analyst } : v;
@@ -55,41 +63,17 @@ export function displayValuation(company, marketSnapshot, financialsData, estima
     price < bull;
   if (coherent) return analyst ? { ...v, analyst } : v;
 
-  const p = numOrNull(marketSnapshot?.price ?? company?.price);
-  const lo = numOrNull(estimates?.targetLow);
-  const hi = numOrNull(estimates?.targetHigh);
-  const mid = numOrNull(estimates?.consensusTargetPrice) ?? numOrNull(estimates?.targetMedian);
-  const midRef = mid ?? (lo && hi ? (lo + hi) / 2 : null);
-  // An analyst band is only trustworthy when its center sits in a plausible range
-  // of the live price — guards against stale/unadjusted targets (e.g. NVDA consensus
-  // 500 vs price 202, which would render a misleading "中性 500 / +147%" band).
-  const analystBandOk = p && lo && hi && lo < hi && midRef && midRef >= p * 0.5 && midRef <= p * 1.8;
-  if (analystBandOk) {
-    // Bracket the current price so the bar stays coherent even when targets cluster above it.
-    const bearV = Math.min(lo, p * 0.95);
-    const bullV = Math.max(hi, p * 1.05);
-    const baseV = mid && mid > bearV && mid < bullV ? mid : p;
-    return {
-      method: "分析师目标价区间",
-      bear: bearV.toFixed(2),
-      base: baseV.toFixed(2),
-      bull: bullV.toFixed(2),
-      currentPrice: p,
-      methods: ["分析师目标价区间"],
-      methodDetail: [{ name: "分析师目标价", bear: bearV, base: baseV, bull: bullV }],
-      keyAssumptions: [`基于分析师一致目标价：低 ${lo} / 中 ${mid ?? "—"} / 高 ${hi}（来源 ${estimates.source || "评级源"}）`],
-      sensitivity: [],
-      analyst,
-      cannotValueReason: null
-    };
-  }
+  const band = buildAnalystBand(marketSnapshot, company, estimates);
+  if (band) return analyst ? { ...band, analyst } : band;
 
   // Price-centered PE band from a quoted or EPS-derived PE — always coherent. This is
   // the guaranteed fallback so a bar renders whenever we have a price + real EPS, even
   // for growth names where FCF-yield is incoherent and analyst targets aren't trustworthy.
+  const p = numOrNull(marketSnapshot?.price ?? company?.price);
   let pe = marketSnapshot?.pe ?? company?.pe;
   if (!pe && financialsData?.eps && p) pe = p / financialsData.eps;
-  if (p && pe) {
+  // pe 必须 > 0：亏损股的负 PE 不能拿来硬凑一条以现价为中心的带子（那是误导）。
+  if (p && pe && pe > 0) {
     return {
       method: "PE 区间",
       bear: (p * 0.78).toFixed(2),
@@ -110,6 +94,37 @@ export function displayValuation(company, marketSnapshot, financialsData, estima
 function numOrNull(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * 可信的分析师目标价带（或 null）。中心必须落在现价 0.5x~1.8x 的合理区间，挡掉过期/未复权目标
+ * （如 NVDA 共识 500 vs 现价 202 会渲染出误导的"中性 500 / +147%"）。displayValuation 的两条
+ * 兜底路径（stage-aware 脏数据降级 / 传统带不自洽降级）共用，避免重复实现。
+ */
+function buildAnalystBand(marketSnapshot, company, estimates) {
+  const p = numOrNull(marketSnapshot?.price ?? company?.price);
+  const lo = numOrNull(estimates?.targetLow);
+  const hi = numOrNull(estimates?.targetHigh);
+  const mid = numOrNull(estimates?.consensusTargetPrice) ?? numOrNull(estimates?.targetMedian);
+  const midRef = mid ?? (lo && hi ? (lo + hi) / 2 : null);
+  const ok = p && lo && hi && lo < hi && midRef && midRef >= p * 0.5 && midRef <= p * 1.8;
+  if (!ok) return null;
+  // Bracket the current price so the bar stays coherent even when targets cluster above it.
+  const bearV = Math.min(lo, p * 0.95);
+  const bullV = Math.max(hi, p * 1.05);
+  const baseV = mid && mid > bearV && mid < bullV ? mid : p;
+  return {
+    method: "分析师目标价区间",
+    bear: bearV.toFixed(2),
+    base: baseV.toFixed(2),
+    bull: bullV.toFixed(2),
+    currentPrice: p,
+    methods: ["分析师目标价区间"],
+    methodDetail: [{ name: "分析师目标价", bear: bearV, base: baseV, bull: bullV }],
+    keyAssumptions: [`基于分析师一致目标价：低 ${lo} / 中 ${mid ?? "—"} / 高 ${hi}（来源 ${estimates?.source || "评级源"}）`],
+    sensitivity: [],
+    cannotValueReason: null
+  };
 }
 
 /** Distill analyst consensus into a compact anchor with upside-to-target. */
@@ -164,6 +179,29 @@ function computeEvSalesValuation({ stage, price, marketCap, revenue, revenueGrow
   const ev = (numOrNull(marketCap) || p * shares) - netCash;
   const impliedFwd = fwdRevenue > 0 ? ev / fwdRevenue : null;
   const impliedTtm = ev / rev;
+
+  // 可信度护栏：EV/Sales 带必须和「市场实际隐含倍数 / 现价」大致同量级，否则多半是脏数据
+  // （新上市票财报缺口、代码撞同名 ETF、收入/股本单位错配等）→ 宁可不估，绝不渲染错数字。
+  // SpaceX 复盘：市场按 ~93x 隐含 EV/Sales 定价，引擎却套 1–4x，吐出"该跌 94–98%"的脏带还挂"置信度高"。
+  const impliedRef = impliedFwd ?? impliedTtm;
+  const offByMagnitude = Number.isFinite(impliedRef) && (impliedRef > t.bull * 3 || impliedRef < t.bear / 3);
+  const bandDisconnected = bull < p * 0.5 || bear > p * 2;
+  const mc = numOrNull(marketCap);
+  const sharesVsCap = mc !== null && mc > 0 && Math.abs(p * shares - mc) / mc > 0.5; // price×shares 与市值自相矛盾 → per-share 口径不可信
+  if (offByMagnitude || bandDisconnected || sharesVsCap) {
+    return {
+      method: "EV/Sales 情景",
+      stageAware: true,
+      stage,
+      dataSuspect: true,
+      bear: null, base: null, bull: null,
+      currentPrice: p,
+      keyAssumptions: [],
+      sensitivity: [],
+      cannotValueReason: "财报数据与市场定价严重不符（疑似新上市/数据缺口），暂不给可信估值。"
+    };
+  }
+
   const gmTxt = numOrNull(grossMargin) !== null ? `，毛利率 ${Number(grossMargin).toFixed(0)}%` : "";
   const growthTxt = growthRaw === null ? "增速未知用 TTM 收入" : `收入增速 ${growthRaw.toFixed(0)}%`;
   const stageTxt = stage === "loss_growth" ? "亏损高成长" : "亏损";

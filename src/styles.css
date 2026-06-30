@@ -1321,6 +1321,150 @@ button:disabled {
   font-weight: 700;
 }
 
+/* ② 本轮聚焦：多公司紧凑卡（主标的之外的每只股各一张，迷你估值条 + 现价/盈亏/赔率/目标） */
+.focus-strip {
+  margin: 14px 0 4px;
+  padding: 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  background: var(--panel-glass-strong);
+}
+.focus-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+.focus-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.focus-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+}
+.focus-card {
+  padding: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--panel);
+}
+.fc-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin-bottom: 10px;
+}
+.fc-head b { color: var(--ink); font-size: 13px; font-weight: 800; }
+.fc-head span { color: var(--muted-2); font-size: 11px; font-weight: 600; }
+.fc-price {
+  margin-left: auto;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.fc-price em, .fc-chip em { font-style: normal; font-weight: 700; }
+.focus-card em.up, .focus-mini em.up { color: #1c8a4d; }
+.focus-card em.down, .focus-mini em.down { color: #c23934; }
+.focus-card em.flat, .focus-mini em.flat { color: var(--muted); }
+
+.fc-valbar { margin: 4px 2px 10px; }
+.fc-bar {
+  position: relative;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--panel-soft);
+}
+.fc-zone {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255, 59, 48, 0.22), rgba(245, 166, 35, 0.26), rgba(28, 138, 77, 0.26));
+}
+.fc-pr {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: var(--ink);
+  border: 2px solid var(--panel);
+  box-shadow: var(--sh-2);
+  z-index: 2;
+}
+.fc-scale {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 7px;
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.fc-scale .bear { color: #c23934; }
+.fc-scale .base { color: #b8770a; }
+.fc-scale .bull { color: #1c8a4d; }
+.fc-noval {
+  margin: 4px 0 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.fc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.fc-chip {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ① 估值不可用的诚实占位卡 */
+.valuation-na .valuation-head { margin-bottom: 8px; }
+.val-na-text {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+/* ② 侧栏对话化：本轮聚焦 mini chips（主标的 + 其他标的盈亏） */
+.focus-mini {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0 2px;
+}
+.fm-chip {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.fm-chip.fm-main {
+  background: var(--blue-soft);
+  color: var(--blue-ink);
+}
+.fm-chip em { font-style: normal; margin-left: 3px; }
+
 /* Multi-method cross-validation + assumptions */
 .valuation-methods {
   display: flex;
