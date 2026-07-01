@@ -22,6 +22,7 @@ import { handleChatApi } from "./src/server/routes/chat.js";
 import { handleReportGenerateApi } from "./src/server/routes/reports.js";
 import { handleProfileList, handleProfileGet, handleProfileDelete } from "./src/server/routes/portraits.js";
 import { handleEventsDigest } from "./src/server/routes/events.js";
+import { handleWatchDesk, handleWatchStock, handleWatchTrack, handleWatchUntrack } from "./src/server/routes/watch.js";
 import { handlePortfolioList, handlePortfolioUpsert, handlePortfolioDelete } from "./src/server/routes/portfolio.js";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
@@ -68,6 +69,12 @@ const server = createServer(async (req, res) => {
 
   // ── Event engine digest ────────────────────────────────
   if (method === "GET" && url.startsWith("/api/events/digest")) return handleEventsDigest(req, res);
+
+  // ── Watch (看盘：关注列表聚合 / 公司页 / 手动增删关注) ──
+  if (method === "GET" && url.startsWith("/api/watch/stock")) return handleWatchStock(req, res);
+  if (method === "GET" && url.startsWith("/api/watch/desk")) return handleWatchDesk(req, res);
+  if (method === "POST" && url.startsWith("/api/watch/track")) return handleWatchTrack(req, res);
+  if (method === "POST" && url.startsWith("/api/watch/untrack")) return handleWatchUntrack(req, res);
 
   // ── Portfolio (natural-language ledger + manual edit) ──
   if (method === "GET" && url.startsWith("/api/portfolio")) return handlePortfolioList(req, res);

@@ -311,6 +311,42 @@ export async function getRangeReturns(ticker) {
   };
 }
 
+// 港股免费日线（收盘价）：腾讯 fqkline，免费、覆盖港股主板，qfqday=[日期,开,收,高,低,量,...]，
+// oldest-first。用户明确"港股不付费，免费有啥用啥"，所以走这条免费腿，拿不到就诚实留空。
+async function fetchTencentDailyCloses(ticker) {
+  if (detectMarket(ticker) === "US") return [];
+  const symbol = toTencentHongKongSymbol(ticker); // 0700.HK → hk00700
+  if (!symbol) return [];
+  try {
+    const data = await fetchJson(
+      `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${symbol},day,,,320,qfq`,
+      { timeoutMs: 6000 }
+    );
+    const node = data?.data?.[symbol] || {};
+    const rows = Array.isArray(node.qfqday) ? node.qfqday : (Array.isArray(node.day) ? node.day : []);
+    return rows
+      .map((r) => ({ date: r[0], close: Number(r[2]) }))
+      .filter((p) => p.date && Number.isFinite(p.close)); // oldest-first
+  } catch {
+    return [];
+  }
+}
+
+// 价格曲线序列（公司页真曲线）。收盘价日线，oldest-first，供前端画面积/折线图。
+// 美股：TwelveData 主、FMP light 兜底（fetchDailyCloses）。港股：腾讯免费日K。
+// 任一都拿不到 → providerStatus:"missing"，UI 诚实显示"暂不可用"（不再区分付费/预留）。
+export async function getPriceSeries(ticker) {
+  let points;
+  if (detectMarket(ticker) === "US") {
+    const closes = await fetchDailyCloses(ticker); // newest-first
+    points = closes.slice(0, 252).reverse().map((c) => ({ date: c.date, close: c.close }));
+  } else {
+    points = (await fetchTencentDailyCloses(ticker)).slice(-252);
+  }
+  if (!points || points.length < 20) return { providerStatus: "missing" };
+  return { providerStatus: "ok", asOf: points[points.length - 1].date, points };
+}
+
 export function marketSnapshotToMarkdown(snapshot) {
   if (!snapshot || snapshot.providerStatus !== "ok") {
     return "实时行情：尚未接入可用行情源。";
