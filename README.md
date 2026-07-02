@@ -193,6 +193,7 @@ Make Luvio feel like a calm investment research desk: ask one good question, get
 
 ## Documentation
 
+- **[Master Plan（评审+分阶段改进计划+接手协议）](docs/MASTER_PLAN_2026-07-02.md)** ← start here to contribute
 - [Architecture](docs/ARCHITECTURE.md) · [Database](docs/DATABASE.md) · [Data Pipeline](docs/DATA_PIPELINE.md)
 - [Data Source Strategy](docs/DATA_SOURCE_STRATEGY.md) · [Product Requirements](docs/PRD.md)
 - [Platform Benchmark](docs/PLATFORM_BENCHMARK.md) · [AI Integration](docs/AI_INTEGRATION.md) · [GitHub Workflow](docs/GITHUB_WORKFLOW.md)
