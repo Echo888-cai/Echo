@@ -7,11 +7,18 @@
     "dev": "node server.js",
     "seed": "node scripts/seed-db.js",
     "test": "node tests/smoke.mjs && node tests/reliability.mjs && node tests/phase3.mjs",
+    "lint": "eslint .",
+    "doctor": "node scripts/doctor.js",
     "test:smoke": "node tests/smoke.mjs",
     "test:reliability": "node tests/reliability.mjs",
     "test:phase3": "node tests/phase3.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.6.0",
+    "globals": "^17.7.0"
   }
 }

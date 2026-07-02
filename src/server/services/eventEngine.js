@@ -171,7 +171,7 @@ async function fetchNewsEvents(company) {
 async function fetchPositionAlert(company) {
   const pos = getPosition(company.ticker);
   if (!pos || (!pos.stopLoss && !pos.takeProfit && !pos.avgCost)) return null;
-  let price = null;
+  let price;
   try {
     const snap = await getMarketSnapshot(company.ticker);
     price = snap?.providerStatus === "ok" ? snap.price : null;

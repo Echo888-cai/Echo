@@ -189,7 +189,7 @@ CI + lint + doctor。先修地基：让之后每一步都有护栏。
 | 项 | 内容 | 状态 | 完成于 |
 |----|------|------|--------|
 | 计划 | 本文档 + HANDOFF/README 指向更新 | ✅ | 2026-07-02 本会话 |
-| P0 | CI + ESLint + doctor | ⬜ | |
+| P0 | CI + ESLint + doctor | ✅（lint 0 error；doctor 支持 --live 探活；CI 跑 lint+test） | 2026-07-02 |
 | P1 | scheduler + 通知中心 + Telegram | ⬜ | |
 | P2 | 证伪联动 + 看盘刷新/筛选 | ⬜ | |
 | P3 | 组合体检 | ⬜ | |

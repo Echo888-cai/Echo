@@ -124,7 +124,7 @@ async function tryProvider(provider) {
   } catch (error) {
     clearTimeout(timer);
     if (error.name === "AbortError") {
-      throw new Error(`${provider.label} 请求超时 (${PROVIDER_TIMEOUT_MS}ms)`);
+      throw new Error(`${provider.label} 请求超时 (${PROVIDER_TIMEOUT_MS}ms)`, { cause: error });
     }
     throw error;
   }
@@ -250,7 +250,7 @@ async function streamProvider(provider, messages, onToken, onReasoning) {
     return { provider: provider.id, model, content: full, latencyMs: Date.now() - start, label: provider.label };
   } catch (error) {
     clearTimeout(timer);
-    if (error.name === "AbortError") throw new Error(`${provider.label} 流式请求超时 (${STREAM_TIMEOUT_MS}ms)`);
+    if (error.name === "AbortError") throw new Error(`${provider.label} 流式请求超时 (${STREAM_TIMEOUT_MS}ms)`, { cause: error });
     throw error;
   }
 }

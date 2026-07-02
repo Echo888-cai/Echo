@@ -69,9 +69,8 @@ ${researchNote}
 export async function runTwoStageChat({ question, panel, dataSources, context, system }) {
   // 阶段 1：检索分流，产出研究笔记（短超时，失败就跳过）。
   let researchNote = "";
-  let searchModel = null;
   try {
-    searchModel = await withTimeout(
+    const searchModel = await withTimeout(
       callModel({ system: SEARCH_STAGE_SYSTEM, user: buildSearchStagePrompt(question, panel, dataSources, context) }),
       SEARCH_STAGE_TIMEOUT_MS,
       null
@@ -88,7 +87,7 @@ export async function runTwoStageChat({ question, panel, dataSources, context, s
     ? buildAnswerStagePrompt(question, panel, dataSources, context, researchNote)
     : buildChatPrompt(question, panel, dataSources, context);
 
-  let answerModel = null;
+  let answerModel;
   try {
     answerModel = await withTimeout(
       callModel({ system, user: answerUser }),
@@ -134,7 +133,7 @@ export async function runTwoStageChatStream({ question, panel, dataSources, cont
     ? buildAnswerStagePrompt(question, panel, dataSources, context, researchNote)
     : buildChatPrompt(question, panel, dataSources, context);
 
-  let answerModel = null;
+  let answerModel;
   try {
     answerModel = await callModelStream({ system, user: answerUser, onToken, onReasoning });
   } catch {

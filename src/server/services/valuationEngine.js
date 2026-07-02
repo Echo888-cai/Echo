@@ -282,7 +282,6 @@ export function computeValuation(company, marketSnapshot, financialsData) {
   const methods = [];
   const assumptions = [];
   const sensitivity = [];
-  let bestBase = null;
 
   // ── PE method ──────────────────────────────────────
   if (pe && hasFinancialsData?.eps) {
@@ -303,7 +302,6 @@ export function computeValuation(company, marketSnapshot, financialsData) {
     if (hasFinancialsData.revenueGrowth !== null) {
       sensitivity.push(`收入增速 ${hasFinancialsData.revenueGrowth}% 若持续，PE 有上行空间`);
     }
-    bestBase = base;
   }
 
   // ── Forward PE method ─────────────────────────────
@@ -315,7 +313,6 @@ export function computeValuation(company, marketSnapshot, financialsData) {
     const bull = eps * (fwdPE * 1.3);
     methods.push({ name: "Forward PE", bear, base, bull, weight: 1 });
     assumptions.push(`Forward PE ${fwdPE}x`);
-    if (!bestBase || bestBase < base) bestBase = base;
   }
 
   // ── FCF Yield method ──────────────────────────────
@@ -328,7 +325,6 @@ export function computeValuation(company, marketSnapshot, financialsData) {
     methods.push({ name: "FCF Yield", bear, base, bull, weight: 1 });
     assumptions.push(`FCF per share ${compactNumberServer(fcfPerShare)} (yield range 5-10%)`);
     sensitivity.push(`FCF 每变化 10%，FCF 法目标价同步变化约 10%`);
-    if (!bestBase || bestBase < base) bestBase = base;
   }
 
   // ── PB method (fallback for financials) ────────────
@@ -371,7 +367,6 @@ export function computeValuation(company, marketSnapshot, financialsData) {
       assumptions.push(`DCF: WACC ${(wacc*100).toFixed(0)}%, 永续增长 ${(terminalGrowth*100).toFixed(0)}%, 净现金 ${compactNumberServer(netCash)}`);
       sensitivity.push(`WACC 每 +/-1% 影响 DCF 目标价约 15-20%`);
       sensitivity.push(`永续增长假设每 +/-0.5% 影响约 5-10%`);
-      if (!bestBase) bestBase = dcfValue;
     }
   }
 
@@ -383,7 +378,6 @@ export function computeValuation(company, marketSnapshot, financialsData) {
     const eps = hasPrice / pe;
     methods.push({ name: "简单 PE", bear: eps * peBear, base: eps * peBase, bull: eps * peBull, weight: 1 });
     assumptions.push(`仅基于行情 PE ${pe}x，缺 EPS 验证`);
-    bestBase = eps * peBase;
   }
 
   if (methods.length === 0) {

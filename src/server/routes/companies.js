@@ -21,7 +21,7 @@ const NON_EQUITY_HINT = /\b(ETF|ETN|Fund|Trust|Index|Preferred|Warrant|Units?|No
 
 // FMP 名称搜索：英文/拼音/代码 → 最佳美股主板普通股。返回 {ticker,name} 或 null。
 async function fmpUsNameSearch(query) {
-  let rows = [];
+  let rows;
   try {
     rows = await fmpGet("/stable/search-name", { query }, { ttl: FMP_TTL.profile, timeoutMs: 6000 });
   } catch {
@@ -231,7 +231,7 @@ async function llmResolveCompany(query) {
 
   if (market === "US") {
     const ticker = String(parsed.ticker).toUpperCase().trim();
-    if (!/^[A-Z][A-Z.\-]{0,6}$/.test(ticker)) return { reason: "unknown" };
+    if (!/^[A-Z][A-Z.-]{0,6}$/.test(ticker)) return { reason: "unknown" };
     const check = await verifyUsTicker(ticker);
     if (check.status === "not_found") return { reason: "unknown" }; // 模型把代码编错了 → 当作没识别出
     return { company: { ticker, nameZh: check.name || nameZh, nameEn: check.name || "", industry: "美股" } };
@@ -299,7 +299,7 @@ export async function handleCompanyVerify(req, res) {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
     const ticker = (url.searchParams.get("ticker") || url.searchParams.get("q") || "").toUpperCase().trim();
-    if (!/^[A-Z][A-Z.\-]{0,6}$/.test(ticker)) {
+    if (!/^[A-Z][A-Z.-]{0,6}$/.test(ticker)) {
       sendOk(res, { status: "not_found", suggestions: [] });
       return;
     }
@@ -343,7 +343,7 @@ export async function resolveCompanyFromQuery(query = "") {
   //    profile 新上市自愈），确认上市就直接放行，根除"对话里提到的裸代码识别不出→模型凭旧
   //    知识硬答它不是股票"的幻觉。only-uppercase 门控避免把普通英文名（Apple）误当代码。
   const bareTicker = String(q).replace(TRAILING_QUERY_WORDS, "").trim();
-  if (/^[A-Z][A-Z.\-]{0,6}$/.test(bareTicker)) {
+  if (/^[A-Z][A-Z.-]{0,6}$/.test(bareTicker)) {
     const check = await verifyUsTicker(bareTicker);
     if (check.status === "verified") {
       // 已知品牌别名的目标代码（SPCX=SpaceX）用品牌规范名，避免误显同名衍生品/ETF 名。
