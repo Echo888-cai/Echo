@@ -35,8 +35,43 @@ function ensureTable() {
       created_at      TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS profile_events (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      ticker        TEXT NOT NULL,
+      date          TEXT NOT NULL,
+      kind          TEXT NOT NULL,
+      summary       TEXT NOT NULL,
+      rationale     TEXT,
+      evidence_json TEXT,
+      session_id    TEXT,
+      user_id       TEXT NOT NULL DEFAULT 'local',
+      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_profile_events_ticker ON profile_events(ticker, id);
   `);
+  backfillLegacyEvents(db);
   ensured = true;
+}
+
+/**
+ * 一次性迁移：老库把事件存在 company_profiles.events_json（封顶 40 条、无理由无证据）。
+ * profile_events 为空且存在老事件时搬进独立表；此后 events_json 只读不写（遗留列）。
+ */
+function backfillLegacyEvents(db) {
+  if (db.prepare("SELECT 1 FROM profile_events LIMIT 1").get()) return;
+  const rows = db
+    .prepare("SELECT ticker, events_json FROM company_profiles WHERE events_json IS NOT NULL AND events_json != '[]'")
+    .all();
+  if (!rows.length) return;
+  const insert = db.prepare("INSERT INTO profile_events (ticker, date, kind, summary) VALUES (?, ?, ?, ?)");
+  const run = db.transaction(() => {
+    for (const row of rows) {
+      for (const e of safeParse(row.events_json, [])) {
+        if (e && e.summary) insert.run(row.ticker, e.date || "", e.kind || "note", String(e.summary).slice(0, 300));
+      }
+    }
+  });
+  run();
 }
 
 function ensureCompanyRow(db, ticker, name) {
@@ -74,12 +109,49 @@ function hydrate(row) {
     monitors: safeParse(row.monitors_json, []),
     falsifiers: safeParse(row.falsifiers_json, []),
     valuation: safeParse(row.valuation_json, null),
-    events: safeParse(row.events_json, []),
+    events: listProfileEvents(row.ticker),
     profileMd: row.profile_md || "",
     turnCount: row.turn_count || 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
+}
+
+/** 追加一条判断变化事件（画像时间线）。只有判断变化才该调它——不是交易日志。 */
+export function appendProfileEvent(ticker, event = {}) {
+  ensureTable();
+  if (!event.summary) return;
+  const db = getDb();
+  db.prepare(`
+    INSERT INTO profile_events (ticker, date, kind, summary, rationale, evidence_json, session_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    normalizeTicker(ticker),
+    event.date || "",
+    event.kind || "note",
+    String(event.summary).slice(0, 300),
+    event.rationale ? String(event.rationale).slice(0, 600) : null,
+    Array.isArray(event.evidence) && event.evidence.length ? JSON.stringify(event.evidence.slice(0, 4)) : null,
+    event.sessionId || null
+  );
+}
+
+/** 按时间正序返回时间线（date/kind/summary/rationale/evidence/sessionId）。 */
+export function listProfileEvents(ticker, limit = 200) {
+  ensureTable();
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT date, kind, summary, rationale, evidence_json, session_id
+    FROM profile_events WHERE ticker = ? ORDER BY id DESC LIMIT ?
+  `).all(normalizeTicker(ticker), limit);
+  return rows.reverse().map((r) => ({
+    date: r.date,
+    kind: r.kind,
+    summary: r.summary,
+    rationale: r.rationale || "",
+    evidence: safeParse(r.evidence_json, []),
+    sessionId: r.session_id || null
+  }));
 }
 
 export function getCompanyProfile(ticker) {
@@ -110,9 +182,9 @@ export function listCompanyProfiles(limit = 50) {
 }
 
 /**
- * Upsert a profile. `patch` carries the new current-view fields plus an optional
- * `event` to append. Current-view fields are overwritten (not accumulated);
- * events are append-only and capped.
+ * Upsert a profile. `patch` carries the new current-view fields plus optional
+ * `event`（单条）/`events`（多条）to append to the timeline (profile_events 表)。
+ * Current-view fields are overwritten (not accumulated); events are append-only.
  */
 export function upsertCompanyProfile(ticker, patch = {}) {
   ensureTable();
@@ -121,9 +193,9 @@ export function upsertCompanyProfile(ticker, patch = {}) {
   ensureCompanyRow(db, normalized, patch.companyName);
   const existing = getCompanyProfile(normalized);
 
-  const events = Array.isArray(existing?.events) ? [...existing.events] : [];
-  if (patch.event) events.push(patch.event);
-  const cappedEvents = events.slice(-40);
+  const newEvents = [...(Array.isArray(patch.events) ? patch.events : []), ...(patch.event ? [patch.event] : [])];
+  for (const e of newEvents) appendProfileEvent(normalized, e);
+  const allEvents = listProfileEvents(normalized);
 
   const merged = {
     companyName: patch.companyName || existing?.companyName || normalized,
@@ -137,15 +209,15 @@ export function upsertCompanyProfile(ticker, patch = {}) {
     valuation: patch.valuation ?? existing?.valuation ?? null,
     turnCount: (existing?.turnCount || 0) + (patch.bumpTurn ? 1 : 0)
   };
-  const profileMd = patch.profileMd || renderProfileMarkdown(normalized, merged, cappedEvents);
+  const profileMd = patch.profileMd || renderProfileMarkdown(normalized, merged, allEvents);
 
   db.prepare(`
     INSERT INTO company_profiles
       (ticker, company_name, thesis, research_status, confidence, bull_json, bear_json,
-       monitors_json, falsifiers_json, valuation_json, events_json, profile_md, turn_count, updated_at)
+       monitors_json, falsifiers_json, valuation_json, profile_md, turn_count, updated_at)
     VALUES
       (@ticker, @companyName, @thesis, @researchStatus, @confidence, @bull, @bear,
-       @monitors, @falsifiers, @valuation, @events, @profileMd, @turnCount, datetime('now'))
+       @monitors, @falsifiers, @valuation, @profileMd, @turnCount, datetime('now'))
     ON CONFLICT(ticker) DO UPDATE SET
       company_name = excluded.company_name,
       thesis = excluded.thesis,
@@ -156,7 +228,6 @@ export function upsertCompanyProfile(ticker, patch = {}) {
       monitors_json = excluded.monitors_json,
       falsifiers_json = excluded.falsifiers_json,
       valuation_json = excluded.valuation_json,
-      events_json = excluded.events_json,
       profile_md = excluded.profile_md,
       turn_count = excluded.turn_count,
       updated_at = datetime('now')
@@ -171,7 +242,6 @@ export function upsertCompanyProfile(ticker, patch = {}) {
     monitors: JSON.stringify(merged.monitors),
     falsifiers: JSON.stringify(merged.falsifiers),
     valuation: merged.valuation ? JSON.stringify(merged.valuation) : null,
-    events: JSON.stringify(cappedEvents),
     profileMd,
     turnCount: merged.turnCount
   });
@@ -181,10 +251,23 @@ export function upsertCompanyProfile(ticker, patch = {}) {
 export function deleteCompanyProfile(ticker) {
   ensureTable();
   const db = getDb();
-  return db.prepare("DELETE FROM company_profiles WHERE ticker = ?").run(normalizeTicker(ticker)).changes > 0;
+  const normalized = normalizeTicker(ticker);
+  db.prepare("DELETE FROM profile_events WHERE ticker = ?").run(normalized);
+  return db.prepare("DELETE FROM company_profiles WHERE ticker = ?").run(normalized).changes > 0;
 }
 
-/** Render the current-view fields + events into a Markdown portrait (frontend + export). */
+export const PROFILE_EVENT_KIND_LABEL = {
+  created: "建档",
+  thesis_change: "判断变化",
+  falsifier_change: "证伪线更新",
+  note: "记录"
+};
+
+/**
+ * Render the current-view fields + timeline into a Markdown 主档案 (frontend + export)。
+ * 结构：投资主线 / 关键指标 / Bull / 风险台账 / 证伪条件 / 判断变化时间线（带理由与证据）。
+ * 画像是长期研究资产，不是交易日志——正文永远是"当前仍成立的最佳观点"，历史进时间线。
+ */
 export function renderProfileMarkdown(ticker, view = {}, events = []) {
   const lines = [
     `---`,
@@ -200,20 +283,36 @@ export function renderProfileMarkdown(ticker, view = {}, events = []) {
   if (view.researchStatus || view.confidence) {
     lines.push(`研究状态：${view.researchStatus || "—"} · 置信度：${view.confidence || "—"}`, "");
   }
+  const v = view.valuation;
+  const metrics = [];
+  if (v && (v.base != null || v.bear != null || v.bull != null)) {
+    const band = ["悲观 " + (v.bear ?? "—"), "中性 " + (v.base ?? "—"), "乐观 " + (v.bull ?? "—")].join(" / ");
+    metrics.push(`- 估值带（${v.method || "—"}）：${band}${v.currentPrice != null ? `（现价 ${v.currentPrice}）` : ""}`);
+  }
+  if (Array.isArray(view.monitors) && view.monitors.length) {
+    metrics.push(`- 关键观察变量：${view.monitors.join("、")}`);
+  }
+  if (metrics.length) lines.push("## 关键指标", ...metrics, "");
   if (Array.isArray(view.bull) && view.bull.length) {
     lines.push("## Bull case", ...view.bull.map((x) => `- ${x}`), "");
   }
   if (Array.isArray(view.bear) && view.bear.length) {
-    lines.push("## Bear case", ...view.bear.map((x) => `- ${x}`), "");
-  }
-  if (Array.isArray(view.monitors) && view.monitors.length) {
-    lines.push("## 关键观察变量", ...view.monitors.map((x) => `- ${x}`), "");
+    lines.push("## 风险台账（Bear case）", ...view.bear.map((x) => `- ${x}`), "");
   }
   if (Array.isArray(view.falsifiers) && view.falsifiers.length) {
-    lines.push("## 证伪条件", ...view.falsifiers.map((x) => `- ${x}`), "");
+    lines.push("## 证伪条件（当前生效）", ...view.falsifiers.map((x) => `- ${x}`), "");
   }
   if (events.length) {
-    lines.push("## 投资主线变更日志", ...events.slice(-12).reverse().map((e) => `- ${e.date || ""}：${e.summary || ""}`), "");
+    lines.push("## 判断变化时间线");
+    for (const e of events.slice(-20).reverse()) {
+      lines.push("", `### ${e.date || "—"} · ${PROFILE_EVENT_KIND_LABEL[e.kind] || e.kind || "记录"}`, e.summary || "");
+      if (e.rationale) lines.push(`- 理由：${e.rationale}`);
+      for (const ev of Array.isArray(e.evidence) ? e.evidence : []) {
+        if (ev?.url) lines.push(`- 证据：[${ev.title || ev.url}](${ev.url})`);
+      }
+    }
+    lines.push("");
   }
+  lines.push("---", "> 由 Luvio 生成的长期研究画像，仅供研究学习，不构成投资建议。");
   return lines.join("\n");
 }

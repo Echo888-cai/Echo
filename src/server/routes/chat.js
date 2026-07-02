@@ -333,22 +333,6 @@ function finalizeChat({ payload, result, webEvidence, valuation, analyst, portra
     }
   }
 
-  // 回写长期画像：判断变化时追加事件日志，否则只累计研究轮次。
-  let portrait = null;
-  if (portraitTicker && result.decisionPanel) {
-    try {
-      portrait = updatePortraitFromPanel({
-        ticker: portraitTicker,
-        panel: result.decisionPanel,
-        valuation: valuation.cannotValueReason ? null : valuation,
-        question,
-        answerContent: content // 证伪段落里的量化条件（含价格线）从这里抽取沉淀
-      });
-    } catch (err) {
-      console.warn("company_profile 回写失败:", err?.message || err);
-    }
-  }
-
   // A-P1.1：结构化对比（带 compareWith 时）—— 前端渲染两列并排表，散文保留在表下。
   const comparison = buildComparison({ payload, result, valuation, analyst, compareData });
 
@@ -362,6 +346,24 @@ function finalizeChat({ payload, result, webEvidence, valuation, analyst, portra
     dualQuote: dualQuote || null,
     mode: chatModel?.content ? "chat_model" : "chat_local"
   });
+
+  // 回写长期画像：判断变化时追加时间线事件（带理由/证据/会话链接），否则只累计研究轮次。
+  // 放在会话落库之后，是为了把 sessionId 记进事件——复盘时能从时间线跳回当时那轮研究。
+  let portrait = null;
+  if (portraitTicker && result.decisionPanel) {
+    try {
+      portrait = updatePortraitFromPanel({
+        ticker: portraitTicker,
+        panel: result.decisionPanel,
+        valuation: valuation.cannotValueReason ? null : valuation,
+        question,
+        answerContent: content, // 证伪段落里的量化条件（含价格线）从这里抽取沉淀
+        sessionId
+      });
+    } catch (err) {
+      console.warn("company_profile 回写失败:", err?.message || err);
+    }
+  }
 
   return {
     mode: chatModel?.content ? "chat_model" : "chat_local",

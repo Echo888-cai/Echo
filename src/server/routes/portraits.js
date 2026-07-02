@@ -27,7 +27,8 @@ export async function handleProfileGet(req, res) {
     if (!ticker) { sendError(res, 400, "缺少 ticker"); return; }
     const profile = getCompanyProfile(ticker);
     if (!profile) { sendError(res, 404, "未找到该公司画像"); return; }
-    const markdown = profile.profileMd || renderProfileMarkdown(profile.ticker, profile, profile.events);
+    // 总是现渲染：老库存的 profile_md 是旧格式，且时间线可能有 upsert 之外追加的事件。
+    const markdown = renderProfileMarkdown(profile.ticker, profile, profile.events);
     sendOk(res, { profile, markdown });
   } catch (error) {
     sendError(res, 500, error.message || "获取画像失败");

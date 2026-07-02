@@ -174,6 +174,10 @@ let watchDeskLoaded = false;
 let watchStock = null;
 let watchStockTicker = "";
 let watchStockLoading = false;
+// 公司页双 Tab（P4 画像文档化）：总览 = 原四卡；画像 = 主档案 + 判断变化时间线 + 导出。
+let stockTab = "overview";
+let stockPortrait = null; // { profile, markdown } 来自 /api/company/profile
+let stockPortraitLoading = false;
 // 公司页价格曲线的区间：1月 / 3月 / 1年。切换只在前端切片已加载的序列，不再打后端。
 let chartRange = "3m";
 // 公司页加载序号：用它（而非当前路由）判定"这次加载是否已被更新的加载取代"，
@@ -1191,6 +1195,8 @@ function applyChatResult(result, key, company) {
     if (result.positionSaved) toast(`已记账 ${label} 的持仓信息。`);
     else if (result.portrait?.created) toast(`已为 ${label} 建立长期画像。`);
     else if (result.portrait?.changed) toast(`已更新 ${label} 的长期画像（判断有变化）。`);
+    // 画像变了就作废公司页的画像缓存，下次切"画像"Tab 拉到最新时间线。
+    if (result.portrait && result.portrait.ticker === watchStockTicker) stockPortrait = null;
     return true;
   }
   toast(`${label} 的研究完成了，点左侧查看。`);
@@ -2073,6 +2079,9 @@ async function loadWatchStock(ticker) {
   watchStockTicker = ticker;
   watchStock = null;
   chartRange = "3m"; // 每次打开新公司回到默认区间
+  stockTab = "overview"; // 换公司回到总览，画像缓存作废
+  stockPortrait = null;
+  stockPortraitLoading = false;
   try {
     const data = await api(`/api/watch/stock?ticker=${encodeURIComponent(ticker)}`);
     if (seq === watchStockSeq) watchStock = data.stock || null;
@@ -2308,6 +2317,21 @@ function renderStockDetail(stock) {
       : `<p class="stock-card-body is-empty">近期暂无重大事件</p>`}
   </div>`;
 
+  const tabs = `<div class="stock-tabs" role="tablist">
+    <button class="stock-tab ${stockTab === "overview" ? "is-active" : ""}" type="button" data-action="stock-tab" data-tab="overview">总览</button>
+    <button class="stock-tab ${stockTab === "portrait" ? "is-active" : ""}" type="button" data-action="stock-tab" data-tab="portrait">画像</button>
+  </div>`;
+
+  const body = stockTab === "portrait"
+    ? renderPortraitTab(stock)
+    : `${renderPriceChart(stock.series)}
+      <div class="stock-grid">
+        ${researchCard}
+        ${fundamentalsCard}
+        ${falsifiersCard}
+        ${eventsCard}
+      </div>`;
+
   return `<div class="stock-page">
     <a class="back-link" href="#/watch">← 看盘</a>
     <div class="stock-head">
@@ -2323,14 +2347,103 @@ function renderStockDetail(stock) {
       <button class="primary" type="button" data-action="return-company" data-ticker="${esc(stock.ticker)}" data-name="${esc(stock.companyName)}">深入研究</button>
     </div>
     ${note}
-    ${renderPriceChart(stock.series)}
-    <div class="stock-grid">
-      ${researchCard}
-      ${fundamentalsCard}
-      ${falsifiersCard}
-      ${eventsCard}
+    ${tabs}
+    ${body}
+  </div>`;
+}
+
+// ── P4 画像 Tab：主档案（markdown 渲染）+ 判断变化时间线 + 导出 ──
+async function loadStockPortrait(ticker) {
+  if (!ticker || stockPortraitLoading) return;
+  stockPortraitLoading = true;
+  try {
+    const data = await api(`/api/company/profile?ticker=${encodeURIComponent(ticker)}`);
+    stockPortrait = { profile: data.profile || null, markdown: data.markdown || "" };
+  } catch {
+    stockPortrait = { profile: null, markdown: "" };
+  } finally {
+    stockPortraitLoading = false;
+    render();
+  }
+}
+
+const PORTRAIT_KIND = {
+  created: { label: "建档", cls: "pk-created" },
+  thesis_change: { label: "判断变化", cls: "pk-change" },
+  falsifier_change: { label: "证伪线更新", cls: "pk-falsifier" },
+  note: { label: "记录", cls: "pk-note" }
+};
+
+function renderPortraitEvent(e) {
+  const kind = PORTRAIT_KIND[e.kind] || PORTRAIT_KIND.note;
+  const evidence = (Array.isArray(e.evidence) ? e.evidence : [])
+    .filter((ev) => ev && ev.url)
+    .map((ev) => `<a class="pt-evidence" href="${esc(ev.url)}" target="_blank" rel="noopener">${esc(ev.title || "来源")}</a>`)
+    .join("");
+  return `<li class="pt-event">
+    <div class="pt-event-head">
+      <span class="pt-date">${esc(e.date || "—")}</span>
+      <span class="pt-kind ${kind.cls}">${kind.label}</span>
+      ${e.sessionId ? `<button class="pt-session" type="button" data-action="load-session" data-id="${esc(e.sessionId)}">查看当轮研究 →</button>` : ""}
+    </div>
+    <p class="pt-summary">${esc(e.summary || "")}</p>
+    ${e.rationale ? `<p class="pt-rationale">理由：${esc(e.rationale)}</p>` : ""}
+    ${evidence ? `<div class="pt-evidence-row">${evidence}</div>` : ""}
+  </li>`;
+}
+
+// 主档案渲染用文档部分（时间线单独渲染更好读），导出仍是完整 markdown。
+function portraitDocHtml(markdown = "") {
+  const doc = markdown
+    .replace(/^---[\s\S]*?---\s*/, "") // 去 frontmatter
+    .split(/\n## 判断变化时间线/)[0];
+  return markdownToHtml(doc);
+}
+
+function renderPortraitTab(stock) {
+  if (!stockPortrait) {
+    if (!stockPortraitLoading) void loadStockPortrait(stock.ticker);
+    return `<div class="wd-loading">正在读取画像…</div>`;
+  }
+  const p = stockPortrait.profile;
+  if (!p || (!p.thesis && !(p.events || []).length)) {
+    return `<div class="portrait-empty">
+      <p>还没有长期画像。完成一轮研究，投资主线、证伪条件和判断变化会自动沉淀到这里。</p>
+      <button class="primary" type="button" data-action="return-company" data-ticker="${esc(stock.ticker)}" data-name="${esc(stock.companyName)}">去研究一轮</button>
+    </div>`;
+  }
+  const events = Array.isArray(p.events) ? [...p.events].reverse() : [];
+  return `<div class="portrait-pane">
+    <div class="portrait-bar">
+      <span class="portrait-meta">研究 ${p.turnCount || 0} 轮 · 更新于 ${esc((p.updatedAt || "").slice(0, 10))}</span>
+      <button class="wl-linkbtn" type="button" data-action="export-portrait">导出 Markdown ↓</button>
+    </div>
+    <div class="portrait-doc">${portraitDocHtml(stockPortrait.markdown)}</div>
+    <div class="portrait-timeline">
+      <h3>判断变化时间线</h3>
+      ${events.length
+        ? `<ul class="pt-list">${events.map(renderPortraitEvent).join("")}</ul>`
+        : `<p class="stock-card-body is-empty">还没有判断变化——画像只记"观点变了"的时刻，不记流水账。</p>`}
     </div>
   </div>`;
+}
+
+function exportPortrait() {
+  if (!stockPortrait?.markdown) {
+    toast("画像还没加载好。");
+    return;
+  }
+  const ticker = stockPortrait.profile?.ticker || watchStockTicker || "luvio";
+  const blob = new Blob([stockPortrait.markdown], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${ticker.replace(/[^\w.-]/g, "")}-portrait.md`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+  toast("已导出画像 Markdown。");
 }
 
 function renderEmptyState() {
@@ -2923,6 +3036,8 @@ document.addEventListener("click", async (event) => {
   if (action === "watch-filter") { watchFilter = target.dataset.v || "all"; render(); return; }
   if (action === "watch-sort") { watchSort = target.dataset.v || "urgency"; render(); return; }
   if (action === "chart-range") { chartRange = target.dataset.range || "3m"; render(); return; }
+  if (action === "stock-tab") { stockTab = target.dataset.tab || "overview"; render(); return; }
+  if (action === "export-portrait") { exportPortrait(); return; }
   if (action === "watch-add-open") { watchAddOpen = true; watchAddError = ""; render(); setTimeout(() => document.querySelector(".wl-add input")?.focus(), 0); return; }
   if (action === "watch-add-close") { watchAddOpen = false; watchAddError = ""; render(); return; }
   if (action === "untrack-stock") { void removeWatch(target.dataset.ticker); return; }

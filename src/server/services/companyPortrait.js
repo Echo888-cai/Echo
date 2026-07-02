@@ -135,13 +135,31 @@ function judgmentChanged(prev, next) {
   );
 }
 
+/** 面板来源里挑最可信的几条作为事件证据链接（未来复盘"当时依据什么"）。 */
+function topEvidence(panel, limit = 3) {
+  const sources = Array.isArray(panel?.sources) ? panel.sources : [];
+  return sources
+    .filter((s) => s && s.url)
+    .slice(0, limit)
+    .map((s) => ({ title: s.label || s.type || "来源", url: s.url }));
+}
+
+/** 量化证伪规则的指纹：kind+threshold 集合变了才算"证伪线演进"（文本措辞变化不算）。 */
+function ruleSignature(rules) {
+  return (Array.isArray(rules) ? rules : [])
+    .map((r) => `${r.kind}:${r.threshold}`)
+    .sort()
+    .join("|");
+}
+
 /**
  * 一轮研究后回写画像。返回 { created, changed, profile }。
  * - 首次研究该公司 → 建档（不写"变更"事件，写一条"建档"事件）。
- * - 已有画像且判断变化 → 改正文 + 追加一条变更事件。
+ * - 已有画像且判断变化 → 改正文 + 追加一条变更事件（带理由与证据链接，未来复盘用）。
+ * - 证伪价格线（量化规则）变化 → 追加一条"证伪线演进"事件。
  * - 已有画像但判断未变 → 只 bump turn_count，不写流水账。
  */
-export function updatePortraitFromPanel({ ticker, panel, valuation = null, question = "", answerContent = "" } = {}) {
+export function updatePortraitFromPanel({ ticker, panel, valuation = null, question = "", answerContent = "", sessionId = null } = {}) {
   if (!ticker || !panel) return { created: false, changed: false, profile: null };
   const localProfile = companyByTicker(ticker) || {};
   const prev = getCompanyProfile(ticker);
@@ -156,27 +174,55 @@ export function updatePortraitFromPanel({ ticker, panel, valuation = null, quest
   const isNew = !prev;
   const changed = judgmentChanged(prev, view);
   const date = beijingDate();
-  let event = null;
+  const norm = (s) => String(s || "").replace(/\s+/g, "").trim();
+  const q = String(question || "").trim().slice(0, 80);
+  const evidence = topEvidence(panel);
+  const events = [];
   if (isNew) {
-    event = { date, kind: "created", summary: `建立画像：${view.thesis || view.researchStatus || "首次研究"}` };
+    events.push({
+      date,
+      kind: "created",
+      summary: `建立画像：${view.thesis || view.researchStatus || "首次研究"}`,
+      rationale: q ? `首轮研究，触发问题：「${q}」` : "首轮研究建档",
+      evidence,
+      sessionId
+    });
   } else if (changed) {
     const fromTo = [];
     if (prev.researchStatus && prev.researchStatus !== view.researchStatus) fromTo.push(`状态 ${prev.researchStatus}→${view.researchStatus}`);
     if (prev.confidence && prev.confidence !== view.confidence) fromTo.push(`置信度 ${prev.confidence}→${view.confidence}`);
     const detail = fromTo.length ? `（${fromTo.join("，")}）` : "";
-    event = { date, kind: "thesis_change", summary: `${view.thesis || "更新判断"}${detail}` };
+    const rationale = [
+      q ? `触发问题：「${q}」` : "",
+      prev.thesis && norm(prev.thesis) !== norm(view.thesis) ? `主线由「${prev.thesis}」改为「${view.thesis}」` : "",
+      fromTo.join("，")
+    ].filter(Boolean).join("；") || "本轮研究后判断更新";
+    events.push({ date, kind: "thesis_change", summary: `${view.thesis || "更新判断"}${detail}`, rationale, evidence, sessionId });
+  }
+
+  // 证伪线演进：量化规则指纹（kind+threshold 集合）变了才记，措辞微调不记——时间线只留判断变化。
+  const nextRules = parseFalsifierRules(view.falsifiers);
+  if (prev && nextRules.length && ruleSignature(parseFalsifierRules(prev.falsifiers)) !== ruleSignature(nextRules)) {
+    events.push({
+      date,
+      kind: "falsifier_change",
+      summary: `证伪线更新：${nextRules.map((r) => r.label).join("；")}`.slice(0, 300),
+      rationale: q ? `本轮研究给出新的量化证伪条件（触发问题：「${q}」）` : "本轮研究给出新的量化证伪条件",
+      evidence,
+      sessionId
+    });
   }
 
   const profile = upsertCompanyProfile(ticker, {
     ...view,
-    event,
+    events,
     bumpTurn: true
   });
 
   // UX-7 研究→监控闭环：证伪条件里"明确的价格条件"落成 watch_rules，
   // 看盘状态机 + 定时巡检据此自动盯盘、命中推通知。解析失败不影响画像主流程。
   try {
-    replaceFalsifierRules(ticker, parseFalsifierRules(view.falsifiers));
+    replaceFalsifierRules(ticker, nextRules);
   } catch (err) {
     console.error("[companyPortrait] 证伪规则同步失败：", err?.message || err);
   }
