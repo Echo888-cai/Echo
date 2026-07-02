@@ -24,6 +24,8 @@ import { handleProfileList, handleProfileGet, handleProfileDelete } from "./src/
 import { handleEventsDigest } from "./src/server/routes/events.js";
 import { handleWatchDesk, handleWatchStock, handleWatchTrack, handleWatchUntrack } from "./src/server/routes/watch.js";
 import { handlePortfolioList, handlePortfolioUpsert, handlePortfolioDelete } from "./src/server/routes/portfolio.js";
+import { handleNotificationsList, handleNotificationsUnread, handleNotificationsRead, handleNotificationsTest, handleSchedulerStatus } from "./src/server/routes/notifications.js";
+import { startScheduler } from "./src/server/services/scheduler.js";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 loadEnvFile(root);
@@ -69,6 +71,13 @@ const server = createServer(async (req, res) => {
 
   // ── Event engine digest ────────────────────────────────
   if (method === "GET" && url.startsWith("/api/events/digest")) return handleEventsDigest(req, res);
+
+  // ── Notifications (通知中心 + 定时任务状态) ─────────────
+  if (method === "GET" && url.startsWith("/api/notifications/unread")) return handleNotificationsUnread(req, res);
+  if (method === "POST" && url.startsWith("/api/notifications/read")) return handleNotificationsRead(req, res);
+  if (method === "POST" && url.startsWith("/api/notifications/test")) return handleNotificationsTest(req, res);
+  if (method === "GET" && url.startsWith("/api/notifications")) return handleNotificationsList(req, res);
+  if (method === "GET" && url.startsWith("/api/scheduler/status")) return handleSchedulerStatus(req, res);
 
   // ── Watch (看盘：关注列表聚合 / 公司页 / 手动增删关注) ──
   if (method === "GET" && url.startsWith("/api/watch/stock")) return handleWatchStock(req, res);
@@ -123,4 +132,6 @@ process.on("uncaughtException", (err) => console.error("[uncaughtException]", er
 
 server.listen(port, "127.0.0.1", () => {
   console.log(`Luvio is running at http://127.0.0.1:${port}`);
+  // 定时任务（盘前速报/触线巡检）随服务启动；LUVIO_DISABLE_SCHEDULER=1 可关。
+  startScheduler();
 });

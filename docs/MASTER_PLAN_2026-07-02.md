@@ -190,7 +190,7 @@ CI + lint + doctor。先修地基：让之后每一步都有护栏。
 |----|------|------|--------|
 | 计划 | 本文档 + HANDOFF/README 指向更新 | ✅ | 2026-07-02 本会话 |
 | P0 | CI + ESLint + doctor | ✅（lint 0 error；doctor 支持 --live 探活；CI 跑 lint+test） | 2026-07-02 |
-| P1 | scheduler + 通知中心 + Telegram | ⬜ | |
+| P1 | scheduler + 通知中心 + Telegram | ✅（3 内置任务+misfire 补跑；铃铛/面板/已读闭环；测试通知按钮；Telegram 待用户配 token 后生效；测试 15 项） | 2026-07-02 |
 | P2 | 证伪联动 + 看盘刷新/筛选 | ⬜ | |
 | P3 | 组合体检 | ⬜ | |
 | P4 | 画像文档化 | ⬜ | |

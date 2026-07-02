@@ -194,6 +194,15 @@ let resolvingLabel = "正在检索和思考";
 // token 不再落到当前视图（避免把 A 的流写进 B）。streamingKey 标记当前在前台流的 run。
 let streamingKey = null;
 let streamingText = "";
+// 通知中心：未读数 60s 轮询（只做角标局部更新，不整页重渲）；面板打开时才拉列表。
+let notifUnread = 0;
+let notifOpen = false;
+let notifItems = [];
+let notifLoading = false;
+// 设置页的调度器/推送状态（进设置页时拉一次；loaded 标志防"失败→render→再拉"循环）。
+let schedStatus = null;
+let schedStatusLoading = false;
+let schedStatusLoaded = false;
 
 function runKey(sessionId, ticker) { return sessionId || (ticker ? `new:${ticker}` : "new"); }
 function activeRunKey() { return runKey(getSessionId(), getCompany()?.ticker); }
@@ -707,6 +716,140 @@ async function refreshWatchDesk() {
   } finally {
     watchDeskLoaded = true;
   }
+}
+
+// ── 通知中心 ─────────────────────────────────────────────
+
+async function refreshNotifUnread() {
+  try {
+    const data = await api("/api/notifications/unread");
+    const next = Number(data.unread) || 0;
+    if (next !== notifUnread) {
+      notifUnread = next;
+      renderNotifBadge();
+    }
+  } catch { /* 通知不可用不打扰研究主流程 */ }
+}
+
+// 只动角标 DOM，不整页重渲（60s 轮询下整页重渲会打断输入/滚动）。
+function renderNotifBadge() {
+  const bell = document.querySelector(".notif-bell");
+  if (!bell) return;
+  const dot = bell.querySelector(".notif-dot");
+  if (notifUnread > 0) {
+    const label = notifUnread > 99 ? "99+" : String(notifUnread);
+    if (dot) dot.textContent = label;
+    else bell.insertAdjacentHTML("beforeend", `<i class="notif-dot">${label}</i>`);
+  } else if (dot) {
+    dot.remove();
+  }
+}
+
+async function toggleNotifPanel() {
+  notifOpen = !notifOpen;
+  if (!notifOpen) { render(); return; }
+  notifLoading = true;
+  render();
+  try {
+    const data = await api("/api/notifications?limit=20");
+    notifItems = data.notifications || [];
+    notifUnread = Number(data.unread) || 0;
+  } catch {
+    notifItems = [];
+  }
+  notifLoading = false;
+  render();
+}
+
+async function markNotifRead(id, ticker) {
+  try {
+    const data = await api("/api/notifications/read", { method: "POST", body: JSON.stringify({ id }) });
+    notifUnread = Number(data.unread) || 0;
+    const item = notifItems.find((n) => n.id === Number(id));
+    if (item) item.readAt = item.readAt || new Date().toISOString();
+  } catch { /* 已读失败不阻断跳转 */ }
+  if (ticker) {
+    notifOpen = false;
+    location.hash = `#/watch/${encodeURIComponent(ticker)}`;
+  }
+  render();
+}
+
+async function markAllNotifsRead() {
+  try {
+    await api("/api/notifications/read", { method: "POST", body: JSON.stringify({ all: true }) });
+    notifUnread = 0;
+    notifItems = notifItems.map((n) => ({ ...n, readAt: n.readAt || new Date().toISOString() }));
+  } catch { /* ignore */ }
+  render();
+}
+
+async function sendTestNotification() {
+  try {
+    const r = await api("/api/notifications/test", { method: "POST", body: "{}" });
+    toast(r.telegram === "sent" ? "测试通知已发送（含 Telegram）" : r.telegramConfigured ? `已落通知中心；Telegram：${r.telegram}` : "已落通知中心（Telegram 未配置）");
+    void refreshNotifUnread();
+  } catch (err) {
+    toast(`发送失败：${err.message}`);
+  }
+}
+
+async function loadSchedulerStatus() {
+  if (schedStatusLoading) return;
+  schedStatusLoading = true;
+  try {
+    schedStatus = await api("/api/scheduler/status");
+  } catch {
+    schedStatus = null;
+  }
+  schedStatusLoading = false;
+  schedStatusLoaded = true;
+  if (currentRoute() === "/settings") render();
+}
+
+// SQLite datetime('now') 是 UTC，转相对时间显示。
+function notifWhen(createdAt = "") {
+  const t = Date.parse(String(createdAt).replace(" ", "T") + (createdAt.includes("Z") || createdAt.includes("+") ? "" : "Z"));
+  if (!Number.isFinite(t)) return "";
+  const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
+  if (mins < 1) return "刚刚";
+  if (mins < 60) return `${mins} 分钟前`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const d = new Date(t);
+  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+const NOTIF_KIND_META = {
+  digest: { label: "速报", cls: "nk-digest" },
+  position_alert: { label: "触线", cls: "nk-alert" },
+  falsify_alert: { label: "证伪", cls: "nk-falsify" },
+  system: { label: "系统", cls: "nk-system" }
+};
+
+function renderNotifPanel() {
+  const head = `<div class="notif-head"><strong>通知</strong>
+    ${notifUnread > 0 ? `<button type="button" class="notif-readall" data-action="notif-read-all">全部已读</button>` : ""}
+  </div>`;
+  let body;
+  if (notifLoading) {
+    body = `<div class="notif-empty">加载中…</div>`;
+  } else if (!notifItems.length) {
+    body = `<div class="notif-empty">暂无通知。盘前速报、持仓触线提醒会出现在这里——服务在跑就会自动送达，不用手动查。</div>`;
+  } else {
+    body = notifItems.map((n) => {
+      const meta = NOTIF_KIND_META[n.kind] || NOTIF_KIND_META.system;
+      return `<button type="button" class="notif-item ${n.readAt ? "" : "is-unread"}" data-action="notif-open" data-id="${n.id}" data-ticker="${esc(n.ticker || "")}">
+        <span class="notif-kind ${meta.cls}">${meta.label}</span>
+        <span class="notif-main">
+          <span class="notif-title">${esc(n.title)}</span>
+          ${n.body ? `<span class="notif-body">${esc(n.body)}</span>` : ""}
+        </span>
+        <span class="notif-when">${notifWhen(n.createdAt)}</span>
+      </button>`;
+    }).join("");
+  }
+  return `<div class="notif-panel" role="dialog" aria-label="通知中心">${head}<div class="notif-list">${body}</div></div>`;
 }
 
 async function refreshSessions() {
@@ -1417,6 +1560,13 @@ function shell(content) {
           ${nav("/research", "研究")}
           ${nav("/watch", "看盘")}
           ${nav("/settings", "设置")}
+          <span class="notif-wrap">
+            <button class="notif-bell" type="button" data-action="toggle-notifs" aria-label="通知" title="通知">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+              ${notifUnread > 0 ? `<i class="notif-dot">${notifUnread > 99 ? "99+" : notifUnread}</i>` : ""}
+            </button>
+            ${notifOpen ? renderNotifPanel() : ""}
+          </span>
           <button class="theme-toggle" type="button" data-action="toggle-theme" aria-label="切换深色 / 浅色" title="切换深色 / 浅色">${themeIcon()}</button>
         </nav>
       </header>
@@ -2572,6 +2722,18 @@ function renderSettings() {
         <div class="setting-row"><span>研究会话</span><strong>本地自动保存</strong></div>
         <div class="setting-row"><span>证据来源</span><strong>行情 / 财报 / 公告 / 网页</strong></div>
       </article>
+      <article class="settings-card"><h2>通知与推送</h2>
+        <p>服务在跑时自动执行：盘前速报（港股 09:00 / 美股 21:15，北京时间）与交易时段每 30 分钟的持仓触线巡检。结果进右上角通知中心${schedStatus?.telegram ? "，并推送到 Telegram" : "；配置 TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID（见 .env.example）可推到手机"}。</p>
+        ${schedStatus ? `
+          <div class="setting-row"><span>Telegram 推送</span><strong>${schedStatus.telegram ? "已配置" : "未配置"}</strong></div>
+          ${(schedStatus.scheduler?.jobs || []).map((j) => `
+            <div class="setting-row" title="${esc(j.lastDetail || "")}">
+              <span>${esc(j.label)} · ${esc(j.schedule)}</span>
+              <strong>${j.lastStatus === "never" ? "未运行" : `${j.lastStatus === "ok" ? "✓" : "✗"} ${notifWhen(j.lastRunAt || "")}`}</strong>
+            </div>`).join("")}
+        ` : `<div class="setting-row"><span>调度状态</span><strong>${schedStatusLoaded ? "读取失败" : "加载中…"}</strong></div>`}
+        <button type="button" class="ghost-btn" data-action="notif-test">发送测试通知</button>
+      </article>
     </div>
   </section>`);
 }
@@ -2582,7 +2744,10 @@ function render() {
   const ta = document.querySelector(".composer textarea");
   const preserved = ta ? { value: ta.value, start: ta.selectionStart, end: ta.selectionEnd, focused: document.activeElement === ta } : null;
   const route = currentRoute();
-  if (route === "/settings") renderSettings();
+  if (route === "/settings") {
+    if (!schedStatusLoaded && !schedStatusLoading) void loadSchedulerStatus();
+    renderSettings();
+  }
   else if (route === "/watch" || route.startsWith("/watch/")) renderWatchPage();
   else renderResearch(); // "/" 与 "/research" 都落到研究页（灵魂入口）
   if (preserved && preserved.value) {
@@ -2626,9 +2791,18 @@ document.addEventListener("submit", (event) => {
 });
 
 document.addEventListener("click", async (event) => {
+  // 通知面板：点面板外任意处收起（含点别的按钮——先收起再继续处理该按钮）。
+  if (notifOpen && !event.target.closest(".notif-wrap")) {
+    notifOpen = false;
+    render();
+  }
   const target = event.target.closest("[data-action]");
   if (!target) return;
   const action = target.dataset.action;
+  if (action === "toggle-notifs") { void toggleNotifPanel(); return; }
+  if (action === "notif-read-all") { void markAllNotifsRead(); return; }
+  if (action === "notif-open") { void markNotifRead(target.dataset.id, target.dataset.ticker); return; }
+  if (action === "notif-test") { void sendTestNotification(); return; }
   if (action === "new") clearResearch();
   if (action === "toggle-theme") { toggleTheme(); return; }
   if (action === "export") exportResearch();
@@ -2699,7 +2873,12 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-window.addEventListener("hashchange", render);
+window.addEventListener("hashchange", () => {
+  notifOpen = false; // 切页时收起通知面板，别悬在新页面上
+  render();
+});
 
-await Promise.all([refreshStatus(), refreshSessions(), refreshWatchDesk()]);
+await Promise.all([refreshStatus(), refreshSessions(), refreshWatchDesk(), refreshNotifUnread()]);
 render();
+// 未读通知轮询：60s 一次，只做角标局部更新（renderNotifBadge），不打扰输入/滚动。
+setInterval(() => void refreshNotifUnread(), 60_000);

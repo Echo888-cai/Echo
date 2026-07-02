@@ -181,21 +181,35 @@ async function fetchPositionAlert(company) {
   if (price == null) return null;
   const name = company.nameZh || company.ticker;
   if (pos.stopLoss && price <= pos.stopLoss) {
-    return { kind: "position_alert", ticker: company.ticker, companyName: name, severity: "high",
+    return { kind: "position_alert", line: "stop", ticker: company.ticker, companyName: name, severity: "high",
       title: `${name} 触及止损线：现价 ${price} ≤ 止损 ${pos.stopLoss}，按纪律复核是否减仓`, date: beijingDate(), url: "" };
   }
   if (pos.takeProfit && price >= pos.takeProfit) {
-    return { kind: "position_alert", ticker: company.ticker, companyName: name, severity: "high",
+    return { kind: "position_alert", line: "take", ticker: company.ticker, companyName: name, severity: "high",
       title: `${name} 触及止盈线：现价 ${price} ≥ 止盈 ${pos.takeProfit}，按纪律复核是否兑现`, date: beijingDate(), url: "" };
   }
   if (pos.avgCost) {
     const drawdown = (price - pos.avgCost) / pos.avgCost;
     if (drawdown <= -0.2) {
-      return { kind: "position_alert", ticker: company.ticker, companyName: name, severity: "medium",
+      return { kind: "position_alert", line: "drawdown", ticker: company.ticker, companyName: name, severity: "medium",
         title: `${name} 相对成本回撤 ${(drawdown * 100).toFixed(0)}%（现价 ${price} / 成本 ${pos.avgCost}），复核投资逻辑是否仍成立`, date: beijingDate(), url: "" };
     }
   }
   return null;
+}
+
+/**
+ * 轻量持仓触线巡检（给 scheduler 的 30 分钟盘中任务用）：
+ * 只拉行情核对止损/止盈/回撤，不碰新闻/财报日历（那是盘前 digest 的事）。
+ * @returns {Promise<object[]>} 命中的 position_alert 事件列表（带 line: stop|take|drawdown）
+ */
+export async function buildPositionAlerts(positions = []) {
+  const alerts = await Promise.all(
+    positions.map((pos) =>
+      fetchPositionAlert({ ticker: pos.ticker, nameZh: pos.companyName }).catch(() => null)
+    )
+  );
+  return alerts.filter(Boolean);
 }
 
 /** 事件去重键：同 ticker 同类同标题视为一条。 */
