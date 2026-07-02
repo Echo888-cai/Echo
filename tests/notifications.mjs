@@ -263,5 +263,54 @@ check("watchRules 仓库：整组重建幂等", () => {
   assert.equal(rules[0].threshold, 85);
 });
 
+console.log("\n[6] 组合体检（P3，纯函数）");
+const { computePortfolioReview } = await import("../src/server/services/portfolioReview.js");
+
+check("空组合：给引导语不给检查项", () => {
+  const r = computePortfolioReview([]);
+  assert.equal(r.positionCount, 0);
+  assert.ok(r.verdict.includes("还没有持仓"));
+});
+
+check("集中度/无止损/触线全部点名", () => {
+  const r = computePortfolioReview([
+    // 破止损 + 深回撤 + 占比 >45%（USD 大仓）
+    { ticker: "AAPL", companyName: "苹果", currency: "USD", currentPrice: 80, avgCost: 120, shares: 100,
+      marketValue: 8000, costValue: 12000, unrealizedPnl: -4000, returnPct: -0.333, stopLoss: 90, toStopPct: -0.125 },
+    // 港股小仓、有成本没止损
+    { ticker: "0700.HK", companyName: "腾讯", currency: "HKD", currentPrice: 500, avgCost: 400, shares: 10,
+      marketValue: 5000, costValue: 4000, unrealizedPnl: 1000, returnPct: 0.25 }
+  ]);
+  assert.equal(r.positionCount, 2);
+  const text = r.checks.map((c) => c.text).join("｜");
+  assert.ok(text.includes("已破止损线"), `应点名破止损：${text}`);
+  assert.ok(text.includes("回撤"), `应点名深回撤：${text}`);
+  assert.ok(text.includes("腾讯") && text.includes("止损线"), `应点名无止损：${text}`);
+  assert.ok(r.checks.some((c) => c.level === "bad"));
+  assert.ok(r.verdict.includes("红线"));
+  // 权重按 USD 折算：AAPL 8000 vs 腾讯 5000/7.8≈641 → AAPL 应 >45% 触集中度红线
+  assert.ok(text.includes("集中度") || text.includes("占组合"), `应有集中度检查：${text}`);
+  // 市场暴露两边都有
+  assert.ok(r.marketExposure.HK > 0 && r.marketExposure.US > 0);
+});
+
+check("健康组合：全绿结论", () => {
+  // 4 只等权（HK 仓按 7.8 汇率放大市值，使 USD 折算后各 ≈25%，低于 30% 集中度黄线）
+  const mk = (t, cur, mv) => ({ ticker: t, companyName: t, currency: cur, currentPrice: 100, avgCost: 95, shares: 10,
+    marketValue: mv, costValue: mv * 0.95, unrealizedPnl: mv * 0.05, returnPct: 0.053, stopLoss: 80, toStopPct: 0.2 });
+  const r = computePortfolioReview([
+    mk("AAPL", "USD", 1000), mk("MSFT", "USD", 1000), mk("NVDA", "USD", 1000), mk("0700.HK", "HKD", 7800)
+  ]);
+  assert.equal(r.checks.filter((c) => c.level === "bad").length, 0);
+  assert.ok(r.verdict.includes("通过"), r.verdict);
+});
+
+check("单市场满仓只提示不报错", () => {
+  const mk = (t) => ({ ticker: t, companyName: t, currency: "USD", currentPrice: 100, avgCost: 95, shares: 10,
+    marketValue: 1000, costValue: 950, unrealizedPnl: 50, returnPct: 0.053, stopLoss: 80, toStopPct: 0.2 });
+  const r = computePortfolioReview([mk("AAPL"), mk("MSFT")]);
+  assert.ok(r.checks.some((c) => c.level === "info" && c.text.includes("美股")));
+});
+
 console.log(`\nResults: ${pass} passed, ${fail} failed.`);
 if (fail > 0) process.exit(1);

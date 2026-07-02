@@ -11,6 +11,7 @@
 
 import { sendOk, sendError, readJsonBody } from "../utils/async.js";
 import { listPositions, upsertPosition, deletePosition } from "../repositories/portfolio.js";
+import { computePortfolioReview } from "../services/portfolioReview.js";
 import { getMarketSnapshot } from "../../marketData.js";
 import { marketCurrency } from "../../market.js";
 
@@ -52,6 +53,17 @@ export async function handlePortfolioList(req, res) {
     sendOk(res, { positions: enriched });
   } catch (error) {
     sendError(res, 500, error.message || "获取持仓失败");
+  }
+}
+
+/** GET /api/portfolio/review → 组合体检（复用 enrich 的现价/盈亏，纯函数计算）。 */
+export async function handlePortfolioReview(req, res) {
+  try {
+    const positions = listPositions();
+    const enriched = await Promise.all(positions.map(enrichPosition));
+    sendOk(res, { review: computePortfolioReview(enriched) });
+  } catch (error) {
+    sendError(res, 500, error.message || "组合体检失败");
   }
 }
 

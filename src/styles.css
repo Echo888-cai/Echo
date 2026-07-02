@@ -1237,6 +1237,82 @@ button:disabled {
   color: var(--muted);
 }
 
+/* ── Portfolio review（组合体检卡，P3） ───────────────── */
+.pr-card {
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-soft);
+}
+.pr-card.has-bad { border-color: rgba(255, 59, 48, 0.35); }
+.pr-head {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.pr-verdict {
+  margin: 0 0 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.55;
+}
+.pr-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.pr-total em { font-style: normal; font-size: 11px; color: var(--muted); margin-right: 3px; }
+.pr-total i { font-style: normal; font-size: 12px; margin-left: 4px; }
+.pr-total i.up { color: #1f8a4c; }
+.pr-total i.down { color: var(--danger); }
+.pr-exp {
+  display: flex;
+  height: 18px;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 10px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #fff;
+}
+.pr-exp-hk { background: #b26a00; display: flex; align-items: center; padding-left: 8px; white-space: nowrap; }
+.pr-exp-us { background: var(--blue-ink); display: flex; align-items: center; padding-left: 8px; white-space: nowrap; }
+.pr-weights {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.pr-weight strong { color: var(--ink-2); font-weight: 600; }
+.pr-checks {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+.pr-checks li {
+  display: flex;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.pr-checks li span { flex: none; font-size: 9px; line-height: 19px; }
+.pr-checks li.pr-bad span { color: var(--danger); }
+.pr-checks li.pr-warn span { color: var(--amber); }
+.pr-checks li.pr-info span { color: var(--muted-2); }
+
 /* ── Portfolio panel ──────────────────────────────────── */
 .pf-list {
   display: grid;
