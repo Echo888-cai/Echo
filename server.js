@@ -19,6 +19,7 @@ import { handleDocumentParseApi } from "./src/server/routes/documents.js";
 import { handleCompanySearch, handleCompanyResolve, handleCompanyVerify } from "./src/server/routes/companies.js";
 import { handleSessionList, handleSessionClear, handleSessionGet, handleSessionDelete } from "./src/server/routes/research.js";
 import { handleChatApi } from "./src/server/routes/chat.js";
+import { handleDiscoverApi } from "./src/server/routes/discover.js";
 import { handleReportGenerateApi } from "./src/server/routes/reports.js";
 import { handleProfileList, handleProfileGet, handleProfileDelete } from "./src/server/routes/portraits.js";
 import { handleEventsDigest } from "./src/server/routes/events.js";
@@ -68,6 +69,9 @@ const server = createServer(async (req, res) => {
   // ── Research conversation + deep report ────────────────
   if (method === "POST" && url.startsWith("/api/chat")) return handleChatApi(req, res);
   if (method === "POST" && url.startsWith("/api/report/generate")) return handleReportGenerateApi(req, res);
+
+  // ── Discover（P6 发现层：筛选器 + 宏观，不绑定公司） ────
+  if (method === "POST" && url.startsWith("/api/discover")) return handleDiscoverApi(req, res);
 
   // ── Event engine digest ────────────────────────────────
   if (method === "GET" && url.startsWith("/api/events/digest")) return handleEventsDigest(req, res);

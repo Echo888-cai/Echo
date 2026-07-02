@@ -10,7 +10,7 @@ import { esc, uid, toast, marketLabelOf, isNum, fmtSigned, dirClass } from "./fo
 import { markdownToHtml } from "./markdown.js";
 import {
   resolveCompany, stripCompanyMentions, isComparisonQuestion, isMultiHoldingQuestion,
-  mentionsNewCompanyStrong
+  mentionsNewCompanyStrong, discoveryKindOf
 } from "./resolve.js";
 import { provenanceFromPanel, dataSourceLabels, dataSourceGrounding, renderMessage } from "./components.js";
 import { shell } from "./shell.js";
@@ -401,9 +401,41 @@ export async function returnToCompany(ticker, name) {
   render();
 }
 
+// P6 发现层：筛选/宏观问题不进公司管道，直接打 /api/discover，结果落回当前线程。
+// 即使当前有在研公司也优先分流——"美股今晚有什么关键事件"不该被当成对当前公司的追问。
+async function runDiscovery(question, kind) {
+  const sessionId = ensureSessionId();
+  const key = runKey(sessionId, getCompany()?.ticker);
+  startRun(key, kind === "screener" ? "正在按条件筛选" : "正在梳理宏观信号");
+  render();
+  try {
+    const result = await api("/api/discover", { method: "POST", body: JSON.stringify({ question, kind }) });
+    if (result.kind === "screener") {
+      appendMessage("assistant", "", { type: "screener", screener: result });
+    } else {
+      appendMessage("assistant", result.content || "本轮没有生成宏观观察。", {
+        type: "macro",
+        indices: result.indices || [],
+        evidence: result.evidence || [],
+        mode: result.mode || null
+      });
+    }
+  } catch (error) {
+    appendMessage("assistant", `这轮查询失败：${error.message || "未知错误"}。`);
+  } finally {
+    endRun(key);
+    render();
+  }
+}
+
 // preResolved：已确定的公司（did-you-mean 选了候选 / "仍按 X 研究"），跳过解析与 verify 闸门，
 // 直接进研究流程。普通调用 preResolved=null，照常解析。
 export async function sendChat(question, preResolved = null) {
+  // 发现层分流（P6）：筛选/宏观且没点名公司 → /api/discover，不进公司解析。
+  if (!preResolved) {
+    const kind = discoveryKindOf(question);
+    if (kind) { await runDiscovery(question, kind); return; }
+  }
   const prevCompany = getCompany();
   let company = preResolved || prevCompany;
   if (!preResolved) {

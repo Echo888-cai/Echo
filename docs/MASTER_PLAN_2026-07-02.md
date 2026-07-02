@@ -194,8 +194,9 @@ CI + lint + doctor。先修地基：让之后每一步都有护栏。
 | P2 | 证伪联动 + 看盘刷新/筛选 | ✅（证伪文本→价格规则→状态机+30min巡检+命中通知，实测阿里"跌破75HKD"全链路；看盘 fast 模式首屏 2.4s vs 全量 7s；筛选/排序控件） | 2026-07-02 |
 | P3 | 组合体检 | ✅（/api/portfolio/review 纯函数：触线/深回撤/集中度45红30黄/无止损点名/逼近止损/单市场提示 + 一句话结论；持仓面板顶部体检卡；实测真实持仓命中 SPCX 65.8% 集中度红线；测试 +4） | 2026-07-02 |
 | P4 | 画像文档化 | ✅（profile_events 独立时间线：变化事件带理由/证据链接/会话跳转，量化证伪线演进单独记；老 events_json 首跑自动迁移；markdown 主档案含关键指标/风险台账；公司页"画像"Tab + 导出；实测 9988.HK 三条历史事件迁移+新版主档案渲染；测试 +8） | 2026-07-02 |
-| P5 | 前端模块化拆分 | ⬜ | |
-| P6 | 筛选器 + 宏观路由 | ⬜ | |
+| P5 | 前端模块化拆分 | ✅（app.js 3117→170 行，拆成 src/ui/* 12 模块：state/api/format/markdown/resolve/components/research/watch/portfolio/notifications/settings/shell；render 经 setRenderFn 注册免循环依赖；零行为变更实跑验证三 Tab；lint 0 error） | 2026-07-02 |
+| 品牌 | Luvio → **Echo Research** | ✅（定位"全球价值投资 AI 研究平台"；slogan：Seek signal. Ignore noise. 喧声之外，见真知；牛皮纸设计 token：暖纸底+陶土 accent+衬线大标题+噪点纹理；回声波纹品牌 mark/favicon；CTA/动效全面打磨；localStorage key 沿用不丢数据） | 2026-07-02 |
+| P6 | 筛选器 + 宏观路由 | ✅（/api/discover：screener=FMP company-screener+批量报价补PE+本地池/已研究画像，宏观=腾讯免费指数(SPX/NDX/DJI/HSI/HSCEI)+宏观证据+macro提示词；前端 discoveryKindOf 在公司解析前分流（修掉"PE小于40"被当港股0040.HK的坑）；实测"美股今晚有什么关键事件"→宏观卡（日期正确/指数实时/6条证据），FMP 限额时诚实降级；测试 +23） | 2026-07-02 |
 | P7 | 港股一手管道 + 8-K 抽取 | ⬜ | |
 | P8 | 商业化底座 | ⬜（需用户对齐） | |
 | 零散 | UX-2 会话搜索 | ⬜ | |

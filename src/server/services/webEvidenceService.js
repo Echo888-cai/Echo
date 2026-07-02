@@ -526,6 +526,62 @@ export async function researchWebEvidence({ company, question = "", intent = cla
   };
 }
 
+// ── P6 宏观网页证据：不绑定公司，直接用给定的宏观查询组检索 ──
+// 复用同一套搜索源/去重/存活校验管线，但跳过公司相关性打分（宏观没有"这家公司"可对齐），
+// 只按来源可信度排序。不落库（宏观新闻时效短，缓存意义小）。
+export async function macroWebEvidence({ question = "", queries = [] } = {}) {
+  const searchedAt = nowIso();
+  const list = queries.slice(0, 4);
+  const queryResults = await Promise.allSettled(list.map((query) => searchOneQuery(query).then((result) => ({ query, ...result }))));
+  const all = [];
+  const errors = [];
+  for (const item of queryResults) {
+    if (item.status === "fulfilled") {
+      errors.push(...item.value.errors);
+      all.push(...item.value.results.map((result) => ({ ...result, query: item.value.query })));
+    } else {
+      errors.push(item.reason?.message || "search failed");
+    }
+  }
+  const ranked = dedupe(all)
+    .filter((item) => item.url && !isJunkUrl(item.url))
+    .map((item) => {
+      const host = hostOf(item.url);
+      const sourceType = sourceTypeFor(item.url, item.source || host);
+      const credibilityScore = credibilityFor({ url: item.url, source: host, sourceType });
+      return {
+        id: hash(item.url),
+        ticker: "^MACRO",
+        intent: "macro",
+        title: item.title || host,
+        url: item.url,
+        source: host,
+        sourceType,
+        snippet: (item.snippet || "").slice(0, 300),
+        publishedAt: item.publishedAt || "",
+        credibilityScore,
+        relevanceScore: 0.5,
+        query: item.query
+      };
+    })
+    .filter((item) => item.credibilityScore >= 0.3)
+    .sort((a, b) => b.credibilityScore - a.credibilityScore)
+    .slice(0, 8);
+  const evidence = await keepLiveEvidence(ranked, { limit: 6 });
+  const gaps = [];
+  if (!evidence.length) gaps.push("本轮没有抓到可校验的宏观网页证据，判断只基于指数行情与常识框架。");
+  if (errors.length) gaps.push(`部分搜索源失败：${[...new Set(errors)].slice(0, 3).join("；")}`);
+  return {
+    intent: "macro",
+    queries: list,
+    evidence,
+    gaps,
+    provider: process.env.TAVILY_API_KEY ? "tavily+fallback" : process.env.SERPAPI_API_KEY ? "serpapi+fallback" : "public_fallback",
+    searchedAt,
+    summary: evidence.length ? `检索 ${list.length} 组宏观关键词，保留 ${evidence.length} 条可用证据。` : "本轮未保留可用宏观证据。"
+  };
+}
+
 export function webEvidenceToPrompt(webEvidence = {}) {
   const evidence = Array.isArray(webEvidence.evidence) ? webEvidence.evidence : [];
   if (!evidence.length) return "Web Evidence：本轮未抓到可用公开网页证据。";

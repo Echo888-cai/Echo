@@ -281,6 +281,35 @@ export function isComparisonQuestion(query = "") {
   return /对比|相比|[和跟与][^，。？?]{1,14}(比|对比|相比|谁|哪个|哪家)|\bvs\b|谁(更|的)|哪(个|家)(更|的)?[^，。？?]{0,8}(好|强|贵|便宜|划算|赔率|值得)/i.test(String(query));
 }
 
+// ── P6 发现层意图（与后端 intentClassifier 保持镜像）────────
+// 筛选/宏观问题不进公司研究管道：sendChat 在公司解析之前先判定，命中走 /api/discover。
+const SCREEN_VERB = /帮我筛|筛选|筛一下|筛一筛|筛出|选股|挑(几只|一些|几个|出)|找(几只|一些|几个)|有(哪些|什么).{0,12}(股票|公司|标的)(值得|可以|推荐)?/;
+const SCREEN_COND = /(PE|PB|市盈率|市净率|市值|股息率?|分红率?|价格|营收增速|增速)\s*(小于|大于|低于|高于|超过|不到|少于|多于|以上|以下|<|>|≤|≥|＜|＞)/i;
+const MACRO_SIGNAL = /大盘|宏观|美联储|议息|加息|降息|非农|CPI|PPI|通胀|国债收益率|流动性|美股(今晚|今天|今年|本周|下周|最近|接下来|怎么|如何|行情|市场)|港股(今晚|今天|本周|大盘|行情|市场|最近|怎么)|恒生指数|恒指|纳斯达克|纳指|标普|道琼斯|道指|指数(怎么|如何|走势)|今晚.{0,10}(关键事件|有什么事件|数据|财报|事件)|市场情绪|风险偏好|宏观经济/;
+
+export function isScreenerQuestion(question = "") {
+  const text = String(question || "");
+  return SCREEN_VERB.test(text) || SCREEN_COND.test(text);
+}
+
+export function isMacroQuestion(question = "") {
+  return MACRO_SIGNAL.test(String(question || ""));
+}
+
+// 发现层判定：筛选/宏观，且没有点名具体公司（点名了公司永远优先公司研究管道——
+// "腾讯 PE 低于 20 吗"是估值追问不是筛选；"美股今晚有什么关键事件"才是宏观）。
+// 注意筛选句要先判：条件式问句里的裸数字（"PE小于40"）会被 extractTicker 误认成
+// 港股代码 0040.HK，所以筛选场景只认"显式"公司信号（别名 / 美股代码 / 带 .HK 后缀）。
+export function discoveryKindOf(question = "") {
+  if (isScreenerQuestion(question)) {
+    const explicitCompany = extractAliasTicker(question) || resolveUsTicker(question) || /\d{3,5}\.HK/i.test(question);
+    return explicitCompany ? null : "screener";
+  }
+  if (mentionsNewCompanyStrong(question)) return null;
+  if (isMacroQuestion(question)) return "macro";
+  return null;
+}
+
 // 多持仓/多标的问句："列举（和/、…）+ 持仓信号"或"≥2 个'股'"。与后端 entityExtractor.looksMultiHolding
 // 保持一致：检测到就让它作为当前公司的追问直发，后端补齐其他标的，避免被误判成切换/对比而跳走。
 export function isMultiHoldingQuestion(query = "") {

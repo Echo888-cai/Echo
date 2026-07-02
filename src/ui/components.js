@@ -330,9 +330,91 @@ export function renderAnswerMeta(meta = {}) {
   return spans.length ? `<div class="answer-meta">${spans.join("")}</div>` : "";
 }
 
+// ── P6 筛选结果表：条件摘要 + 名单（已研究打标）+ 一键开研究 ──
+const fmtMcap = (v) => {
+  if (!Number.isFinite(Number(v)) || !v) return "—";
+  const n = Number(v);
+  if (n >= 1e12) return `${(n / 1e12).toFixed(2)} 万亿`;
+  if (n >= 1e8) return `${(n / 1e8).toFixed(0)} 亿`;
+  return `${(n / 1e4).toFixed(0)} 万`;
+};
+
+function screenerFilterChips(filters = {}) {
+  const chips = [];
+  chips.push(filters.market === "HK" ? "港股" : "美股");
+  if (filters.sectorLabel) chips.push(filters.sectorLabel);
+  if (filters.peMax != null) chips.push(`PE < ${filters.peMax}`);
+  if (filters.peMin != null) chips.push(`PE > ${filters.peMin}`);
+  if (filters.mcapMin != null) chips.push(`市值 > ${fmtMcap(filters.mcapMin)}`);
+  if (filters.mcapMax != null) chips.push(`市值 < ${fmtMcap(filters.mcapMax)}`);
+  if (filters.priceMax != null) chips.push(`价格 < ${filters.priceMax}`);
+  if (filters.priceMin != null) chips.push(`价格 > ${filters.priceMin}`);
+  return chips.map((c) => `<span class="scr-chip">${esc(c)}</span>`).join("");
+}
+
+function renderScreenerBlock(screener = {}) {
+  const rows = Array.isArray(screener.rows) ? screener.rows : [];
+  const notes = Array.isArray(screener.notes) ? screener.notes.filter(Boolean) : [];
+  const body = rows.map((r) => `<tr class="${r.researched ? "scr-researched" : ""}">
+      <td class="scr-name"><b>${esc(r.name)}</b><span>${esc(r.ticker)}</span>${r.researched ? '<i class="scr-badge">已研究</i>' : ""}</td>
+      <td class="scr-ind">${esc(r.industry || r.sector || "—")}</td>
+      <td class="scr-num">${fmtMcap(r.mcap)}</td>
+      <td class="scr-num">${r.pe != null ? esc(String(r.pe)) : "—"}</td>
+      <td class="scr-num">${Number.isFinite(Number(r.price)) ? esc(String(r.price)) : "—"}</td>
+      <td class="scr-act"><button type="button" class="scr-research" data-action="choice-act" data-act="research" data-ticker="${esc(r.ticker)}" data-name="${esc(r.name)}">研究 →</button></td>
+    </tr>`).join("");
+  const table = rows.length
+    ? `<div class="scr-tablewrap"><table class="scr-table">
+        <thead><tr><th>公司</th><th>行业</th><th>市值</th><th>PE</th><th>现价</th><th></th></tr></thead>
+        <tbody>${body}</tbody>
+      </table></div>`
+    : `<p class="scr-empty">这个条件下没有筛到公司——放宽条件（去掉 PE 上限 / 换行业）再试一次。</p>`;
+  return `<div class="screener-block">
+    <div class="scr-head"><span>筛选结果 · ${rows.length} 家</span>${screenerFilterChips(screener.filters)}</div>
+    ${table}
+    ${notes.length ? `<div class="scr-notes">${notes.map((n) => `<span>· ${esc(n)}</span>`).join("")}</div>` : ""}
+  </div>`;
+}
+
+// ── P6 宏观卡：指数速览条（正文/证据用通用渲染） ──
+function renderIndicesStrip(indices = []) {
+  const ok = (Array.isArray(indices) ? indices : []).filter((i) => i && Number.isFinite(Number(i.price)));
+  if (!ok.length) return "";
+  return `<div class="macro-indices">${ok.map((i) => {
+    const chg = Number(i.changePct);
+    const dir = Number.isFinite(chg) ? (chg > 0 ? "is-up" : chg < 0 ? "is-down" : "is-flat") : "is-flat";
+    const chgTxt = Number.isFinite(chg) ? `${chg > 0 ? "+" : ""}${chg}%` : "";
+    return `<span class="mi-card"><em>${esc(i.label)}</em><b>${Number(i.price).toLocaleString("zh-CN", { maximumFractionDigits: 2 })}</b>${chgTxt ? `<i class="${dir}">${chgTxt}</i>` : ""}</span>`;
+  }).join("")}</div>`;
+}
+
 export function renderMessage(message) {
   if (message.role === "assistant") {
     const meta = message.meta || {};
+    // P6 筛选结果：表格 + 一键开研究。
+    if (meta.type === "screener" && meta.screener) {
+      return `<article class="message assistant">
+        <div class="bubble answer-card">
+          <div class="answer-brand"><div class="answer-mark"><i></i><span>ECHO SCREENER</span></div></div>
+          ${renderScreenerBlock(meta.screener)}
+        </div>
+      </article>`;
+    }
+    // P6 宏观观察：指数速览 + 正文 + 证据卡。
+    if (meta.type === "macro") {
+      return `<article class="message assistant">
+        <div class="bubble answer-card">
+          <div class="answer-brand">
+            <div class="answer-mark"><i></i><span>宏观观察</span></div>
+            <button class="copy-answer" type="button" data-action="copy-message" data-id="${esc(message.id || "")}">复制</button>
+          </div>
+          ${renderIndicesStrip(meta.indices)}
+          ${renderRichAnswer(message.content)}
+          ${renderEvidenceBlock(meta.evidence)}
+          ${renderAnswerMeta({ mode: meta.mode, webCount: Array.isArray(meta.evidence) ? meta.evidence.length : undefined })}
+        </div>
+      </article>`;
+    }
     // 切换软分隔：一条细线 + "已从 X 切到 Y"，带"回到 X"退路按钮。
     if (meta.type === "switch-divider" && meta.from && meta.to) {
       return `<div class="switch-divider">

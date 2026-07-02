@@ -3534,3 +3534,92 @@ a.stock-event-row:hover .wd-evt-title { color: var(--blue-ink); }
   font-style: italic;
   letter-spacing: 0.05em;
 }
+
+/* ============================================================
+   P6 发现层 — 筛选结果表 + 宏观指数速览
+   ============================================================ */
+
+.screener-block { display: grid; gap: 10px; }
+.scr-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+.scr-chip {
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(191, 92, 62, 0.25);
+  background: var(--blue-soft);
+  color: var(--blue-ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+.scr-tablewrap { overflow-x: auto; border: 1px solid var(--hairline); border-radius: var(--radius-sm); }
+.scr-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.scr-table th {
+  padding: 9px 12px;
+  text-align: left;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-soft);
+  white-space: nowrap;
+}
+.scr-table td { padding: 9px 12px; border-bottom: 1px solid var(--hairline); vertical-align: middle; }
+.scr-table tbody tr:last-child td { border-bottom: 0; }
+.scr-table tbody tr { transition: background 0.15s var(--ease-soft); }
+.scr-table tbody tr:hover { background: var(--blue-soft); }
+.scr-name b { display: block; font-weight: 650; }
+.scr-name span { color: var(--muted); font-size: 12px; }
+.scr-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(28, 140, 74, 0.12);
+  color: #1c8c4a;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+}
+.scr-ind { color: var(--muted); font-size: 12.5px; max-width: 180px; }
+.scr-num { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.scr-act { text-align: right; }
+.scr-research {
+  padding: 5px 12px;
+  border: 1px solid rgba(191, 92, 62, 0.35);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--blue-ink);
+  font-size: 12.5px;
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.16s var(--ease-soft), color 0.16s var(--ease-soft), transform 0.14s var(--ease);
+}
+.scr-research:hover { background: var(--blue); border-color: var(--blue); color: #fff; transform: translateY(-1px); }
+.scr-research:active { transform: scale(0.96); }
+.scr-notes { display: grid; gap: 3px; color: var(--muted); font-size: 12px; }
+.scr-empty { margin: 0; color: var(--muted); font-size: 13.5px; }
+
+.macro-indices { display: flex; flex-wrap: wrap; gap: 9px; margin-bottom: 4px; }
+.mi-card {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 7px 13px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--panel-soft);
+}
+.mi-card em { color: var(--muted); font-size: 12px; font-style: normal; font-weight: 600; }
+.mi-card b { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.mi-card i { font-size: 12.5px; font-style: normal; font-weight: 700; }
+.mi-card i.is-up { color: #1c8c4a; }
+.mi-card i.is-down { color: var(--danger); }
+.mi-card i.is-flat { color: var(--muted); }
