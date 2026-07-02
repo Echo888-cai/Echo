@@ -9,6 +9,8 @@
  */
 
 import { getCompanyProfile, upsertCompanyProfile } from "../repositories/companyProfiles.js";
+import { replaceFalsifierRules } from "../repositories/watchRules.js";
+import { parseFalsifierRules, parseFalsifierRule } from "./falsifyRules.js";
 import { companyByTicker } from "../../data.js";
 import { beijingDate } from "../utils/time.js";
 
@@ -33,6 +35,64 @@ export function loadPortraitContext(ticker) {
   const recent = profile.events.slice(-3).reverse();
   if (recent.length) lines.push(`- 最近变更：${recent.map((e) => `${e.date} ${e.summary}`).join("；")}`);
   return lines.join("\n");
+}
+
+/**
+ * 从回答正文的"证伪条件"段落抽取具体条件行（UX-7）。
+ * 模型被要求给量化阈值（含价格线），这些具体条件比本地面板的通用 riskTriggers
+ * （"监管变化/竞争加剧"）更有沉淀价值——有具体条件就用它们覆盖通用项。
+ */
+const FALSIFY_HEAD_RE = /^#{0,3}\s*(?:\d+[.、]\s*)?(?:证伪条件|风险\s*\/\s*证伪|会推翻逻辑的关键事实)\s*[：:]?\s*$/;
+const SECTION_END_RE = /^#{1,3}\s+\S|^(?:\d+[.、]\s*)?(?:结论|事实|推断|估值|动作|来源|我的判断|数据缺口|证据缺口|接下来重点看|深度研究)\s*[：:]?\s*$/;
+export function extractFalsifiersFromAnswer(content = "") {
+  const lines = String(content || "").split(/\r?\n/);
+  const cleanItem = (line) =>
+    line.replace(/^[-•*]\s*/, "").replace(/^\d+[.、)]\s*/, "").replace(/[*_`]/g, "").trim();
+
+  // 第一档：标准段落结构（深度研究式回答，"## 证伪条件" 下的条目）。
+  const out = [];
+  let inSection = false;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (FALSIFY_HEAD_RE.test(line)) { inSection = true; continue; }
+    if (!inSection) continue;
+    if (SECTION_END_RE.test(line)) break;
+    const item = cleanItem(line);
+    if (item.length >= 6 && item.length <= 200) out.push(item);
+    if (out.length >= 6) break;
+  }
+  if (out.length) return out;
+
+  // 第二档：松散结构（聚焦式证伪回答，无段落标题）。两条通道：
+  //  a) "……证伪阈值/证伪条件："引导句之后的编号/列表条目（空行不打断，编号项间常有空行）；
+  //  b) 任何"提到证伪/逻辑失效且本身能解析出价格线"的句子（解析器极严，误报率低）。
+  const loose = [];
+  let collecting = false;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue; // 空行不打断列表收集
+    const item = cleanItem(line);
+    const isListItem = /^[-•*]|^\d+[.、)]/.test(line);
+    if (collecting) {
+      if (isListItem && item.length >= 6) {
+        loose.push(item.slice(0, 200));
+        if (loose.length >= 6) break;
+        continue;
+      }
+      collecting = false; // 非列表行结束收集；这一行自己可能是新引导句/价格线，继续往下判
+    }
+    if (/证伪(?:条件|阈值|信号)/.test(item) && /[：:]\s*$/.test(item)) {
+      collecting = true;
+      continue;
+    }
+    if (/证伪|触发(?:全面)?复核|多头逻辑失效/.test(item) && parseFalsifierRule(item)) {
+      loose.unshift(item.slice(0, 200)); // 价格线放最前
+      if (loose.length >= 6) break;
+    }
+  }
+  // 去重（同句只留一条）
+  return [...new Set(loose)].slice(0, 6);
 }
 
 /** 从 decisionPanel + 本地公司档案蒸馏画像的"当前 view"字段。 */
@@ -81,11 +141,14 @@ function judgmentChanged(prev, next) {
  * - 已有画像且判断变化 → 改正文 + 追加一条变更事件。
  * - 已有画像但判断未变 → 只 bump turn_count，不写流水账。
  */
-export function updatePortraitFromPanel({ ticker, panel, valuation = null, question = "" } = {}) {
+export function updatePortraitFromPanel({ ticker, panel, valuation = null, question = "", answerContent = "" } = {}) {
   if (!ticker || !panel) return { created: false, changed: false, profile: null };
   const localProfile = companyByTicker(ticker) || {};
   const prev = getCompanyProfile(ticker);
   const view = distillView(panel, localProfile, valuation);
+  // 回答正文里有具体的证伪条件（模型按纪律给的量化阈值/价格线）时，优先沉淀它们。
+  const fromAnswer = extractFalsifiersFromAnswer(answerContent);
+  if (fromAnswer.length) view.falsifiers = fromAnswer.slice(0, 6);
   if (!view.thesis && !view.bull.length && !view.bear.length) {
     return { created: false, changed: false, profile: prev };
   }
@@ -109,5 +172,14 @@ export function updatePortraitFromPanel({ ticker, panel, valuation = null, quest
     event,
     bumpTurn: true
   });
+
+  // UX-7 研究→监控闭环：证伪条件里"明确的价格条件"落成 watch_rules，
+  // 看盘状态机 + 定时巡检据此自动盯盘、命中推通知。解析失败不影响画像主流程。
+  try {
+    replaceFalsifierRules(ticker, parseFalsifierRules(view.falsifiers));
+  } catch (err) {
+    console.error("[companyPortrait] 证伪规则同步失败：", err?.message || err);
+  }
+
   return { created: isNew, changed, profile };
 }

@@ -2,7 +2,8 @@
  * Watch-desk routes:
  *
  * GET /api/watch/desk           → 盯盘台聚合（画像 + 事件 + 持仓 → 每家一张卡）
- *   query: slot=premarket|afterhours, tickers=AAPL,0700.HK (optional override)
+ *   query: slot=premarket|afterhours, tickers=AAPL,0700.HK (optional override),
+ *          events=0 → fast 模式：跳过新闻/财报日历（慢源），先回价格与状态（前端两段式刷新）
  * GET /api/watch/stock?ticker=  → 单只股票的看盘台详情页数据（卡片 + 完整画像 + 基本面）
  *
  * 关注范围默认 = 研究过的公司（画像）∪ 持仓，按需计算（无常驻进程）。
@@ -25,8 +26,9 @@ export async function handleWatchDesk(req, res) {
       return;
     }
 
-    const desk = await buildWatchDesk(companies, { slot });
-    sendOk(res, { desk });
+    const withEvents = url.searchParams.get("events") !== "0";
+    const desk = await buildWatchDesk(companies, { slot, events: withEvents });
+    sendOk(res, { desk: { ...desk, partial: !withEvents } });
   } catch (error) {
     sendError(res, 500, error.message || "生成盯盘台失败");
   }

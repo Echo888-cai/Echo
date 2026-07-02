@@ -17,6 +17,8 @@ import { buildDigest } from "./eventEngine.js";
 import { getCompanyProfile, listCompanyProfiles } from "../repositories/companyProfiles.js";
 import { listPositions, getPosition } from "../repositories/portfolio.js";
 import { listWatchAdds, getHiddenTickers } from "../repositories/watchlist.js";
+import { listRules } from "../repositories/watchRules.js";
+import { evaluateRule } from "./falsifyRules.js";
 import { getMarketSnapshot, getPriceSeries } from "../../marketData.js";
 import { getFinancials, getCompanyProfile as getFundamentalsProfile } from "../../financialData.js";
 import { detectMarket } from "../../market.js";
@@ -57,11 +59,14 @@ async function snapshotFor(ticker) {
   }
 }
 
-/** 确定性状态机（见文件头注释）。 */
-function deriveStatus({ price, position, topNewsHigh }) {
+/** 确定性状态机（见文件头注释）。triggeredRule = 命中的证伪监控规则（UX-7 闭环）。 */
+function deriveStatus({ price, position, topNewsHigh, triggeredRule }) {
   const held = Boolean(position && position.avgCost != null);
   if (position?.stopLoss != null && price != null && price <= position.stopLoss) {
     return { status: "falsified", statusReason: `触及止损线 ${position.stopLoss}（纪律触发，复核是否减仓）` };
+  }
+  if (triggeredRule) {
+    return { status: "falsified", statusReason: `研究时定的证伪条件命中：${triggeredRule.label}` };
   }
   if (topNewsHigh) return { status: "at_risk", statusReason: `重大利空：${topNewsHigh}` };
   if (held && price != null && position.avgCost) {
@@ -71,15 +76,25 @@ function deriveStatus({ price, position, topNewsHigh }) {
   return { status: "intact", statusReason: "" };
 }
 
+/** 该 ticker 的证伪监控规则 + 按现价的实时评估（列表/个股页共用）。 */
+function evaluatedRules(ticker, price) {
+  try {
+    return listRules(ticker).map((r) => ({ ...r, ...evaluateRule(r, price) }));
+  } catch {
+    return [];
+  }
+}
+
 /**
  * 为一组公司构建盯盘台。
  * @param {Array} companies [{ ticker, nameZh }]
  * @returns { generatedAt, slot, cards, counts, failures }
  */
-export async function buildWatchDesk(companies = [], { slot = "premarket" } = {}) {
+export async function buildWatchDesk(companies = [], { slot = "premarket", events: withEvents = true } = {}) {
   const universe = companies.slice(0, 30);
   // 事件复用现有 digest：每家的 events 已经过相关性/严重度过滤并排好序，卡片直接取最重那条。
-  const digest = await buildDigest(universe, {}, { slot });
+  // fast 模式（withEvents=false）跳过 digest（新闻/财报日历是整盘刷新的慢源），先给价格与状态。
+  const digest = withEvents ? await buildDigest(universe, {}, { slot }) : { groups: [], failures: [] };
   const groupByTicker = new Map((digest.groups || []).map((g) => [g.ticker, g]));
 
   const cards = await Promise.all(universe.map(async (c) => {
@@ -92,7 +107,9 @@ export async function buildWatchDesk(companies = [], { slot = "premarket" } = {}
     const topNewsHigh = events.find((e) => e.kind === "news" && e.severity === "high")?.title || "";
 
     const price = snap.priceStatus === "ok" ? snap.price : null;
-    const { status, statusReason } = deriveStatus({ price, position, topNewsHigh });
+    const rules = evaluatedRules(ticker, price);
+    const triggeredRule = rules.find((r) => r.triggered) || null;
+    const { status, statusReason } = deriveStatus({ price, position, topNewsHigh, triggeredRule });
     const held = Boolean(position && position.avgCost != null);
     const returnPct = held && price != null ? (price - position.avgCost) / position.avgCost : null;
 
@@ -116,7 +133,9 @@ export async function buildWatchDesk(companies = [], { slot = "premarket" } = {}
       currency: snap.currency || "",
       changePct: snap.changePct ?? null,
       held,
-      returnPct
+      returnPct,
+      // 证伪监控（UX-7）：价格类规则 + 实时评估（triggered/距触发%）。个股页渲染监控块用。
+      watchRules: rules
     };
   }));
 

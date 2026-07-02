@@ -341,7 +341,8 @@ function finalizeChat({ payload, result, webEvidence, valuation, analyst, portra
         ticker: portraitTicker,
         panel: result.decisionPanel,
         valuation: valuation.cannotValueReason ? null : valuation,
-        question
+        question,
+        answerContent: content // 证伪段落里的量化条件（含价格线）从这里抽取沉淀
       });
     } catch (err) {
       console.warn("company_profile 回写失败:", err?.message || err);

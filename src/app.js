@@ -183,6 +183,9 @@ let watchStockSeq = 0;
 let watchAddOpen = false;
 let watchAddBusy = false;
 let watchAddError = "";
+// 看盘列表筛选/排序（纯前端，对已加载的 cards 切片）。
+let watchFilter = "all";   // all | hk | us | held | risk
+let watchSort = "urgency"; // urgency（服务端紧急度序）| change | name
 // 并行会话：每个在跑的请求一条 run（key=sessionId；新研究用 new:<ticker>）。这样推理中可以
 // 切到别的对话、甚至并行再发；正在跑的会话在侧栏显示转圈，结果按 key 落回对应会话。
 const running = new Map(); // key -> { label, startedAt, reasoningChars, snapshot }
@@ -707,14 +710,27 @@ async function refreshStatus() {
   }
 }
 
+// 两段式刷新（UX-6 提速）：先 fast 模式（跳过新闻等慢源，1-3s 有价格和状态可看），
+// 再全量补事件。全量失败时保留 fast 结果——宁可少事件，不要白屏。
 async function refreshWatchDesk() {
+  let gotFast = false;
+  try {
+    const fast = await api("/api/watch/desk?events=0");
+    if (fast.desk) {
+      watchDesk = fast.desk;
+      gotFast = true;
+      watchDeskLoaded = true;
+      if (currentRoute().startsWith("/watch")) render();
+    }
+  } catch { /* fast 失败就等全量 */ }
   try {
     const data = await api("/api/watch/desk");
-    watchDesk = data.desk || null;
+    watchDesk = data.desk || (gotFast ? watchDesk : null);
   } catch {
-    watchDesk = null;
+    if (!gotFast) watchDesk = null;
   } finally {
     watchDeskLoaded = true;
+    if (currentRoute().startsWith("/watch")) render();
   }
 }
 
@@ -1946,6 +1962,41 @@ function renderWatchAddForm() {
   </form>`;
 }
 
+// 筛选/排序：对服务端已排好紧急度的 cards 做前端切片，不重新打后端。
+function applyWatchView(cards) {
+  let out = cards;
+  if (watchFilter === "hk") out = out.filter((c) => c.market === "HK");
+  else if (watchFilter === "us") out = out.filter((c) => c.market === "US");
+  else if (watchFilter === "held") out = out.filter((c) => c.held);
+  else if (watchFilter === "risk") out = out.filter((c) => c.status === "falsified" || c.status === "at_risk");
+  if (watchSort === "change") {
+    out = [...out].sort((a, b) => (b.changePct ?? -Infinity) - (a.changePct ?? -Infinity));
+  } else if (watchSort === "name") {
+    out = [...out].sort((a, b) => String(a.companyName).localeCompare(String(b.companyName), "zh"));
+  }
+  return out;
+}
+
+const WATCH_FILTERS = [
+  ["all", "全部"], ["hk", "港股"], ["us", "美股"], ["held", "持仓"], ["risk", "预警"]
+];
+const WATCH_SORTS = [["urgency", "紧急度"], ["change", "涨跌"], ["name", "名称"]];
+
+function renderWatchControls(cards) {
+  const riskCount = cards.filter((c) => c.status !== "intact").length;
+  const filters = WATCH_FILTERS.map(([v, label]) => {
+    const n = v === "risk" && riskCount ? ` ${riskCount}` : "";
+    return `<button type="button" class="wl-seg ${watchFilter === v ? "is-on" : ""}" data-action="watch-filter" data-v="${v}">${label}${n}</button>`;
+  }).join("");
+  const sorts = WATCH_SORTS.map(([v, label]) =>
+    `<button type="button" class="wl-seg ${watchSort === v ? "is-on" : ""}" data-action="watch-sort" data-v="${v}">${label}</button>`
+  ).join("");
+  return `<div class="wl-controls">
+    <div class="wl-seggroup" role="group" aria-label="筛选">${filters}</div>
+    <div class="wl-seggroup wl-sorts" role="group" aria-label="排序"><span class="wl-seglabel">排序</span>${sorts}</div>
+  </div>`;
+}
+
 function renderWatchList(desk, { heading = "" } = {}) {
   const cards = Array.isArray(desk.cards) ? desk.cards : [];
   const counts = desk.counts || {};
@@ -1954,10 +2005,15 @@ function renderWatchList(desk, { heading = "" } = {}) {
   if (counts.atRisk) bits.push(`<span class="wd-count wd-risk">${counts.atRisk} 有风险</span>`);
   bits.push(`<span class="wd-count wd-intact">${counts.intact || 0} 逻辑还在</span>`);
 
+  const visible = applyWatchView(cards);
+  const emptyAfterFilter = cards.length && !visible.length
+    ? `<div class="wl-filter-empty">这个筛选下没有公司。<button type="button" class="wl-linkbtn" data-action="watch-filter" data-v="all">看全部</button></div>`
+    : "";
+
   return `<div class="watchdesk">
     <div class="wd-head">
       <div>
-        <p class="hero-eyebrow"><span class="hero-spark"></span>看盘</p>
+        <p class="hero-eyebrow"><span class="hero-spark"></span>看盘${desk.partial ? `<span class="wd-partial">事件补全中…</span>` : ""}</p>
         <h2 class="wd-title">${esc(heading || `你在盯的 ${counts.total || cards.length} 家公司`)}</h2>
       </div>
       <div class="wd-summary">
@@ -1967,7 +2023,8 @@ function renderWatchList(desk, { heading = "" } = {}) {
       </div>
     </div>
     ${watchAddOpen ? `<div class="wl-addbar">${renderWatchAddForm()}</div>` : ""}
-    <div class="wl-list">${cards.map(renderWatchRow).join("")}</div>
+    ${cards.length > 3 ? renderWatchControls(cards) : ""}
+    <div class="wl-list">${visible.map(renderWatchRow).join("")}${emptyAfterFilter}</div>
   </div>`;
 }
 
@@ -2213,12 +2270,26 @@ function renderStockDetail(stock) {
       : `<p class="stock-card-body is-empty">数据源暂不可用</p>`}
   </div>`;
 
+  // 证伪条件 + 自动监控（UX-7 闭环）：价格类条件已解析成规则的，条目上挂实时监控芯片
+  // （已命中 / 距触发 x%），命中会进通知中心；叙述性条件保持纯文本。
   const falsifiers = Array.isArray(p?.falsifiers) ? p.falsifiers : [];
+  const rules = Array.isArray(stock.watchRules) ? stock.watchRules : [];
+  const ruleByLabel = new Map(rules.map((r) => [r.label, r]));
+  const monitoredCount = rules.filter((r) => r.sane !== false).length;
+  const falsifierLine = (f) => {
+    const r = ruleByLabel.get(f);
+    if (!r || r.sane === false) return `<li>${esc(f)}</li>`;
+    const chip = r.triggered
+      ? `<span class="fw-chip fw-hit">已命中</span>`
+      : `<span class="fw-chip fw-watch">监控中${r.distancePct != null && r.distancePct > 0 ? ` · 距触发 ${r.distancePct}%` : ""}</span>`;
+    return `<li class="${r.triggered ? "fw-line-hit" : ""}">${esc(f)} ${chip}</li>`;
+  };
   const falsifiersCard = `<div class="stock-card">
-    <div class="stock-card-head">${stockIcon("alert")}证伪条件</div>
+    <div class="stock-card-head">${stockIcon("alert")}证伪条件${monitoredCount ? `<span class="fw-count">${monitoredCount} 条自动盯盘</span>` : ""}</div>
     ${falsifiers.length
-      ? `<ul class="stock-list">${falsifiers.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>`
-      : `<p class="stock-card-body is-empty">还没有沉淀证伪条件</p>`}
+      ? `<ul class="stock-list">${falsifiers.map(falsifierLine).join("")}</ul>
+         ${monitoredCount ? `<p class="fw-note">价格类条件每 30 分钟自动核对，命中会进通知中心。</p>` : ""}`
+      : `<p class="stock-card-body is-empty">还没有沉淀证伪条件——研究时问"什么情况会证伪？"，结论会自动挂到这里并盯盘。</p>`}
   </div>`;
 
   const events = Array.isArray(stock.events) ? stock.events : [];
@@ -2807,6 +2878,8 @@ document.addEventListener("click", async (event) => {
   if (action === "toggle-theme") { toggleTheme(); return; }
   if (action === "export") exportResearch();
   if (action === "open-stock") { location.hash = `#/watch/${target.dataset.ticker}`; render(); return; }
+  if (action === "watch-filter") { watchFilter = target.dataset.v || "all"; render(); return; }
+  if (action === "watch-sort") { watchSort = target.dataset.v || "urgency"; render(); return; }
   if (action === "chart-range") { chartRange = target.dataset.range || "3m"; render(); return; }
   if (action === "watch-add-open") { watchAddOpen = true; watchAddError = ""; render(); setTimeout(() => document.querySelector(".wl-add input")?.focus(), 0); return; }
   if (action === "watch-add-close") { watchAddOpen = false; watchAddError = ""; render(); return; }
@@ -2878,7 +2951,10 @@ window.addEventListener("hashchange", () => {
   render();
 });
 
-await Promise.all([refreshStatus(), refreshSessions(), refreshWatchDesk(), refreshNotifUnread()]);
+// 首绘只等轻资源（状态/会话/未读数，各 <300ms）；看盘聚合是重活，后台跑，
+// 落在 /watch 时由 refreshWatchDesk 内部分段 render（fast 先到先画）。
+await Promise.all([refreshStatus(), refreshSessions(), refreshNotifUnread()]);
 render();
+void refreshWatchDesk();
 // 未读通知轮询：60s 一次，只做角标局部更新（renderNotifBadge），不打扰输入/滚动。
 setInterval(() => void refreshNotifUnread(), 60_000);

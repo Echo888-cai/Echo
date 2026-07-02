@@ -23,6 +23,9 @@ import { buildDigest, buildPositionAlerts } from "./eventEngine.js";
 import { listCompanyProfiles } from "../repositories/companyProfiles.js";
 import { listPositions } from "../repositories/portfolio.js";
 import { listWatchAdds, getHiddenTickers } from "../repositories/watchlist.js";
+import { listAllActiveRules, markTriggered } from "../repositories/watchRules.js";
+import { evaluateRule } from "./falsifyRules.js";
+import { getMarketSnapshot } from "../../marketData.js";
 
 let ensured = false;
 function ensureTable() {
@@ -138,11 +141,49 @@ async function runPositionLinesJob() {
   return `${alerts.length} 条触线提醒已通知`;
 }
 
+/** 证伪监控巡检：核对研究沉淀下来的价格类证伪条件，命中 → 通知（同规则 24h 一次）。 */
+async function runFalsifyWatchJob() {
+  const rules = listAllActiveRules();
+  if (!rules.length) return "无证伪监控规则，跳过";
+  // 按 ticker 归组，一只票只拉一次行情（走缓存，成本低）。
+  const byTicker = new Map();
+  for (const r of rules) {
+    if (!byTicker.has(r.ticker)) byTicker.set(r.ticker, []);
+    byTicker.get(r.ticker).push(r);
+  }
+  let hits = 0;
+  for (const [ticker, tickerRules] of byTicker) {
+    let price;
+    try {
+      const snap = await getMarketSnapshot(ticker);
+      price = snap?.providerStatus === "ok" ? Number(snap.price) : null;
+    } catch { price = null; }
+    if (!(price > 0)) continue;
+    for (const rule of tickerRules) {
+      const { triggered } = evaluateRule(rule, price);
+      if (!triggered) continue;
+      hits += 1;
+      markTriggered(rule.id);
+      await notify({
+        kind: "falsify_alert",
+        title: `${ticker} 证伪条件命中：${rule.label}`,
+        body: `现价 ${price}，触发线 ${rule.threshold}（${rule.kind === "price_below" ? "跌破" : "涨破"}）。这是你研究时自己定的证伪条件——按纪律复核投资逻辑是否已被推翻。`,
+        ticker,
+        payload: { ruleId: rule.id, price, threshold: rule.threshold, kind: rule.kind },
+        dedupeKey: `falsify:${ticker}:${rule.id}`,
+        dedupeWindowHours: 24
+      });
+    }
+  }
+  return `${rules.length} 条规则核对完成，${hits} 条命中`;
+}
+
 /** 内置任务注册表（代码即配置，可版本管理）。 */
 export const JOBS = [
   { id: "digest_hk", label: "港股盘前速报", schedule: { kind: "daily", at: "09:00" }, run: () => runDigestJob("HK", "港股") },
   { id: "digest_us", label: "美股盘前速报", schedule: { kind: "daily", at: "21:15" }, run: () => runDigestJob("US", "美股") },
-  { id: "position_lines", label: "持仓触线巡检", schedule: { kind: "interval", everyMinutes: 30, tradingHoursOnly: true }, run: runPositionLinesJob }
+  { id: "position_lines", label: "持仓触线巡检", schedule: { kind: "interval", everyMinutes: 30, tradingHoursOnly: true }, run: runPositionLinesJob },
+  { id: "falsify_watch", label: "证伪监控巡检", schedule: { kind: "interval", everyMinutes: 30, tradingHoursOnly: true }, run: runFalsifyWatchJob }
 ];
 
 // ── 引擎 ─────────────────────────────────────────────────────
