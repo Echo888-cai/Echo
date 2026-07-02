@@ -3,13 +3,13 @@ import globals from "globals";
 
 /**
  * 只开 correctness 级规则（真 bug 才报 error），不吵代码风格。
- * 前端 src/app.js 用浏览器全局；其余全部是 Node 侧代码。
+ * 前端 src/app.js + src/ui/** 用浏览器全局；其余全部是 Node 侧代码。
  */
 export default [
   { ignores: ["node_modules/**", "dist/**", "coverage/**"] },
   js.configs.recommended,
   {
-    files: ["src/app.js"],
+    files: ["src/app.js", "src/ui/**/*.js"],
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "module",
@@ -18,7 +18,7 @@ export default [
   },
   {
     files: ["server.js", "src/**/*.js", "scripts/**/*.js", "tests/**/*.mjs"],
-    ignores: ["src/app.js"],
+    ignores: ["src/app.js", "src/ui/**/*.js"],
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "module",
