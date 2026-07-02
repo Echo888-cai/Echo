@@ -67,24 +67,24 @@ export function exportResearch() {
   }
   const company = getCompany();
   const panel = getPanel();
-  const heading = company ? `${company.nameZh || ""} ${company.ticker || ""}`.trim() : panel?.companyName || "Luvio 研究";
+  const heading = company ? `${company.nameZh || ""} ${company.ticker || ""}`.trim() : panel?.companyName || "Echo 研究";
   const lines = [`# ${heading} · 研究记录`, ""];
   if (panel?.confidence) {
     lines.push(`> 研究状态：${panel.researchStatus || "持续观察"} · 置信度：${panel.confidence}`, "");
   }
   for (const message of thread) {
-    lines.push(message.role === "user" ? `## 提问\n\n${message.content}` : `## Luvio\n\n${message.content}`, "");
+    lines.push(message.role === "user" ? `## 提问\n\n${message.content}` : `## Echo\n\n${message.content}`, "");
   }
   const sources = Array.isArray(panel?.sources) ? panel.sources.filter((s) => s.url) : [];
   if (sources.length) {
     lines.push("## 来源", "", ...sources.map((s) => `- ${s.label || s.type || "来源"}：${s.url}`), "");
   }
-  lines.push("---", "> 由 Luvio 生成，仅供研究学习，不构成投资建议。");
+  lines.push("---", "> 由 Echo Research 生成 · Seek signal. Ignore noise. 仅供研究学习，不构成投资建议。");
   const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `${(company?.ticker || panel?.ticker || "luvio").replace(/[^\w.-]/g, "")}-research.md`;
+  anchor.download = `${(company?.ticker || panel?.ticker || "echo").replace(/[^\w.-]/g, "")}-research.md`;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
@@ -709,12 +709,13 @@ export function renderResearch() {
         <button class="primary wide" data-action="new">新建研究</button>
         ${renderSnapshotCard(company, panel, thread)}
         ${renderSessionHistory(activeSessionId)}
+        <div class="sidebar-tagline"><b>Seek signal. Ignore noise.</b>喧声之外，见真知。研究参考，非投资建议。</div>
       </aside>
 
       <section class="desk">
         ${hasResearch ? `<div class="desk-head">
           <div>
-            <p>Luvio Research</p>
+            <p>Echo Research</p>
             <h1>${company ? `${esc(company.nameZh)} ${esc(company.ticker)}` : "输入公司，开始判断"}</h1>
             <span>${esc(companySubtitle(company))} </span>
           </div>
@@ -768,7 +769,7 @@ function renderWaitingCard() {
   return `<article class="message assistant">
     <div class="bubble answer-card wait-card">
       <div class="answer-brand">
-        <div class="answer-mark"><i></i><span>LUVIO</span></div>
+        <div class="answer-mark"><i></i><span>ECHO</span></div>
       </div>
       <div class="wait-row">
         <span class="wait-orb" aria-hidden="true"></span>
@@ -806,7 +807,7 @@ function renderGroundingSkeleton() {
 function renderStreamingCard() {
   return `<article class="message assistant">
     <div class="bubble answer-card stream-card">
-      <div class="answer-brand"><div class="answer-mark"><i></i><span>LUVIO</span></div></div>
+      <div class="answer-brand"><div class="answer-mark"><i></i><span>ECHO</span></div></div>
       ${renderGroundingSkeleton()}
       <div class="ans-stream" id="stream-body">${markdownToHtml(S.streamingText)}<span class="stream-caret"></span></div>
     </div>
@@ -848,9 +849,9 @@ function renderEmptyState() {
   const caps = ["赚钱机制", "护城河", "竞争格局", "估值赔率", "什么会证伪"];
   return `<div class="empty-chat">
     <div class="hero-head">
-      <p class="hero-eyebrow"><span class="hero-spark"></span>LUVIO RESEARCH</p>
-      <h2>像研究员一样，<br>聊懂一家公司。</h2>
-      <p class="hero-sub">港股与美股，一句话就开始。普通追问给精炼短答，复杂研究再沉到底层。</p>
+      <p class="hero-eyebrow"><span class="hero-spark"></span>ECHO RESEARCH · 发现真正的价值</p>
+      <h2>喧声之外，<br>见真知。<span class="hero-slogan-en">Seek signal. Ignore noise.</span></h2>
+      <p class="hero-sub">港美股与全球科技资产的 AI 价值研究。从财报、估值、新闻与行业趋势里提取真正有价值的信号，一句话就开始，复杂研究再沉到底层。</p>
       <div class="hero-caps">${caps.map((c) => `<span class="cap-pill">${esc(c)}</span>`).join("")}</div>
     </div>
     <div class="example-grid">

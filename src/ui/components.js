@@ -352,13 +352,13 @@ export function renderMessage(message) {
       ).join("");
       return `<article class="message assistant">
         <div class="bubble answer-card choice-card">
-          <div class="answer-brand"><div class="answer-mark"><i></i><span>LUVIO</span></div></div>
+          <div class="answer-brand"><div class="answer-mark"><i></i><span>ECHO</span></div></div>
           <p class="choice-prompt">${esc(meta.choice.prompt)}</p>
           <div class="choice-options">${opts}</div>
         </div>
       </article>`;
     }
-    const title = meta.type === "deep_research" ? "DEEP RESEARCH" : meta.type === "portrait" ? "公司画像" : meta.type === "digest" ? "事件提醒" : meta.type === "portfolio" ? "我的持仓" : "LUVIO";
+    const title = meta.type === "deep_research" ? "DEEP RESEARCH" : meta.type === "portrait" ? "公司画像" : meta.type === "digest" ? "事件提醒" : meta.type === "portfolio" ? "我的持仓" : "ECHO";
     const messageId = message.id || "";
     const isPortfolio = meta.type === "portfolio";
     return `<article class="message assistant">

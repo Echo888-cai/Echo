@@ -1,53 +1,59 @@
 /* ============================================================
-   Luvio — Apple-grade research console
-   Design tokens → base → motion → layout → components
+   Echo Research — Seek signal. Ignore noise. 喧声之外，见真知。
+   牛皮纸质感（Anthropic-inspired warm paper）+ 墨色 + 陶土 accent
+   Design tokens → base → motion → layout → components → brand layer
    ============================================================ */
 
 :root {
   color-scheme: light;
 
-  /* Surfaces */
-  --bg: #f5f5f7;
-  --bg-tint-a: rgba(10, 102, 216, 0.05);
-  --bg-tint-b: rgba(245, 166, 35, 0.045);
-  --panel: #ffffff;
-  --panel-soft: #f3f3f5;
-  --panel-glass: rgba(255, 255, 255, 0.72);
-  --panel-glass-strong: rgba(255, 255, 255, 0.86);
+  /* Surfaces — 暖纸底（kraft/oat），面板是象牙白 */
+  --bg: #f0eee6;
+  --bg-tint-a: rgba(191, 92, 62, 0.055);
+  --bg-tint-b: rgba(120, 108, 84, 0.05);
+  --panel: #fcfbf8;
+  --panel-soft: #f2f0e9;
+  --panel-glass: rgba(252, 251, 248, 0.76);
+  --panel-glass-strong: rgba(252, 251, 248, 0.9);
 
-  /* Ink */
-  --ink: #1d1d1f;
-  --ink-2: #3a3a3e;
-  --muted: #86868b;
-  --muted-2: #a1a1a6;
+  /* Ink — 暖墨 */
+  --ink: #141413;
+  --ink-2: #3d3b35;
+  --muted: #82807a;
+  --muted-2: #a3a19b;
 
   /* Lines */
-  --line: rgba(0, 0, 0, 0.09);
-  --line-strong: rgba(0, 0, 0, 0.14);
-  --hairline: rgba(0, 0, 0, 0.06);
+  --line: rgba(31, 30, 24, 0.1);
+  --line-strong: rgba(31, 30, 24, 0.16);
+  --hairline: rgba(31, 30, 24, 0.065);
 
-  /* Accent */
-  --blue: #0071e3;
-  --blue-ink: #0a66d8;
-  --blue-soft: rgba(0, 113, 227, 0.1);
-  --amber: #f5a623;
-  --danger: #ff3b30;
+  /* Accent — 陶土（book-cloth clay）。变量名沿用 --blue 以复用全部旧引用点。 */
+  --blue: #bf5c3e;
+  --blue-ink: #a84e33;
+  --blue-soft: rgba(191, 92, 62, 0.1);
+  --amber: #d99a2b;
+  --danger: #c0392b;
 
-  /* Elevation */
-  --sh-1: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 1px rgba(0, 0, 0, 0.03);
-  --sh-2: 0 4px 14px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.04);
-  --sh-3: 0 18px 48px rgba(15, 23, 42, 0.1), 0 4px 14px rgba(15, 23, 42, 0.05);
-  --sh-4: 0 36px 90px rgba(15, 23, 42, 0.14), 0 10px 30px rgba(15, 23, 42, 0.08);
+  /* Elevation — 暖色投影 */
+  --sh-1: 0 1px 2px rgba(58, 50, 36, 0.05), 0 1px 1px rgba(58, 50, 36, 0.04);
+  --sh-2: 0 4px 14px rgba(58, 50, 36, 0.07), 0 1px 3px rgba(58, 50, 36, 0.05);
+  --sh-3: 0 18px 48px rgba(58, 50, 36, 0.11), 0 4px 14px rgba(58, 50, 36, 0.06);
+  --sh-4: 0 36px 90px rgba(58, 50, 36, 0.15), 0 10px 30px rgba(58, 50, 36, 0.09);
 
   /* Motion */
   --ease: cubic-bezier(0.32, 0.72, 0, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-soft: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.44, 1);
 
   --radius-sm: 10px;
   --radius: 16px;
   --radius-lg: 22px;
   --radius-xl: 28px;
+
+  /* 衬线展示字体：大标题/品牌用；正文保持无衬线的可读性 */
+  --font-display: "Iowan Old Style", "Charter", "Palatino", Georgia,
+    "Songti SC", "Noto Serif SC", serif;
 
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
     "Segoe UI", Inter, system-ui, "PingFang SC", "Hiragino Sans GB", sans-serif;
@@ -57,33 +63,32 @@
 
 /* ── Dark theme ───────────────────────────────────────────
    Toggled via <html data-theme="dark"> (persisted in localStorage).
-   Almost everything reads from these tokens, so the override is mostly here;
-   a couple of dark-on-dark gradients are patched further down. */
+   暖炭底（warm charcoal），与浅色同一套暖色语言。 */
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --bg: #0c0d10;
-  --bg-tint-a: rgba(40, 120, 230, 0.12);
-  --bg-tint-b: rgba(245, 166, 35, 0.06);
-  --panel: #17181c;
-  --panel-soft: #1e2024;
-  --panel-glass: rgba(26, 28, 33, 0.72);
-  --panel-glass-strong: rgba(30, 32, 38, 0.86);
+  --bg: #1f1e1b;
+  --bg-tint-a: rgba(217, 119, 87, 0.08);
+  --bg-tint-b: rgba(224, 163, 46, 0.05);
+  --panel: #2a2925;
+  --panel-soft: #32312c;
+  --panel-glass: rgba(42, 41, 37, 0.76);
+  --panel-glass-strong: rgba(46, 45, 40, 0.9);
 
-  --ink: #f1f2f4;
-  --ink-2: #cbccd1;
-  --muted: #9a9ba2;
-  --muted-2: #6f7078;
+  --ink: #f2f0e9;
+  --ink-2: #d6d3ca;
+  --muted: #a19e94;
+  --muted-2: #75736b;
 
-  --line: rgba(255, 255, 255, 0.12);
-  --line-strong: rgba(255, 255, 255, 0.2);
-  --hairline: rgba(255, 255, 255, 0.07);
+  --line: rgba(240, 238, 230, 0.12);
+  --line-strong: rgba(240, 238, 230, 0.2);
+  --hairline: rgba(240, 238, 230, 0.07);
 
-  --blue: #3b8dff;
-  --blue-ink: #6aa8ff;
-  --blue-soft: rgba(59, 141, 255, 0.16);
-  --amber: #f5a623;
-  --danger: #ff5a4f;
+  --blue: #d97757;
+  --blue-ink: #e08d6d;
+  --blue-soft: rgba(217, 119, 87, 0.16);
+  --amber: #e0a32e;
+  --danger: #e5695c;
 
   --sh-1: 0 1px 2px rgba(0, 0, 0, 0.5), 0 1px 1px rgba(0, 0, 0, 0.35);
   --sh-2: 0 4px 14px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
@@ -106,55 +111,69 @@ body {
   background:
     radial-gradient(1100px 620px at 12% -8%, var(--bg-tint-a), transparent 60%),
     radial-gradient(900px 560px at 100% 0%, var(--bg-tint-b), transparent 55%),
-    linear-gradient(180deg, #ffffff 0%, #f5f5f7 100%);
+    linear-gradient(180deg, #f7f5ef 0%, #f0eee6 100%);
   background-attachment: fixed;
 }
+
+/* 牛皮纸纹理：feTurbulence 噪点（内联 SVG，无外部请求），叠在底色上营造纸面颗粒。 */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.05'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+[data-theme="dark"] body::before { opacity: 0.35; }
+/* 纹理层在最底，内容照常叠上来 */
+#app, .toast { position: relative; z-index: 1; }
 
 [data-theme="dark"] body {
   background:
     radial-gradient(1100px 620px at 12% -8%, var(--bg-tint-a), transparent 60%),
     radial-gradient(900px 560px at 100% 0%, var(--bg-tint-b), transparent 55%),
-    linear-gradient(180deg, #101216 0%, #0c0d10 100%);
+    linear-gradient(180deg, #242320 0%, #1f1e1b 100%);
 }
 
 /* Dark-mode patches for the few hardcoded-light surfaces (chrome + gradients). */
 [data-theme="dark"] .empty-chat h2 {
-  background: linear-gradient(162deg, #f4f4f6 28%, #a9aab2);
+  background: linear-gradient(162deg, #f4f2eb 28%, #b9b4a6);
   -webkit-background-clip: text;
   background-clip: text;
 }
 [data-theme="dark"] .message.user .bubble {
-  background: linear-gradient(180deg, #2c2f37, #23252b);
+  background: linear-gradient(180deg, #38362f, #2e2c27);
   box-shadow: var(--sh-2), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 /* Top chrome — the bar was a hardcoded light frosted panel. */
 [data-theme="dark"] .topbar {
-  background: rgba(18, 19, 23, 0.72);
-  border-bottom-color: rgba(255, 255, 255, 0.08);
+  background: rgba(31, 30, 27, 0.72);
+  border-bottom-color: rgba(240, 238, 230, 0.08);
 }
 [data-theme="dark"] .brand span {
-  background: linear-gradient(150deg, #2f323a, #3c3f47);
+  background: linear-gradient(150deg, #38362f, #45423a);
   box-shadow: var(--sh-1), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 /* Bottom chrome — composer fade + panel highlight were light; send button blended. */
 [data-theme="dark"] .composer {
-  background: linear-gradient(180deg, rgba(12, 13, 16, 0) 0%, rgba(12, 13, 16, 0.92) 32%, #0c0d10 70%);
+  background: linear-gradient(180deg, rgba(31, 30, 27, 0) 0%, rgba(31, 30, 27, 0.92) 32%, #1f1e1b 70%);
 }
 [data-theme="dark"] .composer-panel {
   box-shadow: var(--sh-3), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 [data-theme="dark"] .composer-panel:focus-within {
-  box-shadow: var(--sh-4), 0 0 0 4px rgba(59, 141, 255, 0.16);
+  box-shadow: var(--sh-4), 0 0 0 4px rgba(217, 119, 87, 0.18);
 }
 [data-theme="dark"] .send-button {
-  background: linear-gradient(180deg, #4a93ff, #2f7ae6);
+  background: linear-gradient(180deg, #e08d6d, #c96442);
   box-shadow: var(--sh-2), inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
-/* Primary CTA ("新建研究") — dark gradient on dark needs a defining edge. */
+/* Primary CTA ("新建研究") — 陶土 accent，深色下更亮一档。 */
 [data-theme="dark"] .primary {
-  background: linear-gradient(180deg, #2e313a, #24262c);
+  background: linear-gradient(180deg, #d97757, #c05d3c);
   border-color: rgba(255, 255, 255, 0.12);
-  box-shadow: var(--sh-2), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  box-shadow: var(--sh-2), inset 0 1px 0 rgba(255, 255, 255, 0.14);
 }
 
 button,
@@ -173,7 +192,7 @@ a {
 }
 
 ::selection {
-  background: rgba(0, 113, 227, 0.16);
+  background: rgba(191, 92, 62, 0.18);
 }
 
 /* Scrollbars — quiet, Apple-like */
@@ -222,9 +241,9 @@ a {
   100% { opacity: 1; transform: translateY(0) scale(1); }
 }
 @keyframes pulseDot {
-  0%   { transform: scale(0.82); box-shadow: 0 0 0 0 rgba(245, 166, 35, 0.42); }
-  70%  { transform: scale(1);    box-shadow: 0 0 0 10px rgba(245, 166, 35, 0); }
-  100% { transform: scale(0.82); box-shadow: 0 0 0 0 rgba(245, 166, 35, 0); }
+  0%   { transform: scale(0.82); box-shadow: 0 0 0 0 rgba(217, 154, 43, 0.42); }
+  70%  { transform: scale(1);    box-shadow: 0 0 0 10px rgba(217, 154, 43, 0); }
+  100% { transform: scale(0.82); box-shadow: 0 0 0 0 rgba(217, 154, 43, 0); }
 }
 @keyframes shimmer {
   0%   { background-position: -460px 0; }
@@ -274,7 +293,7 @@ a {
   height: 32px;
   border-radius: 9px;
   color: #fff;
-  background: linear-gradient(150deg, #1d1d1f, #3a3a3e);
+  background: linear-gradient(150deg, #141413, #3d3b35);
   box-shadow: var(--sh-1), inset 0 1px 0 rgba(255, 255, 255, 0.18);
   font-weight: 800;
   letter-spacing: 0.02em;
@@ -476,7 +495,7 @@ a {
 }
 .nk-digest { background: var(--blue-soft); color: var(--blue-ink); }
 .nk-alert { background: rgba(255, 59, 48, 0.12); color: var(--danger); }
-.nk-falsify { background: rgba(245, 166, 35, 0.16); color: #b26a00; }
+.nk-falsify { background: rgba(217, 154, 43, 0.16); color: #b26a00; }
 .nk-system { background: var(--panel-soft); color: var(--muted); }
 [data-theme="dark"] .nk-falsify { color: var(--amber); }
 
@@ -646,8 +665,8 @@ main {
   justify-content: center;
   gap: 8px;
   color: #fff;
-  background: linear-gradient(180deg, #2b2b2f 0%, #1d1d1f 100%);
-  border-color: #1d1d1f;
+  background: linear-gradient(180deg, #33312b 0%, #141413 100%);
+  border-color: #141413;
   font-weight: 650;
   letter-spacing: -0.01em;
   box-shadow: var(--sh-2), inset 0 1px 0 rgba(255, 255, 255, 0.14);
@@ -716,7 +735,7 @@ button:disabled {
   padding: 8px 10px;
   border-radius: var(--radius-sm);
   background: var(--blue-soft);
-  border: 1px solid rgba(0, 113, 227, 0.14);
+  border: 1px solid rgba(191, 92, 62, 0.14);
 }
 .dual-badge {
   flex: 0 0 auto;
@@ -827,7 +846,7 @@ button:disabled {
 }
 
 .session-item.is-active {
-  border-color: rgba(0, 113, 227, 0.24);
+  border-color: rgba(191, 92, 62, 0.24);
   background: var(--blue-soft);
 }
 
@@ -988,7 +1007,7 @@ button:disabled {
 .message.user .bubble {
   padding: 13px 18px;
   color: #fff;
-  background: linear-gradient(180deg, #2b2b2f, #1d1d1f);
+  background: linear-gradient(180deg, #33312b, #141413);
   border-radius: 22px 22px 6px 22px;
   box-shadow: var(--sh-3), inset 0 1px 0 rgba(255, 255, 255, 0.1);
   font-size: 16px;
@@ -1033,7 +1052,7 @@ button:disabled {
   flex: 0 0 auto;
   border-radius: 999px;
   background: var(--amber);
-  box-shadow: 0 0 0 3px rgba(245, 166, 35, 0.16);
+  box-shadow: 0 0 0 3px rgba(217, 154, 43, 0.16);
 }
 
 .answer-mark span {
@@ -1216,8 +1235,8 @@ button:disabled {
   margin-top: 20px;
   padding: 15px 18px 14px;
   border-radius: var(--radius);
-  border: 1px solid rgba(0, 113, 227, 0.16);
-  background: linear-gradient(180deg, rgba(0, 113, 227, 0.06), rgba(0, 113, 227, 0.022));
+  border: 1px solid rgba(191, 92, 62, 0.16);
+  background: linear-gradient(180deg, rgba(191, 92, 62, 0.06), rgba(191, 92, 62, 0.022));
 }
 .ans-sec.tone-verdict .ans-sec-zh { color: var(--blue-ink); }
 .ans-sec.tone-verdict .ans-sec-body p { color: var(--ink); }
@@ -1484,7 +1503,7 @@ button:disabled {
 }
 
 .conf-high { color: #1c8a4d !important; background: rgba(28, 138, 77, 0.1) !important; }
-.conf-mid  { color: #b8770a !important; background: rgba(245, 166, 35, 0.12) !important; }
+.conf-mid  { color: #b8770a !important; background: rgba(217, 154, 43, 0.12) !important; }
 .conf-low  { color: #c23934 !important; background: rgba(255, 59, 48, 0.1) !important; }
 
 /* A-P1.1 对比并排表 */
@@ -1591,7 +1610,7 @@ button:disabled {
   top: 0;
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(90deg, rgba(255, 59, 48, 0.22), rgba(245, 166, 35, 0.26), rgba(28, 138, 77, 0.26));
+  background: linear-gradient(90deg, rgba(255, 59, 48, 0.22), rgba(217, 154, 43, 0.26), rgba(28, 138, 77, 0.26));
 }
 
 .val-tick {
@@ -1745,7 +1764,7 @@ button:disabled {
   top: 0;
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(90deg, rgba(255, 59, 48, 0.22), rgba(245, 166, 35, 0.26), rgba(28, 138, 77, 0.26));
+  background: linear-gradient(90deg, rgba(255, 59, 48, 0.22), rgba(217, 154, 43, 0.26), rgba(28, 138, 77, 0.26));
 }
 .fc-pr {
   position: absolute;
@@ -1994,7 +2013,7 @@ button:disabled {
 .analyst-chips .ac-chip em.neg { color: #c23934; }
 .analyst-chips .ac-chip.buy  { color: #1c8a4d; background: rgba(28, 138, 77, 0.1); }
 .analyst-chips .ac-chip.sell { color: #c23934; background: rgba(255, 59, 48, 0.1); }
-.analyst-chips .ac-chip.hold { color: #b8770a; background: rgba(245, 166, 35, 0.12); }
+.analyst-chips .ac-chip.hold { color: #b8770a; background: rgba(217, 154, 43, 0.12); }
 .analyst-chips .ac-chip.target b { color: var(--blue-ink); }
 
 /* Grounding bar — per-slot data provenance at the top of each answer */
@@ -2142,7 +2161,7 @@ button:disabled {
 
 .evidence-card:hover {
   transform: translateY(-1px);
-  border-color: rgba(0, 113, 227, 0.26);
+  border-color: rgba(191, 92, 62, 0.26);
   box-shadow: var(--sh-2);
 }
 
@@ -2347,7 +2366,7 @@ button:disabled {
   padding: 14px 16px;
   border-radius: var(--radius);
   background: var(--blue-soft);
-  border: 1px solid rgba(0, 113, 227, 0.12);
+  border: 1px solid rgba(191, 92, 62, 0.12);
   display: grid;
   gap: 10px;
 }
@@ -2409,7 +2428,7 @@ button:disabled {
   flex: 0 0 auto;
   border-radius: 999px;
   background: radial-gradient(circle at 35% 30%, #ffd591, var(--amber) 60%, #e0890a);
-  box-shadow: 0 0 0 0 rgba(245, 166, 35, 0.4);
+  box-shadow: 0 0 0 0 rgba(217, 154, 43, 0.4);
   animation: pulseDot 1.6s var(--ease-soft) infinite;
 }
 
@@ -2418,7 +2437,7 @@ button:disabled {
   position: absolute;
   inset: -6px;
   border-radius: 999px;
-  border: 1.5px solid rgba(245, 166, 35, 0.28);
+  border: 1.5px solid rgba(217, 154, 43, 0.28);
   animation: orbRing 1.6s var(--ease-out) infinite;
 }
 
@@ -2460,14 +2479,14 @@ button:disabled {
   width: 7px;
   height: 7px;
   border-radius: 999px;
-  background: radial-gradient(circle at 32% 30%, var(--amber), #e2820c);
-  box-shadow: 0 0 0 4px rgba(245, 166, 35, 0.14);
+  background: radial-gradient(circle at 32% 30%, var(--amber), #c17f16);
+  box-shadow: 0 0 0 4px rgba(217, 154, 43, 0.14);
   animation: pulseGlow 3.4s var(--ease-soft) infinite;
 }
 
 @keyframes pulseGlow {
-  0%, 100% { box-shadow: 0 0 0 3px rgba(245, 166, 35, 0.14); }
-  50% { box-shadow: 0 0 0 6px rgba(245, 166, 35, 0.05); }
+  0%, 100% { box-shadow: 0 0 0 3px rgba(217, 154, 43, 0.14); }
+  50% { box-shadow: 0 0 0 6px rgba(217, 154, 43, 0.05); }
 }
 
 .empty-chat h2 {
@@ -2476,7 +2495,7 @@ button:disabled {
   font-weight: 700;
   line-height: 1.07;
   letter-spacing: -0.043em;
-  background: linear-gradient(162deg, #1d1d1f 26%, #5b5b62);
+  background: linear-gradient(162deg, #141413 26%, #6b6357);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -2509,7 +2528,7 @@ button:disabled {
 }
 
 .cap-pill:hover {
-  border-color: rgba(0, 113, 227, 0.3);
+  border-color: rgba(191, 92, 62, 0.3);
   color: var(--blue-ink);
 }
 
@@ -2535,7 +2554,7 @@ button:disabled {
 
 .example-card:hover {
   transform: translateY(-3px);
-  border-color: rgba(0, 113, 227, 0.28);
+  border-color: rgba(191, 92, 62, 0.28);
   box-shadow: var(--sh-3);
 }
 
@@ -2565,7 +2584,7 @@ button:disabled {
   font-weight: 700;
 }
 
-.ex-badge.hk { color: #b26a00; background: rgba(245, 166, 35, 0.14); }
+.ex-badge.hk { color: #b26a00; background: rgba(217, 154, 43, 0.14); }
 .ex-badge.us { color: var(--blue-ink); background: var(--blue-soft); }
 
 .ex-ticker {
@@ -2610,8 +2629,8 @@ button:disabled {
 
 .composer-panel:focus-within {
   transform: translateY(-2px);
-  border-color: rgba(0, 113, 227, 0.4);
-  box-shadow: var(--sh-4), 0 0 0 4px rgba(0, 113, 227, 0.1);
+  border-color: rgba(191, 92, 62, 0.4);
+  box-shadow: var(--sh-4), 0 0 0 4px rgba(191, 92, 62, 0.1);
 }
 
 .composer textarea {
@@ -2674,11 +2693,11 @@ button:disabled {
 .tool-chip.emphasis {
   color: var(--blue-ink);
   background: var(--blue-soft);
-  border-color: rgba(0, 113, 227, 0.18);
+  border-color: rgba(191, 92, 62, 0.18);
 }
 
 .tool-chip.emphasis:hover {
-  background: rgba(0, 113, 227, 0.14);
+  background: rgba(191, 92, 62, 0.14);
 }
 
 .icon-chip {
@@ -2714,7 +2733,7 @@ button:disabled {
   border: 0;
   border-radius: 999px;
   color: #fff;
-  background: linear-gradient(180deg, #2b2b2f, #1d1d1f);
+  background: linear-gradient(180deg, #33312b, #141413);
   font-size: 18px;
   font-weight: 800;
   cursor: pointer;
@@ -2976,7 +2995,7 @@ button:disabled {
   white-space: nowrap;
 }
 .wd-count.wd-falsified { color: var(--danger); background: rgba(255, 59, 48, 0.09); border-color: transparent; }
-.wd-count.wd-risk { color: #b26a00; background: rgba(245, 166, 35, 0.14); border-color: transparent; }
+.wd-count.wd-risk { color: #b26a00; background: rgba(217, 154, 43, 0.14); border-color: transparent; }
 .wd-count.wd-intact { color: #1c8c4a; background: rgba(28, 140, 74, 0.1); border-color: transparent; }
 
 .wd-portfolio-link {
@@ -3003,7 +3022,7 @@ button:disabled {
   white-space: nowrap;
 }
 .wd-status.wd-intact { color: #1c8c4a; background: rgba(28, 140, 74, 0.1); }
-.wd-status.wd-risk { color: #b26a00; background: rgba(245, 166, 35, 0.14); }
+.wd-status.wd-risk { color: #b26a00; background: rgba(217, 154, 43, 0.14); }
 .wd-status.wd-falsified { color: var(--danger); background: rgba(255, 59, 48, 0.1); }
 
 /* 状态圆点：语义色（列表左沿 + 圆点表达状态，替代整条状态标签，克制）。 */
@@ -3351,4 +3370,167 @@ a.stock-event-row:hover .wd-evt-title { color: var(--blue-ink); }
   .stock-head { flex-direction: column; align-items: flex-start; }
   .sf-grid { grid-template-columns: 1fr 1fr; }
   .portrait-bar { flex-direction: column; align-items: flex-start; gap: 6px; }
+}
+
+/* ============================================================
+   Echo 品牌层 — 在组件层之上的品牌覆盖
+   衬线展示标题 / 陶土 CTA / 回声波纹 / 动效打磨
+   ============================================================ */
+
+/* ── 衬线展示标题：像一本认真装帧的研究刊物 ── */
+.empty-chat h2,
+.desk-head h1,
+.wd-title,
+.stock-name,
+.page-head h1,
+.wd-empty-cta h2,
+.portrait-doc h1,
+.portrait-doc h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.005em;
+}
+
+.empty-chat h2 {
+  font-size: 52px;
+  line-height: 1.12;
+  letter-spacing: 0.01em;
+}
+
+/* ── 品牌字标：Echo 用衬线，词标气质 ── */
+.brand strong {
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.brand em { letter-spacing: 0.18em; }
+
+/* 回声图标：字母 tile 换成同心圆波纹（信号从中心荡开） */
+.brand .echo-mark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  color: #fff;
+  background: radial-gradient(circle at 38% 32%, #d3765a, #b2543a 74%);
+  box-shadow: var(--sh-1), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  overflow: visible;
+}
+.brand .echo-mark svg { width: 18px; height: 18px; display: block; }
+.brand .echo-mark::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(191, 92, 62, 0.4);
+  opacity: 0;
+}
+.brand:hover .echo-mark::after { animation: echoRipple 1.4s var(--ease-out) infinite; }
+@keyframes echoRipple {
+  0%   { opacity: 0.7; transform: scale(0.86); }
+  100% { opacity: 0;   transform: scale(1.5); }
+}
+
+/* ── 顶栏：纸面通透 + 活性导航 pill ── */
+.topbar {
+  background: rgba(240, 238, 230, 0.72);
+}
+.topbar nav a { position: relative; }
+.topbar nav a.active {
+  background: var(--panel);
+  box-shadow: var(--sh-1);
+}
+[data-theme="dark"] .topbar nav a.active { background: var(--panel-soft); }
+
+/* ── CTA：陶土主按钮（新建研究 / 深入研究 / 去研究） ── */
+.primary {
+  background: linear-gradient(180deg, #c96442 0%, #b2543a 100%);
+  border-color: #a84e33;
+  box-shadow: var(--sh-2), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+.primary:hover { filter: brightness(1.05); transform: translateY(-1px); }
+.primary:active { transform: translateY(0) scale(0.985); filter: brightness(0.97); }
+
+.send-button {
+  background: linear-gradient(180deg, #c96442, #b2543a);
+}
+.send-button:hover { transform: translateY(-1px) scale(1.04); }
+.send-button:active { transform: scale(0.94); }
+
+/* ── 回答卡的品牌标：小圆点变回声点 ── */
+.answer-mark i {
+  background: radial-gradient(circle at 35% 30%, #d3765a, #b2543a);
+  box-shadow: 0 0 0 3px rgba(191, 92, 62, 0.14);
+}
+
+/* ── 交互动效打磨：卡片悬停、行悬停、渐入 ── */
+.example-card {
+  transition: transform 0.22s var(--ease), box-shadow 0.22s var(--ease), border-color 0.22s var(--ease-soft);
+}
+.example-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--sh-3);
+  border-color: rgba(191, 92, 62, 0.28);
+}
+.example-card:active { transform: translateY(0) scale(0.99); }
+
+.wl-row { transition: background 0.18s var(--ease-soft), transform 0.18s var(--ease); }
+.wl-row:hover { transform: translateX(2px); }
+
+.stock-card,
+.settings-card {
+  transition: transform 0.22s var(--ease), box-shadow 0.22s var(--ease);
+}
+.stock-card:hover,
+.settings-card:hover {
+  transform: translateY(-1.5px);
+  box-shadow: var(--sh-2);
+}
+
+/* 通知面板弹出更有弹性 */
+.notif-panel { animation: popIn 0.28s var(--ease-spring); transform-origin: top right; }
+
+/* 消息渐入只对最后一条生效（整页重渲时旧消息不重播动画） */
+.message:last-of-type { animation: riseIn 0.4s var(--ease-out); }
+
+/* tool-chip：纸面胶囊，悬停有陶土描边 */
+.tool-chip { transition: border-color 0.18s var(--ease-soft), color 0.18s var(--ease-soft), background 0.18s var(--ease-soft), transform 0.15s var(--ease); }
+.tool-chip:hover { border-color: rgba(191, 92, 62, 0.35); color: var(--blue-ink); transform: translateY(-1px); }
+.tool-chip:active { transform: translateY(0) scale(0.97); }
+
+/* 主题切换按钮转一下 */
+.theme-toggle:active svg { transform: rotate(40deg); }
+.theme-toggle svg { transition: transform 0.35s var(--ease-spring); }
+
+/* hero 标语的英文副行 */
+.hero-slogan-en {
+  display: block;
+  margin-top: 10px;
+  color: var(--muted);
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-style: italic;
+  letter-spacing: 0.06em;
+}
+
+/* 侧栏底部的品牌一句话 */
+.sidebar-tagline {
+  margin: 4px 2px 0;
+  padding: 10px 12px 0;
+  border-top: 1px solid var(--hairline);
+  color: var(--muted-2);
+  font-size: 11.5px;
+  line-height: 1.6;
+  letter-spacing: 0.02em;
+}
+.sidebar-tagline b {
+  display: block;
+  color: var(--muted);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-style: italic;
+  letter-spacing: 0.05em;
 }

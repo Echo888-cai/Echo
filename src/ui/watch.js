@@ -553,7 +553,7 @@ export function exportPortrait() {
     toast("画像还没加载好。");
     return;
   }
-  const ticker = S.stockPortrait.profile?.ticker || S.watchStockTicker || "luvio";
+  const ticker = S.stockPortrait.profile?.ticker || S.watchStockTicker || "echo";
   const blob = new Blob([S.stockPortrait.markdown], { type: "text/markdown;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");

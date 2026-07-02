@@ -8,7 +8,7 @@ export function shell(content) {
   app.innerHTML = `
     <div class="app">
       <header class="topbar">
-        <a class="brand" href="#/" aria-label="Luvio 研究"><span>L</span><strong>Luvio</strong><em>Research</em></a>
+        <a class="brand" href="#/" aria-label="Echo Research"><span class="echo-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="2.2" fill="currentColor" stroke="none"/><path d="M7.5 7.5a6.4 6.4 0 0 0 0 9"/><path d="M16.5 7.5a6.4 6.4 0 0 1 0 9"/><path d="M4.6 4.8a10.2 10.2 0 0 0 0 14.4" opacity="0.55"/><path d="M19.4 4.8a10.2 10.2 0 0 1 0 14.4" opacity="0.55"/></svg></span><strong>Echo</strong><em>Research</em></a>
         <nav>
           ${nav("/research", "研究")}
           ${nav("/watch", "看盘")}
