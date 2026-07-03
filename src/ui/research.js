@@ -410,7 +410,7 @@ async function runDiscovery(question, kind) {
   startRun(key, kind === "screener" ? "正在按条件筛选" : "正在梳理宏观信号");
   render();
   try {
-    const result = await api("/api/discover", { method: "POST", body: JSON.stringify({ question, kind }) });
+    const result = await api("/api/ask", { method: "POST", body: JSON.stringify({ question, kind }) });
     if (result.kind === "screener") {
       appendMessage("assistant", "", { type: "screener", screener: result });
     } else {

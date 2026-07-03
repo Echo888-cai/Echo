@@ -20,6 +20,7 @@ import { handleCompanySearch, handleCompanyResolve, handleCompanyVerify } from "
 import { handleSessionList, handleSessionClear, handleSessionGet, handleSessionDelete } from "./src/server/routes/research.js";
 import { handleChatApi } from "./src/server/routes/chat.js";
 import { handleDiscoverApi } from "./src/server/routes/discover.js";
+import { handleAskApi } from "./src/server/routes/ask.js";
 import { handleReportGenerateApi } from "./src/server/routes/reports.js";
 import { handleProfileList, handleProfileGet, handleProfileDelete } from "./src/server/routes/portraits.js";
 import { handleEventsDigest } from "./src/server/routes/events.js";
@@ -66,6 +67,9 @@ const server = createServer(async (req, res) => {
 
   // ── Documents (upload parsing for the composer) ────────
   if (method === "POST" && url.startsWith("/api/parse-document")) return handleDocumentParseApi(req, res);
+
+  // ── 统一入口（EA-0：一条对话的所有问题都从这进，服务端决定路由） ──
+  if (method === "POST" && url.startsWith("/api/ask")) return handleAskApi(req, res);
 
   // ── Research conversation + deep report ────────────────
   if (method === "POST" && url.startsWith("/api/chat")) return handleChatApi(req, res);

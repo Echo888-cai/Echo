@@ -146,8 +146,16 @@ function buildComparison({ payload, result, valuation, analyst, compareData }) {
 }
 
 export async function handleChatApi(req, res) {
+  let payload;
+  try { payload = await readJsonBody(req); }
+  catch { return sendJson(res, 400, { error: "请求体解析失败" }); }
+  return runChat(payload, res);
+}
+
+// EA-0：从 handleChatApi 抽出的可复用核心。/api/chat 与统一入口 /api/ask 共用它；
+// 也是后续 EA-1 工具层 researchCompany() 的落点。payload 已解析，res 用于 JSON 或 SSE 流式。
+export async function runChat(payload, res) {
   try {
-    const payload = await readJsonBody(req);
     const question = payload.question || "";
     const intent = classifyResearchIntent(question);
     const companyForEvidence = companyByTicker(payload.company?.ticker) || payload.company || {};

@@ -23,7 +23,7 @@ export async function chatStream(body, key) {
   let finalResult = null;
   const isFg = () => key && key === activeRunKey(); // 这条 run 此刻是否在前台
   try {
-    const resp = await fetch("/api/chat", {
+    const resp = await fetch("/api/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...body, stream: true })
@@ -74,7 +74,7 @@ export async function chatStream(body, key) {
       }
     }
   } catch {
-    if (!finalResult) finalResult = await api("/api/chat", { method: "POST", body: JSON.stringify(body) });
+    if (!finalResult) finalResult = await api("/api/ask", { method: "POST", body: JSON.stringify(body) });
   } finally {
     if (S.streamingKey === key) { S.streamingKey = null; S.streamingText = ""; }
   }
