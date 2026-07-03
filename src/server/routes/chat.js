@@ -21,7 +21,7 @@ import { getNewsSnapshot } from "../../newsData.js";
 // 对话内对比：只拉"对比对象"做并排比较真正需要的几项（行情/区间回报/财报/评级），
 // 不跑 news/filings/segments——精简后更快，避免和主公司的全量管道并发争抢时超时拿不到数据
 // （之前用 collectDataSources 全量跑，并发下常超时→对比块为空，模型只能说"未核到对方数据"）。
-async function buildCompareSummary(compareWith) {
+export async function buildCompareSummary(compareWith) {
   const company = companyByTicker(compareWith.ticker) || compareWith;
   if (!company?.ticker) return null;
   const t = company.ticker;

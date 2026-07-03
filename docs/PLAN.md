@@ -169,7 +169,7 @@ Echo 现在是"**单公司深度问答**"这一形态里做得最扎实的：一
 | 阶段 | 名称 | 状态 | 备注 |
 |------|------|:---:|------|
 | EA-0 | 统一入口 `/api/ask` | ✅ 2026-07-03 | 服务端路由权威 routeAsk(带 company→chat；否则分类 screener·macro)；runChat/runDiscover 抽出复用(EA-1 工具层落点)；前端只改调用 URL、路由逻辑零变更；实测四类分派+SSE final 全通；测试 +12 |
-| EA-1 | 分析框架注册表 + 工具层 ★ | ⬜ | 皇冠明珠的地基 |
+| EA-1 | 分析框架注册表 + 工具层 ★ | ✅ 2026-07-04 | `src/server/frameworks/index.js` 把 `PROMPTS` 9 个角色框架收敛成 `{id,name,appliesTo,systemPrompt,rubric}` 注册表（systemPrompt/rubric 与迁移前逐字节一致，零行为变更）；`src/server/services/agentTools.js` 包 6 个统一签名工具（resolveCompany/researchCompany/screenStocks/compareCompanies/macroRead/webEvidence，均薄包装已有服务，run() 失败返回 `{status:"error"}` 不抛出）；`chat.js` 的 `buildCompareSummary` 导出供工具层复用；测试 `tests/phase-ea1.mjs` +43，`npm test` 全绿 |
 | EA-2 | 受控规划器 + 问题模板 ★核心 | ⬜ | 会串工具、会挑框架 |
 | EA-3 | 深化选股：赛道词典 + 可解释排序 | ⬜ | "值得买"落地 |
 | EA-4 | 对话即容器 + 全标的自动进看盘 | ⬜ | 用户明确要 |
