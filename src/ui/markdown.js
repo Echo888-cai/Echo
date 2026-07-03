@@ -120,7 +120,7 @@ export function renderRichAnswer(content = "") {
 
   return blocks
     .map((b, i) => {
-      // --i 驱动分段渐显的错峰延迟（仅最新一条回答会动，见 styles.css）。
+      // --i 驱动分段渐显的错峰延迟（仅最新一条回答会动，见 src/styles/04-components.css）。
       if (b.lead) {
         const html = markdownToHtml(b.lead.join("\n"));
         return html ? `<div class="ans-lead" style="--i:${i}">${html}</div>` : "";

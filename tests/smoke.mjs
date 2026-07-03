@@ -125,7 +125,14 @@ await (async () => {
 
 // ── 画像卫生回归：诊断文案不冒充主线 + 数据抖动不进时间线 + 研究覆盖手动隐藏 ──
 {
-  const { updatePortraitFromPanel } = await import("../src/server/services/companyPortrait.js");
+  const { updatePortraitFromPanel, extractFalsifiersFromAnswer } = await import("../src/server/services/companyPortrait.js");
+
+  // 证伪抽取不得越过段落边界（"我的判断：…"散文头曾整段泄漏进证伪条件）。
+  const fals = extractFalsifiersFromAnswer([
+    "证伪条件", "1. 股价跌破 100 美元。", "2. 毛利率连续两季下滑超过 2 个点。", "",
+    "我的判断：整体商业逻辑还成立。", "还缺什么（不影响判断）", "- 一致预期"
+  ].join("\n"));
+  assert.deepEqual(fals, ["股价跌破 100 美元。", "毛利率连续两季下滑超过 2 个点。"], "证伪抽取应止步于段落边界");
   const { addToWatch, removeFromWatch, getHiddenTickers, listWatchAdds } = await import("../src/server/repositories/watchlist.js");
   const { getDb } = await import("../src/db/index.js");
   const T = "SMOKECLEAN.US";

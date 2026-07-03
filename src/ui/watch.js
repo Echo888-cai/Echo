@@ -39,11 +39,35 @@ const WD_STATUS = {
 // ── 看盘瘦列表（替代原盯盘卡墙）：一行一家，扫一眼 + 点进公司页 ──
 const WL_CHEVRON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
 const WL_X = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+const WD_REFRESH = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg>';
+
+// 研究状态枚举 → 用户语言（与服务端 RESEARCH_STATUS_LABELS 对齐，个股页展示用）。
+const RS_LABEL = {
+  watch: "持续观察", research_more: "需要补充材料", data_missing: "数据缺失",
+  risk_alert: "风险提示", out_of_scope: "不在范围"
+};
+
+// 行内迷你价格曲线（纯 SVG 无依赖）：近一月收盘 → 92×26 折线，涨绿跌红平灰。
+// preserveAspectRatio=none 让曲线充满格子；粗细/颜色由外层 class 控制。
+function sparkSvg(spark) {
+  const pts = spark && Array.isArray(spark.points) ? spark.points : null;
+  if (!pts || pts.length < 5) return `<span class="wl-spark is-empty" aria-hidden="true"><i></i></span>`;
+  const W = 92, H = 26, pad = 2.5;
+  const min = Math.min(...pts), max = Math.max(...pts), span = (max - min) || 1;
+  const path = pts.map((c, i) => {
+    const x = pad + (i / (pts.length - 1)) * (W - pad * 2);
+    const y = H - pad - ((c - min) / span) * (H - pad * 2);
+    return `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  const dir = spark.changePct > 0.05 ? "sp-up" : spark.changePct < -0.05 ? "sp-down" : "sp-flat";
+  return `<span class="wl-spark ${dir}" aria-hidden="true"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><path d="${path}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg></span>`;
+}
 // 失败占位/无信息/数据可用性诊断类的主线不配当"一句话摘要"，跳过它退回事件。
 // 生成侧已把诊断文案与投资主线分离（decisionPanel.dataReadiness），这里留作历史脏数据的后备防线。
 const WL_BAD_THESIS = /不可用|无法形成|暂无|尚未|待补充|已有财务数据|缺一致预期|缺用户持仓|行情已接入/;
 
-// 每行：状态点 · 名称 · 代码 · 市场 ·（紧急时才显示状态标）· 一句摘要 …… 现价 · 涨跌 · 持有盈亏 · 悬停×移除。
+// 每行（专业盘面网格）：状态点 · 名称/代码/市场 · 近一月 sparkline · 现价 · 今日涨跌 ·
+// 持有盈亏 · 主线一句 · 悬停×移除。列由 .wl-row 的 grid 对齐，数字列右对齐 tabular-nums。
 function renderWatchRow(c) {
   const st = WD_STATUS[c.status] || WD_STATUS.intact;
   const mkt = c.market === "US" ? `<span class="ex-badge us">美股</span>` : `<span class="ex-badge hk">港股</span>`;
@@ -52,20 +76,19 @@ function renderWatchRow(c) {
   // 一句摘要：优先我的投资主线（中文、干净）；主线是失败占位就退回今日事件（去掉" - 来源"后缀）。
   let sec = c.thesis && !WL_BAD_THESIS.test(c.thesis) ? c.thesis : "";
   if (!sec && c.topEvent?.title) sec = c.topEvent.title.replace(/\s+[-–—]\s+[^-–—]*$/, "").trim();
-  const secondary = sec ? `<span class="wl-thesis">${esc(sec)}</span>` : "";
 
-  let quote;
+  let price = `<span class="wl-price is-none">—</span>`;
+  let chg = `<span class="wd-chg is-flat"></span>`;
   if (c.priceStatus === "ok" && c.price != null) {
-    const chg = wdChg(c.changePct);
-    quote = `<span class="wl-price">${fmtNum(c.price)}</span>${chg ? `<span class="wd-chg ${chg.dir}">${chg.text}</span>` : ""}`;
+    price = `<span class="wl-price">${fmtNum(c.price)}</span>`;
+    const d = wdChg(c.changePct);
+    if (d) chg = `<span class="wd-chg ${d.dir}">${d.text}</span>`;
   } else if (c.priceStatus === "loading") {
-    quote = `<span class="wd-noquote">加载中…</span>`;
-  } else {
-    quote = `<span class="wd-noquote">现价暂不可用</span>`;
+    price = `<span class="wl-price is-none">…</span>`;
   }
   const pnl = c.held && typeof c.returnPct === "number"
-    ? `<span class="wl-pnl">持有 <b class="${pnlDir(c.returnPct)}">${fmtPct(c.returnPct)}</b></span>`
-    : `<span class="wl-pnl"></span>`;
+    ? `<span class="wl-pnl"><b class="${pnlDir(c.returnPct)}">${fmtPct(c.returnPct)}</b></span>`
+    : `<span class="wl-pnl is-none">—</span>`;
 
   // .wl-item 是定位容器；行(button)与移除×(button)是兄弟节点（不能嵌套 button），
   // 点击时 closest([data-action]) 各自命中，互不干扰。
@@ -77,13 +100,24 @@ function renderWatchRow(c) {
         <span class="wd-ticker">${esc(c.ticker)}</span>
         ${mkt}
         ${statusPill}
-        ${secondary}
       </span>
-      <span class="wl-quote">${quote}</span>
+      ${sparkSvg(c.spark)}
+      ${price}
+      ${chg}
       ${pnl}
+      <span class="wl-thesis">${sec ? esc(sec) : ""}</span>
       <span class="wl-chev">${WL_CHEVRON}</span>
     </button>
     <button class="wl-x" type="button" data-action="untrack-stock" data-ticker="${esc(c.ticker)}" aria-label="移出关注：${esc(c.companyName)}" title="移出关注">${WL_X}</button>
+  </div>`;
+}
+
+// 列头（与 .wl-row 同一套 grid 列，仅宽屏显示）。
+function renderWatchColumns() {
+  return `<div class="wl-cols" aria-hidden="true">
+    <span></span><span>公司</span><span class="c-spark">近一月</span>
+    <span class="c-num">现价</span><span class="c-num">今日</span><span class="c-num">持有</span>
+    <span>投资主线 / 今日事件</span><span></span>
   </div>`;
 }
 
@@ -140,6 +174,14 @@ function renderWatchList(desk, { heading = "" } = {}) {
   if (counts.atRisk) bits.push(`<span class="wd-count wd-risk">${counts.atRisk} 有风险</span>`);
   bits.push(`<span class="wd-count wd-intact">${counts.intact || 0} 逻辑还在</span>`);
 
+  // 概览条：状态计数 + 今日红绿家数 + 数据时间 + 手动刷新（专业盘面的"仪表行"）。
+  const ups = cards.filter((c) => typeof c.changePct === "number" && c.changePct > 0.0001).length;
+  const downs = cards.filter((c) => typeof c.changePct === "number" && c.changePct < -0.0001).length;
+  const at = desk.generatedAt ? new Date(desk.generatedAt) : null;
+  const timeText = at && !Number.isNaN(at.getTime())
+    ? `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")} 更新`
+    : "";
+
   const visible = applyWatchView(cards);
   const emptyAfterFilter = cards.length && !visible.length
     ? `<div class="wl-filter-empty">这个筛选下没有公司。<button type="button" class="wl-linkbtn" data-action="watch-filter" data-v="all">看全部</button></div>`
@@ -152,14 +194,22 @@ function renderWatchList(desk, { heading = "" } = {}) {
         <h2 class="wd-title">${esc(heading || `你在盯的 ${counts.total || cards.length} 家公司`)}</h2>
       </div>
       <div class="wd-summary">
-        ${bits.join("")}
         <button class="wd-portfolio-link" type="button" data-action="portfolio-view">我的持仓</button>
         <button class="wd-portfolio-link wl-add-btn" type="button" data-action="watch-add-open">＋ 添加</button>
       </div>
     </div>
+    <div class="wd-overview">
+      ${bits.join("")}
+      <span class="wdo-sep" aria-hidden="true"></span>
+      <span class="wdo-updn">${ups || downs ? `<b class="is-up">↑ ${ups}</b><b class="is-down">↓ ${downs}</b>` : `<span class="wdo-quiet">今日行情加载中</span>`}</span>
+      <span class="wdo-right">
+        ${timeText ? `<span class="wdo-time">${timeText}</span>` : ""}
+        <button class="wdo-refresh ${S.wdRefreshing ? "is-busy" : ""}" type="button" data-action="watch-refresh" title="刷新看盘" aria-label="刷新看盘">${WD_REFRESH}</button>
+      </span>
+    </div>
     ${S.watchAddOpen ? `<div class="wl-addbar">${renderWatchAddForm()}</div>` : ""}
-    ${cards.length > 3 ? renderWatchControls(cards) : ""}
-    <div class="wl-list">${visible.map(renderWatchRow).join("")}${emptyAfterFilter}</div>
+    ${cards.length > 1 ? renderWatchControls(cards) : ""}
+    <div class="wl-list">${renderWatchColumns()}${visible.map(renderWatchRow).join("")}${emptyAfterFilter}</div>
   </div>`;
 }
 
@@ -386,12 +436,14 @@ function renderStockDetail(stock) {
     : "";
 
   const p = stock.profile;
+  const cleanThesis = p?.thesis && !WL_BAD_THESIS.test(p.thesis) ? p.thesis : "";
   const researchCard = `<div class="stock-card">
-    <div class="stock-card-head">${stockIcon("target")}研究状况</div>
-    ${p?.thesis ? `<p class="stock-card-body">${esc(p.thesis)}</p>` : `<p class="stock-card-body is-empty">还没有画像 · 点「深入研究」建立</p>`}
+    <div class="stock-card-head">${stockIcon("target")}投资主线</div>
+    ${cleanThesis ? `<p class="stock-card-body stock-thesis">${esc(cleanThesis)}</p>` : `<p class="stock-card-body is-empty">还没有沉淀投资主线 · 点「深入研究」建立</p>`}
     ${p?.researchStatus || p?.confidence ? `<div class="stock-tags">
-      ${p.researchStatus ? `<span class="stock-tag">研究状态 · ${esc(p.researchStatus)}</span>` : ""}
+      ${p.researchStatus ? `<span class="stock-tag">研究状态 · ${esc(RS_LABEL[p.researchStatus] || p.researchStatus)}</span>` : ""}
       ${p.confidence ? `<span class="stock-tag">置信度 · ${esc(p.confidence)}</span>` : ""}
+      ${p.turnCount ? `<span class="stock-tag">已研究 ${p.turnCount} 轮</span>` : ""}
     </div>` : ""}
   </div>`;
 
@@ -443,14 +495,12 @@ function renderStockDetail(stock) {
     <button class="stock-tab ${S.stockTab === "portrait" ? "is-active" : ""}" type="button" data-action="stock-tab" data-tab="portrait">画像</button>
   </div>`;
 
+  // 总览双栏：左＝价格曲线 + 近期事件（时间维度）；右＝主线/证伪/基本面（判断维度）。
   const body = S.stockTab === "portrait"
     ? renderPortraitTab(stock)
-    : `${renderPriceChart(stock.series)}
-      <div class="stock-grid">
-        ${researchCard}
-        ${fundamentalsCard}
-        ${falsifiersCard}
-        ${eventsCard}
+    : `<div class="stock-cols">
+        <div class="stock-col-main">${renderPriceChart(stock.series)}${eventsCard}</div>
+        <div class="stock-col-side">${researchCard}${falsifiersCard}${fundamentalsCard}</div>
       </div>`;
 
   return `<div class="stock-page">

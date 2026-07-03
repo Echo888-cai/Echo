@@ -18,7 +18,7 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 loadEnvFile(root);
 
 const { getDb } = await import("../src/db/index.js");
-const { upsertCompanyProfile } = await import("../src/server/repositories/companyProfiles.js");
+const { upsertCompanyProfile, listCompanyProfiles, getCompanyProfile } = await import("../src/server/repositories/companyProfiles.js");
 
 const DIAG = ["%已有财务数据%", "%行情和财务数据均不可用%", "%行情已接入，但缺财务解析%"];
 const hit = (col) => `(${DIAG.map(() => `${col} LIKE ?`).join(" OR ")})`;
@@ -58,6 +58,20 @@ for (const ticker of affected) {
   }
 }
 console.log(`[clean-portrait-noise] profile_md 重渲染：${rerendered} 家`);
+
+// 证伪条件里的散文泄漏（"我的判断：…"、"还缺什么…"整段曾被当条件收进）——过滤掉。
+const PROSE_FALSIFIER = /^(我的判断|还缺什么|Base Case)/;
+let falsFixed = 0;
+for (const brief of listCompanyProfiles(500)) {
+  const full = getCompanyProfile(brief.ticker);
+  const fals = Array.isArray(full?.falsifiers) ? full.falsifiers : [];
+  const cleaned = fals.filter((f) => !PROSE_FALSIFIER.test(String(f).trim()));
+  if (cleaned.length !== fals.length) {
+    upsertCompanyProfile(brief.ticker, { falsifiers: cleaned });
+    falsFixed += 1;
+  }
+}
+console.log(`[clean-portrait-noise] 证伪条件散文泄漏清理：${falsFixed} 家`);
 
 const leftEvents = db.prepare(`SELECT COUNT(*) AS n FROM profile_events WHERE ${hit("summary")}`).get(...DIAG);
 const leftThesis = db.prepare(`SELECT COUNT(*) AS n FROM company_profiles WHERE ${hit("thesis")}`).get(...DIAG);

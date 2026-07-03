@@ -101,7 +101,9 @@ export async function buildWatchDesk(companies = [], { slot = "premarket", event
     const ticker = c.ticker;
     const profile = getCompanyProfile(ticker);
     const position = getPosition(ticker);
-    const snap = await snapshotFor(ticker);
+    // spark 跟事件走慢阶段（fast 模式先给价格与状态）；序列有 30 分钟进程缓存，
+    // 首轮未命中缓存的部分公司拿不到也无妨——sparkline 缺省不该拖垮整张卡。
+    const [snap, spark] = await Promise.all([snapshotFor(ticker), withEvents ? sparkFor(ticker) : null]);
     const events = groupByTicker.get(ticker)?.events || [];
     const topEvent = events[0] || null;
     const topNewsHigh = events.find((e) => e.kind === "news" && e.severity === "high")?.title || "";
@@ -134,6 +136,8 @@ export async function buildWatchDesk(companies = [], { slot = "premarket", event
       changePct: snap.changePct ?? null,
       held,
       returnPct,
+      // 行内迷你曲线：近一月收盘 + 区间涨跌（慢阶段才有，fast 模式为 null）。
+      spark,
       // 证伪监控（UX-7）：价格类规则 + 实时评估（triggered/距触发%）。个股页渲染监控块用。
       watchRules: rules
     };
@@ -155,6 +159,21 @@ export async function buildWatchDesk(companies = [], { slot = "premarket", event
   };
 
   return { generatedAt: new Date().toISOString(), slot, cards, counts, failures: digest.failures || [] };
+}
+
+/** 行内 sparkline 数据：近一月收盘价（≤22 个交易日）+ 区间涨跌%。失败静默缺省。 */
+async function sparkFor(ticker) {
+  try {
+    const s = await getPriceSeries(ticker);
+    if (s.providerStatus !== "ok" || !Array.isArray(s.points) || s.points.length < 5) return null;
+    const pts = s.points.slice(-22).map((p) => Number(p.close)).filter(Number.isFinite);
+    if (pts.length < 5) return null;
+    const first = pts[0];
+    const last = pts[pts.length - 1];
+    return { points: pts, changePct: first ? ((last - first) / first) * 100 : 0 };
+  } catch {
+    return null;
+  }
 }
 
 /**

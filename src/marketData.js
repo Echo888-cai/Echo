@@ -332,10 +332,19 @@ async function fetchTencentDailyCloses(ticker) {
   }
 }
 
-// 价格曲线序列（公司页真曲线）。收盘价日线，oldest-first，供前端画面积/折线图。
+// 价格曲线序列（公司页真曲线 + 看盘行内 sparkline）。收盘价日线，oldest-first。
 // 美股：TwelveData 主、FMP light 兜底（fetchDailyCloses）。港股：腾讯免费日K。
 // 任一都拿不到 → providerStatus:"missing"，UI 诚实显示"暂不可用"（不再区分付费/预留）。
+// 进程内 TTL 缓存：日线一天最多变一次，30 分钟内看盘整盘刷新/多次进出个股页
+// 不再反复打行情源（免费额度有限，30 家并发拉序列会瞬间打爆 TwelveData）。
+const priceSeriesCache = new Map(); // ticker -> { at, value }
+const PRICE_SERIES_TTL_MS = 30 * 60 * 1000;
+
 export async function getPriceSeries(ticker) {
+  const key = normalizeTicker(ticker) || String(ticker || "");
+  const hit = priceSeriesCache.get(key);
+  if (hit && Date.now() - hit.at < PRICE_SERIES_TTL_MS) return hit.value;
+
   let points;
   if (detectMarket(ticker) === "US") {
     const closes = await fetchDailyCloses(ticker); // newest-first
@@ -343,8 +352,10 @@ export async function getPriceSeries(ticker) {
   } else {
     points = (await fetchTencentDailyCloses(ticker)).slice(-252);
   }
-  if (!points || points.length < 20) return { providerStatus: "missing" };
-  return { providerStatus: "ok", asOf: points[points.length - 1].date, points };
+  if (!points || points.length < 20) return { providerStatus: "missing" }; // 失败不缓存，下轮重试
+  const value = { providerStatus: "ok", asOf: points[points.length - 1].date, points };
+  priceSeriesCache.set(key, { at: Date.now(), value });
+  return value;
 }
 
 export function marketSnapshotToMarkdown(snapshot) {

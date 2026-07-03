@@ -1,0 +1,383 @@
+/* ── 看盘：筛选/排序控件 + 证伪监控芯片 ─────────────── */
+
+.wl-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 4px 0 12px;
+}
+.wl-seggroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--panel-soft);
+}
+.wl-seglabel { font-size: 11.5px; color: var(--muted-2); padding: 0 6px 0 8px; }
+.wl-seg {
+  border: none;
+  background: transparent;
+  padding: 5px 11px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.18s var(--ease-soft), color 0.18s var(--ease-soft);
+}
+.wl-seg:hover { color: var(--ink); }
+.wl-seg.is-on {
+  background: var(--panel);
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: var(--sh-1);
+}
+[data-theme="dark"] .wl-seg.is-on { background: rgba(255, 255, 255, 0.1); }
+
+.wl-filter-empty {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+.wd-partial {
+  margin-left: 10px;
+  font-size: 11px;
+  color: var(--muted-2);
+  font-weight: 400;
+  letter-spacing: 0;
+  animation: partial-pulse 1.6s ease-in-out infinite;
+}
+@keyframes partial-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+
+.fw-count {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--blue-ink);
+  background: var(--blue-soft);
+  padding: 2px 8px;
+  border-radius: 7px;
+}
+.fw-chip {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+.fw-watch { background: var(--blue-soft); color: var(--blue-ink); }
+.fw-hit { background: rgba(255, 59, 48, 0.14); color: var(--danger); }
+.fw-line-hit { color: var(--danger); }
+.fw-note {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  color: var(--muted-2);
+}
+
+/* 设置页里的测试通知按钮（通用幽灵按钮） */
+.ghost-btn {
+  margin-top: 12px;
+  padding: 7px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.2s var(--ease-soft), background 0.2s var(--ease-soft);
+}
+.ghost-btn:hover { border-color: var(--line-strong); background: var(--panel-soft); }
+
+main {
+  padding: 0;
+}
+
+/* ── Workspace ────────────────────────────────────────── */
+.workspace {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  min-height: calc(100vh - 60px);
+}
+
+.sidebar {
+  position: sticky;
+  top: 60px;
+  height: calc(100vh - 60px);
+  overflow: auto;
+  padding: 22px 16px;
+  border-right: 1px solid var(--hairline);
+  background: var(--panel-glass);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.primary,
+.secondary,
+.tool-chip {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #fff;
+  background: linear-gradient(180deg, #33312b 0%, #141413 100%);
+  border-color: #141413;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  box-shadow: var(--sh-2), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  transition: transform 0.18s var(--ease), box-shadow 0.18s var(--ease), filter 0.18s var(--ease-soft);
+}
+
+.primary:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--sh-3), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  filter: brightness(1.06);
+}
+
+.primary:active {
+  transform: translateY(0) scale(0.99);
+}
+
+.wide {
+  width: 100%;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.research-snapshot {
+  margin-top: 18px;
+  padding: 22px 20px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--panel-glass-strong);
+  box-shadow: var(--sh-1);
+}
+
+.research-snapshot p,
+.side-title h3,
+.eyebrow {
+  margin: 0 0 8px;
+  color: var(--blue-ink);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.research-snapshot h2 {
+  margin: 0 0 4px;
+  font-size: 21px;
+  font-weight: 650;
+  line-height: 1.18;
+  letter-spacing: -0.02em;
+}
+
+.research-snapshot .snapshot-id span,
+.muted {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* Dual-listing note (港股 + 美股 ADR) */
+.snapshot-dual {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 2px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--blue-soft);
+  border: 1px solid rgba(191, 92, 62, 0.14);
+}
+.dual-badge {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--blue);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.dual-text {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--blue-ink);
+  font-weight: 550;
+}
+
+/* History drawer */
+.history-panel {
+  margin-top: 14px;
+  padding: 6px 4px 4px;
+}
+
+.history-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 0.18s var(--ease-soft), border-color 0.18s var(--ease-soft);
+}
+
+.history-toggle:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+[data-theme="dark"] .history-toggle:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.history-toggle.is-open {
+  color: var(--ink);
+}
+
+.history-toggle i {
+  color: var(--muted-2);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 600;
+  transition: color 0.18s var(--ease-soft);
+}
+
+.history-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: 4px 6px 8px;
+}
+
+.history-actions button {
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: color 0.16s var(--ease-soft), background 0.16s var(--ease-soft);
+}
+
+.history-actions button:hover {
+  color: var(--danger);
+  background: rgba(255, 59, 48, 0.08);
+}
+
+.session-list {
+  display: grid;
+  gap: 4px;
+  animation: fadeIn 0.26s var(--ease-out);
+}
+
+.session-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 26px;
+  gap: 6px;
+  align-items: center;
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: var(--ink);
+  background: transparent;
+  transition: background 0.16s var(--ease-soft), border-color 0.16s var(--ease-soft);
+}
+
+.session-item:hover {
+  border-color: var(--hairline);
+  background: var(--panel);
+  box-shadow: var(--sh-1);
+}
+
+.session-item.is-active {
+  border-color: rgba(191, 92, 62, 0.24);
+  background: var(--blue-soft);
+}
+
+.session-open {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-open strong {
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-open span,
+.history-empty {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.session-delete {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted-2);
+  background: transparent;
+  cursor: pointer;
+  font-size: 17px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.16s var(--ease-soft), color 0.16s var(--ease-soft), background 0.16s var(--ease-soft);
+}
+
+.session-item:hover .session-delete,
+.session-delete:focus-visible {
+  opacity: 1;
+}
+
+.session-delete:hover {
+  color: var(--danger);
+  background: rgba(255, 59, 48, 0.1);
+}
+
+.history-empty {
+  margin: 4px 6px;
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--panel-soft);
+  animation: fadeIn 0.26s var(--ease-out);
+}
+

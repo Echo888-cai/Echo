@@ -88,6 +88,10 @@ document.addEventListener("click", async (event) => {
   if (action === "open-stock") { location.hash = `#/watch/${target.dataset.ticker}`; render(); return; }
   if (action === "watch-filter") { S.watchFilter = target.dataset.v || "all"; render(); return; }
   if (action === "watch-sort") { S.watchSort = target.dataset.v || "urgency"; render(); return; }
+  if (action === "watch-refresh") {
+    if (!S.wdRefreshing) { S.wdRefreshing = true; render(); void refreshWatchDesk().finally(() => { S.wdRefreshing = false; render(); }); }
+    return;
+  }
   if (action === "chart-range") { S.chartRange = target.dataset.range || "3m"; render(); return; }
   if (action === "stock-tab") { S.stockTab = target.dataset.tab || "overview"; render(); return; }
   if (action === "export-portrait") { exportPortrait(); return; }

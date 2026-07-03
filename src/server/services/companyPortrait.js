@@ -43,7 +43,8 @@ export function loadPortraitContext(ticker) {
  * （"监管变化/竞争加剧"）更有沉淀价值——有具体条件就用它们覆盖通用项。
  */
 const FALSIFY_HEAD_RE = /^#{0,3}\s*(?:\d+[.、]\s*)?(?:证伪条件|风险\s*\/\s*证伪|会推翻逻辑的关键事实)\s*[：:]?\s*$/;
-const SECTION_END_RE = /^#{1,3}\s+\S|^(?:\d+[.、]\s*)?(?:结论|事实|推断|估值|动作|来源|我的判断|数据缺口|证据缺口|接下来重点看|深度研究)\s*[：:]?\s*$/;
+// 段落边界：整行标题，或"我的判断：…/还缺什么…"这类同行携带内容的散文头（本地答案格式）。
+const SECTION_END_RE = /^#{1,3}\s+\S|^(?:\d+[.、]\s*)?(?:结论|事实|推断|估值|动作|来源|我的判断|数据缺口|证据缺口|接下来重点看|深度研究)\s*[：:]?\s*$|^我的判断[：:]|^还缺什么/;
 export function extractFalsifiersFromAnswer(content = "") {
   const lines = String(content || "").split(/\r?\n/);
   const cleanItem = (line) =>
@@ -58,6 +59,9 @@ export function extractFalsifiersFromAnswer(content = "") {
     if (FALSIFY_HEAD_RE.test(line)) { inSection = true; continue; }
     if (!inSection) continue;
     if (SECTION_END_RE.test(line)) break;
+    // 列表已收到条目后撞到散文行 = 段落实际结束（防"我的判断：…"整段被吸进证伪条件）。
+    const isListItem = /^[-•*]|^\d+[.、)]/.test(line);
+    if (!isListItem && out.length) break;
     const item = cleanItem(line);
     if (item.length >= 6 && item.length <= 200) out.push(item);
     if (out.length >= 6) break;
