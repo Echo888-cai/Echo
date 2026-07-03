@@ -166,6 +166,29 @@ await (async () => {
   getDb().prepare("DELETE FROM watchlist_prefs WHERE ticker = ?").run(T);
 }
 
+// ── Markdown 渲染：新语法（hr/表格/斜体/行内代码/引用/h4）+ 正文数字不受占位符误伤 ──
+{
+  const { markdownToHtml } = await import("../src/ui/markdown.js");
+  const out = markdownToHtml([
+    "**加粗** 与 *斜体* 和 `code` 与 [苹果](https://apple.com)",
+    "---",
+    "| 指标 | 数值 |",
+    "|---|---:|",
+    "| 营收 | 949 亿 |",
+    "> 引用",
+    "#### 小标题",
+    "价格 308.63，涨 4.8%"
+  ].join("\n"));
+  assert.ok(out.includes('<hr class="md-rule"'), "--- 应渲染为分隔线而非裸文本");
+  assert.ok(!out.includes("<p>---</p>"), "不得再出现裸 --- 段落");
+  assert.ok(out.includes('<table class="md-table"') && out.includes("<th>指标</th>"), "表格应渲染");
+  assert.ok(out.includes('class="md-al-r"'), "表格右对齐应生效");
+  assert.ok(out.includes("<em>斜体</em>") && out.includes('<code class="md-code">code</code>'), "斜体/行内代码应渲染");
+  assert.ok(out.includes(">苹果</a>"), "markdown 链接应渲染");
+  assert.ok(out.includes('<blockquote class="md-quote"') && out.includes("<h4>小标题</h4>"), "引用/h4 应渲染");
+  assert.ok(out.includes("308.63") && out.includes("4.8%") && out.includes("949 亿"), "正文数字不得被占位符吞掉");
+}
+
 // ── P3.1 事件引擎：新闻分级 ────────────────────────────────────────
 assert.equal(classifyNewsSeverity({ title: "ROSEN LAW Reminds Investors" }), "drop", "律所广告→drop");
 assert.equal(classifyNewsSeverity({ title: "Company faces SEC investigation" }), "high", "SEC调查→high");

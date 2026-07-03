@@ -224,6 +224,117 @@
   text-decoration: underline;
 }
 
+.bubble h4 {
+  margin: 16px 0 8px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: -0.008em;
+}
+
+.bubble em {
+  font-style: italic;
+  color: var(--ink);
+}
+
+/* ── Markdown 增强（P3）：分隔线 / 表格 / 行内代码 / 引用 ─────
+   模型答案里的 --- 曾渲染成裸文本，表格/斜体/行内代码直接漏出源码。 */
+/* 分隔线：两端渐隐的发丝线 + 居中陶土菱点，像书籍的节间花饰（不再是一根愣线）。 */
+.md-rule {
+  border: none;
+  position: relative;
+  height: 1px;
+  margin: 20px 8%;
+  background: linear-gradient(90deg, transparent, var(--line) 20%, var(--line) 80%, transparent);
+  overflow: visible;
+}
+.md-rule::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  transform: translate(-50%, -50%) rotate(45deg);
+  border-radius: 1px;
+  background: var(--blue);
+  opacity: 0.5;
+  box-shadow: 0 0 0 3px var(--panel);
+}
+
+/* 表格：圆角容器内表头浅底 + 发丝行线 + 斑马纹，窄屏横向滚动。 */
+.md-tablewrap {
+  margin: 12px 0 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  background: var(--panel);
+}
+.md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.md-table th {
+  text-align: left;
+  font-weight: 650;
+  color: var(--ink);
+  background: var(--panel-soft);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.md-table td {
+  padding: 7.5px 12px;
+  border-top: 1px solid var(--hairline);
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.md-table tbody tr:first-child td { border-top: none; }
+.md-table tbody tr:nth-child(even) td { background: rgba(31, 30, 24, 0.018); }
+[data-theme="dark"] .md-table tbody tr:nth-child(even) td { background: rgba(240, 238, 230, 0.025); }
+.md-table .md-al-r { text-align: right; }
+.md-table .md-al-c { text-align: center; }
+
+/* 行内代码：等宽小胶囊，陶土墨色。 */
+.md-code {
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  padding: 1px 6px 1.5px;
+  border-radius: 6px;
+  border: 1px solid var(--hairline);
+  background: var(--panel-soft);
+  color: var(--blue-ink);
+  white-space: nowrap;
+}
+
+/* 引用：左缘陶土竖线 + 浅陶土底，右侧圆角。 */
+.md-quote {
+  margin: 12px 0;
+  padding: 9px 14px;
+  border-left: 3px solid var(--blue);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--blue-soft);
+  color: var(--ink-2);
+}
+.md-quote p { margin: 0 0 5px; font-size: 14px; }
+.md-quote p:last-child { margin-bottom: 0; }
+
+/* 来源脚注链接：下划线从左滑入（hover 微动效）。 */
+.ans-sec.tone-sources .ans-sec-body a {
+  text-decoration: none;
+  background-image: linear-gradient(currentColor, currentColor);
+  background-size: 0% 1px;
+  background-position: 0 100%;
+  background-repeat: no-repeat;
+  transition: background-size 0.24s var(--ease-soft), color 0.16s var(--ease-soft);
+}
+.ans-sec.tone-sources .ans-sec-body a:hover {
+  text-decoration: none;
+  background-size: 100% 1px;
+}
+
 .numbered-line {
   padding-left: 1.4em;
   text-indent: -1.4em;

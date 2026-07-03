@@ -1053,11 +1053,24 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* 段落揭示时语义点做一次呼吸脉冲（跟随各段的错峰延迟），随后归于平静。 */
+.conversation > .message:last-child .ans-sec .ans-dot {
+  animation: dotPulse 0.9s var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 65ms + 0.22s);
+}
+@keyframes dotPulse {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--sec-accent) 50%, transparent); }
+  70%  { box-shadow: 0 0 0 7px color-mix(in srgb, var(--sec-accent) 0%, transparent); }
+  100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--sec-accent) 16%, transparent); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .sk-line { animation: none; }
   .conversation > .message:last-child .ans-lead,
   .conversation > .message:last-child .ans-sec { animation: none; }
-  .stream-caret { animation: none; }
+  .conversation > .message:last-child .ans-sec .ans-dot { animation: none; }
+  .stream-caret { animation: none; box-shadow: none; }
+  .wait-orb, .wait-orb::before, .wait-orb::after { animation: none; }
 }
 
 /* Streaming answer — live tokens with a blinking caret */
@@ -1078,8 +1091,10 @@
   vertical-align: text-bottom;
   border-radius: 2px;
   background: var(--blue);
+  box-shadow: 0 0 9px rgba(191, 92, 62, 0.4);
   animation: streamBlink 1s steps(2, jump-none) infinite;
 }
+[data-theme="dark"] .stream-caret { box-shadow: 0 0 10px rgba(217, 119, 87, 0.5); }
 
 @keyframes streamBlink {
   0%, 49% { opacity: 1; }
@@ -1107,8 +1122,18 @@
   animation: orbRing 1.6s var(--ease-out) infinite;
 }
 
+/* 第二圈错峰扩散——与品牌"回声波纹"呼应：一点心跳，两圈涟漪。 */
+.wait-orb::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(217, 154, 43, 0.2);
+  animation: orbRing 1.6s var(--ease-out) 0.55s infinite;
+}
+
 @keyframes orbRing {
   0%   { transform: scale(0.7); opacity: 0.8; }
-  100% { transform: scale(1.5); opacity: 0; }
+  100% { transform: scale(1.75); opacity: 0; }
 }
 
