@@ -143,6 +143,10 @@ npm install        # dependencies
 npm run seed       # seed the local SQLite DB
 npm run dev        # run → http://127.0.0.1:4173
 npm test           # smoke + reliability + engine tests
+
+# 可选但推荐（P7 港股一手财报管道）：HKEX 业绩公告 PDF 的中文字体
+# （Adobe-CNS1 CID，无 ToUnicode）需要 pdfminer 的 CMap 表才能解出文本。
+pip3 install --user pdfminer.six
 ```
 
 ---

@@ -12,8 +12,11 @@ import { getMarketSnapshot, getRangeReturns } from "../../marketData.js";
 import { getNewsSnapshot } from "../../newsData.js";
 import { getFinancials, getAnalystEstimates, getCompanyProfile, getDividendHistory, getRevenueSegments } from "../../financialData.js";
 import { getRecentFilings } from "../../filingData.js";
+import { enrich8K } from "../../secFilings.js";
 import { isUS } from "../../market.js";
 import { saveMarketSnapshot } from "../../db/index.js";
+import { getHkFinancials } from "../repositories/hkFinancialsRepository.js";
+import { hkRowToFinancials, refreshHkFinancialsInBackground } from "./hkFilingsPipeline.js";
 
 export function fallbackMarketSnapshot(ticker, reason = "timeout") {
   return {
@@ -72,7 +75,20 @@ export async function collectDataSources({ company, suppliedMarketSnapshot = nul
     // "新闻一直不可用"的根因之一。给足预算让早返回机制真正生效。
     withTimeout(getNewsSnapshot(company), 7000, fallbackNewsSnapshot(company, "新闻请求超时")),
     withTimeout(getFinancials(company.ticker), 8000, { providerStatus: "missing", errors: ["财务数据请求超时"], asOf: new Date().toISOString() }),
-    withTimeout(getRecentFilings(company.ticker), 5000, { providerStatus: "missing", errors: ["公告请求超时"], filings: [], asOf: new Date().toISOString() }),
+    // 美股在公告列表后串上 8-K 原文 item 抽取（P7），整链 10s；港股仍是 5s 纯列表。
+    withTimeout(
+      getRecentFilings(company.ticker).then(async (fd) => {
+        if (fd?.providerStatus === "ok" && isUS(company.ticker)) {
+          try {
+            const eightK = await enrich8K(fd);
+            if (eightK.providerStatus === "ok") fd.eightK = eightK;
+          } catch { /* 8-K 增强失败不影响公告列表 */ }
+        }
+        return fd;
+      }),
+      isUS(company.ticker) ? 10000 : 5000,
+      { providerStatus: "missing", errors: ["公告请求超时"], filings: [], asOf: new Date().toISOString() }
+    ),
     // 6s（不是 4s）：getAnalystEstimates 现在串行跑 FMP grades→Finnhub→Yahoo 目标价，
     // 4s 在慢网下会超时丢掉分析师锚（置信度也跟着掉一档）。
     withTimeout(getAnalystEstimates(company.ticker), 6000, { providerStatus: "missing", errors: ["评级请求超时"], asOf: new Date().toISOString() }),
@@ -102,6 +118,23 @@ export async function collectDataSources({ company, suppliedMarketSnapshot = nul
   const segments = segmentsResult?.status === "fulfilled" ? segmentsResult.value : null;
   if (financialsData?.providerStatus === "ok" && segments?.providerStatus === "ok") {
     financialsData.segments = segments;
+  }
+  // P7 港股一手财报：hk_financials 已落库则同步附挂（零延迟）；第三方全挂时提升为主数据。
+  // 无数据或最新一期已过一个业绩季（>135 天）→ 后台摄取，不阻塞本次研究。
+  if (!isUS(company.ticker)) {
+    try {
+      const hkRows = getHkFinancials(company.ticker, 4);
+      if (hkRows.length) {
+        financialsData.hkFilings = hkRows;
+        if (financialsData.providerStatus !== "ok") {
+          Object.assign(financialsData, hkRowToFinancials(hkRows[0]));
+        }
+        const latest = Date.parse(hkRows[0].published_at || "") || 0;
+        if (Date.now() - latest > 135 * 24 * 3600 * 1000) refreshHkFinancialsInBackground(company.ticker);
+      } else {
+        refreshHkFinancialsInBackground(company.ticker);
+      }
+    } catch { /* 一手财报读取失败不阻塞研究 */ }
   }
   return {
     marketSnapshot, // 已含 ranges（区间回报）

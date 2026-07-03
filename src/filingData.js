@@ -212,5 +212,18 @@ export function filingsToMarkdown(filingsData) {
     .map((f, i) => `${i + 1}. [${f.title}](${f.url})（${f.filingType}，${f.publishedAt || "日期未知"}）`)
     .join("\n");
 
-  return `公告来源：${filingsData.source}\n最近公告：\n${items || "暂无"}`;
+  // P7：8-K 原文关键条目（一手抽取），让模型看到事件性质而不只是标题。
+  let eightK = "";
+  if (filingsData.eightK?.providerStatus === "ok" && filingsData.eightK.filings?.length) {
+    const blocks = filingsData.eightK.filings.map((f) => {
+      const lines = f.items
+        .slice(0, 6)
+        .map((it) => `  - Item ${it.code}${it.name ? `（${it.name}）` : ""}：${it.excerpt.slice(0, 200)}`)
+        .join("\n");
+      return `- ${f.publishedAt} [8-K 原文](${f.url})\n${lines}`;
+    });
+    eightK = `\n\n8-K 关键条目（SEC EDGAR 原文抽取，一手事实）：\n${blocks.join("\n")}`;
+  }
+
+  return `公告来源：${filingsData.source}\n最近公告：\n${items || "暂无"}${eightK}`;
 }

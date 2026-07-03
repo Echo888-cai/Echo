@@ -649,6 +649,8 @@ export function financialsToMarkdown(financials) {
         .join("\n")}`
     : "";
 
+  const hk = hkFilingsToMarkdown(financials.hkFilings);
+
   return [
     `财务数据来源：${financials.source}${period}（唯一财务事实源——下列没有的财务数字一律写"未核到"，禁止编造或估算）`,
     `收入${financials.period ? `（${financials.period}）` : "（TTM）"}：${fmtCompact(financials.revenue)} | 增速：${fmt(financials.revenueGrowth, "%")}`,
@@ -668,7 +670,36 @@ export function financialsToMarkdown(financials) {
     financials.debtToEquity ? `资产负债率：${financials.debtToEquity}` : "",
     financials.returnOnEquity ? `ROE：${fmtPercent(financials.returnOnEquity)}` : "",
     financials.returnOnAssets ? `ROA：${fmtPercent(financials.returnOnAssets)}` : ""
-  ].filter(Boolean).join("\n") + seg;
+  ].filter(Boolean).join("\n") + seg + hk;
+}
+
+/**
+ * 港股一手财报块（P7）：hk_financials 行 → 事实块 markdown。
+ * 每行来自一份 HKEX 业绩公告 PDF 的直接抽取，来源必须标注公告链接——
+ * 与第三方口径（FMP/Finnhub）冲突时以此为准。
+ */
+export function hkFilingsToMarkdown(rows) {
+  if (!Array.isArray(rows) || !rows.length) return "";
+  const yoy = (cur, prior) => {
+    if (cur == null || !prior) return "";
+    const pct = ((cur - prior) / Math.abs(prior)) * 100;
+    return `（同比 ${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%）`;
+  };
+  const lines = rows.slice(0, 3).map((r) => {
+    const parts = [
+      r.revenue != null ? `收入 ${compactNumber(r.revenue)}${yoy(r.revenue, r.revenue_prior)}` : "",
+      r.gross_profit != null ? `毛利 ${compactNumber(r.gross_profit)}` : "",
+      r.operating_income != null ? `经营盈利 ${compactNumber(r.operating_income)}${yoy(r.operating_income, r.operating_income_prior)}` : "",
+      r.net_income != null ? `净利 ${compactNumber(r.net_income)}${yoy(r.net_income, r.net_income_prior)}` : "",
+      r.eps != null ? `EPS(基本) ${r.eps}` : "",
+      r.operating_cash_flow != null ? `经营现金流 ${compactNumber(r.operating_cash_flow)}` : "",
+      r.net_cash != null ? `净现金 ${compactNumber(r.net_cash)}` : ""
+    ].filter(Boolean).join(" | ");
+    const date = (r.published_at || "").slice(0, 10);
+    return `- ${r.period_label || r.period_end}：${parts}（币种 ${r.currency || "未知"}）｜来源：[${r.source_title || "业绩公告"}](${r.source_url})${date ? `（${date} 发布）` : ""}`;
+  });
+  const cnyNote = rows[0]?.currency === "CNY" ? "\n注意：该公司以人民币列报，而股价为港元——跨币种换算估值时需按汇率折算。" : "";
+  return `\n\n港股一手财报（HKEX 业绩公告 PDF 直接抽取，数字与第三方源冲突时以此为准）：\n${lines.join("\n")}${cnyNote}`;
 }
 
 export function companyProfileToMarkdown(profile) {

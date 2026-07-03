@@ -26,6 +26,7 @@ import { handleEventsDigest } from "./src/server/routes/events.js";
 import { handleWatchDesk, handleWatchStock, handleWatchTrack, handleWatchUntrack } from "./src/server/routes/watch.js";
 import { handlePortfolioList, handlePortfolioUpsert, handlePortfolioDelete, handlePortfolioReview } from "./src/server/routes/portfolio.js";
 import { handleNotificationsList, handleNotificationsUnread, handleNotificationsRead, handleNotificationsTest, handleSchedulerStatus } from "./src/server/routes/notifications.js";
+import { handleHkFinancialsList, handleHkFinancialsIngest } from "./src/server/routes/hkFinancials.js";
 import { startScheduler } from "./src/server/services/scheduler.js";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
@@ -75,6 +76,10 @@ const server = createServer(async (req, res) => {
 
   // ── Event engine digest ────────────────────────────────
   if (method === "GET" && url.startsWith("/api/events/digest")) return handleEventsDigest(req, res);
+
+  // ── 港股一手财报（P7：HKEX 业绩公告 PDF 管道） ──────────
+  if (method === "POST" && url.startsWith("/api/hk-financials/ingest")) return handleHkFinancialsIngest(req, res);
+  if (method === "GET" && url.startsWith("/api/hk-financials")) return handleHkFinancialsList(req, res);
 
   // ── Notifications (通知中心 + 定时任务状态) ─────────────
   if (method === "GET" && url.startsWith("/api/notifications/unread")) return handleNotificationsUnread(req, res);

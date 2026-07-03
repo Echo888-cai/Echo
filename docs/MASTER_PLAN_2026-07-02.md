@@ -197,7 +197,7 @@ CI + lint + doctor。先修地基：让之后每一步都有护栏。
 | P5 | 前端模块化拆分 | ✅（app.js 3117→170 行，拆成 src/ui/* 12 模块：state/api/format/markdown/resolve/components/research/watch/portfolio/notifications/settings/shell；render 经 setRenderFn 注册免循环依赖；零行为变更实跑验证三 Tab；lint 0 error） | 2026-07-02 |
 | 品牌 | Luvio → **Echo Research** | ✅（定位"全球价值投资 AI 研究平台"；slogan：Seek signal. Ignore noise. 喧声之外，见真知；牛皮纸设计 token：暖纸底+陶土 accent+衬线大标题+噪点纹理；回声波纹品牌 mark/favicon；CTA/动效全面打磨；localStorage key 沿用不丢数据） | 2026-07-02 |
 | P6 | 筛选器 + 宏观路由 | ✅（/api/discover：screener=FMP company-screener+批量报价补PE+本地池/已研究画像，宏观=腾讯免费指数(SPX/NDX/DJI/HSI/HSCEI)+宏观证据+macro提示词；前端 discoveryKindOf 在公司解析前分流（修掉"PE小于40"被当港股0040.HK的坑）；实测"美股今晚有什么关键事件"→宏观卡（日期正确/指数实时/6条证据），FMP 限额时诚实降级；测试 +23） | 2026-07-02 |
-| P7 | 港股一手管道 + 8-K 抽取 | ⬜ | |
+| P7 | 港股一手管道 + 8-K 抽取 | ✅（HKEX 披露易搜索→业绩公告 PDF→extract_pdf_text.py 重写（pdfminer 优先解 Adobe-CNS1 中文字体 + Y 坐标行重组，自带引擎兜底）→三表关键行解析（FY 区域限定防年报 Q4 摘要错标、阿里式"去年在前"列序检测、单位/币种词频兜底）→hk_financials 表（绝对币值+来源公告 PDF URL）；实测 0700.HK 三期真值（Q1 收入 1964.58 亿/FY 7517.66 亿，含 EPS/经营现金流/净现金）+ 9988.HK 两期，汇丰非标准银行报表诚实降级不出错数；研究时零延迟附挂事实块、第三方全挂时提升为主财务源、过季自动后台刷新；API：GET/POST /api/hk-financials(/ingest)；8-K 原文 Item 结构化抽取（中文事件标注+正文摘录，目录去重）进美股公告事实块，实测 NVDA；依赖 pip3 install --user pdfminer.six；测试 +40） | 2026-07-03 |
 | P8 | 商业化底座 | ⬜（需用户对齐） | |
 | 零散 | UX-2 会话搜索 | ⬜ | |
 | 零散 | UX-3 命令面板 | ⬜ | |
