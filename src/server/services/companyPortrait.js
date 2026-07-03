@@ -124,15 +124,14 @@ function distillView(panel = {}, profile = {}, valuation = null) {
   };
 }
 
-/** 判断投资主线/状态/置信度是否相对上次发生了实质变化。 */
+/**
+ * 只看"投资主线文本"是否实质变化。状态/置信度会随数据源可用性波动（行情源超时又恢复等），
+ * 只改字段不进时间线——时间线只留真正的判断变化。
+ */
 function judgmentChanged(prev, next) {
   if (!prev) return false; // 首次建档不算"变更"
   const norm = (s) => String(s || "").replace(/\s+/g, "").trim();
-  return (
-    norm(prev.researchStatus) !== norm(next.researchStatus) ||
-    norm(prev.confidence) !== norm(next.confidence) ||
-    (norm(prev.thesis) && norm(prev.thesis) !== norm(next.thesis))
-  );
+  return Boolean(norm(next.thesis)) && norm(prev.thesis) !== norm(next.thesis);
 }
 
 /** 面板来源里挑最可信的几条作为事件证据链接（未来复盘"当时依据什么"）。 */
@@ -167,6 +166,8 @@ export function updatePortraitFromPanel({ ticker, panel, valuation = null, quest
   // 回答正文里有具体的证伪条件（模型按纪律给的量化阈值/价格线）时，优先沉淀它们。
   const fromAnswer = extractFalsifiersFromAnswer(answerContent);
   if (fromAnswer.length) view.falsifiers = fromAnswer.slice(0, 6);
+  // 本轮没形成新主线（如模型未给 oneLineView 的本地兜底路径）时保留已有主线——空值不覆盖真实判断。
+  if (!view.thesis && prev?.thesis) view.thesis = prev.thesis;
   if (!view.thesis && !view.bull.length && !view.bear.length) {
     return { created: false, changed: false, profile: prev };
   }
@@ -182,7 +183,7 @@ export function updatePortraitFromPanel({ ticker, panel, valuation = null, quest
     events.push({
       date,
       kind: "created",
-      summary: `建立画像：${view.thesis || view.researchStatus || "首次研究"}`,
+      summary: view.thesis ? `建立画像：${view.thesis}` : "建立画像（首轮研究）",
       rationale: q ? `首轮研究，触发问题：「${q}」` : "首轮研究建档",
       evidence,
       sessionId

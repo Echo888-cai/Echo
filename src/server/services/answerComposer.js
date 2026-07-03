@@ -545,7 +545,7 @@ export function researchReplyFromPanel(panel, question = "", dataSources = {}, c
     : null;
 
   const lines = [
-    `北京时间 ${formatBeijingMinute()}，${name} 最近的状态是：${String(panel.oneLineView || `研究状态为${status}`).replace(/。$/, "")}。我不会因为数据缺口就停止判断，但会把置信度和证据缺口说清楚。`,
+    `北京时间 ${formatBeijingMinute()}，${name} 最近的状态是：${String(panel.oneLineView || panel.dataReadiness || `研究状态为${status}`).replace(/。$/, "")}。我不会因为数据缺口就停止判断，但会把置信度和证据缺口说清楚。`,
     "",
     "结论",
     `${name} 当前更适合归为“${status}”，不是一句买或卖能解决的问题。核心矛盾是：${fundamentalText}；同时 ${valuationText}。${holding}`,
@@ -599,7 +599,7 @@ export function normalizeResearchAnswer(content, panel, dataSources = {}) {
   // 仅当模型自己没带时间前缀时才补一句；正则放宽到"北京时间 + 日期"，不强求时分，
   // 防止重复塞前缀。oneLineView 已自带句号，先去掉避免出现"。。"。
   if (!/^北京时间\s*\d{4}-\d{2}-\d{2}/.test(text)) {
-    const view = String(panel.oneLineView || "需要继续验证").replace(/。+$/, "");
+    const view = String(panel.oneLineView || panel.dataReadiness || "需要继续验证").replace(/。+$/, "");
     text = `北京时间 ${formatBeijingMinute()}，${panel.companyName || panel.ticker} 最近的状态是：${view}。\n\n${text}`;
   }
   if (!/来源[:：]/.test(text)) {
@@ -753,7 +753,7 @@ ${historyBlock}${portraitBlock}
 当前研究对象：${panel.companyName}（${panel.ticker}）
 研究状态：${RESEARCH_STATUS_LABELS[panel.researchStatus] || panel.researchStatus}
 数据完整度：${panel.dataCompleteness}%
-一句话判断：${panel.oneLineView}
+一句话判断：${panel.oneLineView || "尚无——请基于下方材料自行形成（不要把数据可用性描述当判断）"}
 用户上下文：成本 ${panel.userContext?.cost || "未提供"}，持股 ${panel.userContext?.shares || "未提供"}，周期 ${panel.userContext?.horizon || "未提供"}
 北京时间：${formatBeijingMinute()}
 
@@ -875,7 +875,7 @@ export function buildReportPrompt(question, panel, dataSources = {}, context = {
 用户问题：${question || `${name} 值不值得研究`}
 北京时间：${formatBeijingMinute()}
 当前价格口径：${price}（来源 ${panel.price?.source || dataSources.market?.provider || "公开行情"}）
-一句话判断（参考，可改写）：${panel.oneLineView || ""}
+一句话判断（参考，可改写）：${panel.oneLineView || "尚无既有判断，请基于本轮证据自行给出"}
 
 ${hasLiveFin
     ? `已核到的实时财报（来源 ${context.financialsData.source}${context.financialsData.period ? ` · 截至 ${context.financialsData.period}` : ""}）——本报告所有财务数字的唯一事实源：\n${liveFinancialsBlock}\n`

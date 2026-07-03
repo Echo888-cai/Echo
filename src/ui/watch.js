@@ -39,8 +39,9 @@ const WD_STATUS = {
 // ── 看盘瘦列表（替代原盯盘卡墙）：一行一家，扫一眼 + 点进公司页 ──
 const WL_CHEVRON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
 const WL_X = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>';
-// 失败占位/无信息的主线不配当"一句话摘要"，跳过它退回事件。
-const WL_BAD_THESIS = /不可用|无法形成|暂无|尚未|待补充/;
+// 失败占位/无信息/数据可用性诊断类的主线不配当"一句话摘要"，跳过它退回事件。
+// 生成侧已把诊断文案与投资主线分离（decisionPanel.dataReadiness），这里留作历史脏数据的后备防线。
+const WL_BAD_THESIS = /不可用|无法形成|暂无|尚未|待补充|已有财务数据|缺一致预期|缺用户持仓|行情已接入/;
 
 // 每行：状态点 · 名称 · 代码 · 市场 ·（紧急时才显示状态标）· 一句摘要 …… 现价 · 涨跌 · 持有盈亏 · 悬停×移除。
 function renderWatchRow(c) {

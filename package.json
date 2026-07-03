@@ -9,6 +9,7 @@
     "test": "node tests/smoke.mjs && node tests/reliability.mjs && node tests/phase3.mjs && node tests/phase4.mjs && node tests/notifications.mjs && node tests/phase6.mjs && node tests/phase7.mjs",
     "lint": "eslint .",
     "doctor": "node scripts/doctor.js",
+    "clean:portraits": "node scripts/clean-portrait-noise.js",
     "test:smoke": "node tests/smoke.mjs",
     "test:reliability": "node tests/reliability.mjs",
     "test:phase3": "node tests/phase3.mjs"

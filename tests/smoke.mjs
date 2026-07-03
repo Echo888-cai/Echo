@@ -123,6 +123,42 @@ await (async () => {
   deleteCompanyProfile(T);
 }
 
+// ── 画像卫生回归：诊断文案不冒充主线 + 数据抖动不进时间线 + 研究覆盖手动隐藏 ──
+{
+  const { updatePortraitFromPanel } = await import("../src/server/services/companyPortrait.js");
+  const { addToWatch, removeFromWatch, getHiddenTickers, listWatchAdds } = await import("../src/server/repositories/watchlist.js");
+  const { getDb } = await import("../src/db/index.js");
+  const T = "SMOKECLEAN.US";
+  deleteCompanyProfile(T);
+
+  const mkPanel = (over = {}) => ({
+    ticker: T, companyName: "清洁冒烟", researchStatus: "watch", confidence: "中",
+    oneLineView: "现金流驱动的稳健复合，主线成立", keyDrivers: [], riskTriggers: [], sources: [], ...over
+  });
+  // 首轮：真实主线建档
+  const r1 = updatePortraitFromPanel({ ticker: T, panel: mkPanel(), question: "值得研究吗" });
+  assert.equal(r1.created, true);
+  assert.equal(r1.profile.thesis, "现金流驱动的稳健复合，主线成立");
+  // 第二轮：模型没给 oneLineView（本地兜底路径），状态/置信度还在抖 → 不算判断变化、主线保留、时间线不加垃圾
+  const r2 = updatePortraitFromPanel({ ticker: T, panel: mkPanel({ oneLineView: "", researchStatus: "research_more", confidence: "低" }) });
+  assert.equal(r2.changed, false, "数据可用性抖动不算判断变化");
+  assert.equal(r2.profile.thesis, "现金流驱动的稳健复合，主线成立", "空主线不得覆盖真实判断");
+  assert.equal(r2.profile.events.filter((e) => e.kind === "thesis_change").length, 0, "抖动不得进时间线");
+  // 第三轮：真实主线变化 → 恰好记一条
+  const r3 = updatePortraitFromPanel({ ticker: T, panel: mkPanel({ oneLineView: "现金流增速放缓，主线转弱为观察" }) });
+  assert.equal(r3.changed, true, "真实主线变化应记事件");
+  assert.equal(r3.profile.events.filter((e) => e.kind === "thesis_change").length, 1);
+  deleteCompanyProfile(T);
+
+  // 看盘闭环语义：手动移除(hide)后重新研究(addToWatch)应重新可见
+  removeFromWatch(T);
+  assert.ok(getHiddenTickers().has(T), "removeFromWatch 应写 hide");
+  addToWatch(T, "清洁冒烟");
+  assert.ok(!getHiddenTickers().has(T), "重新研究应覆盖 hide");
+  assert.ok(listWatchAdds().some((x) => x.ticker === T), "翻转后应出现在关注列表");
+  getDb().prepare("DELETE FROM watchlist_prefs WHERE ticker = ?").run(T);
+}
+
 // ── P3.1 事件引擎：新闻分级 ────────────────────────────────────────
 assert.equal(classifyNewsSeverity({ title: "ROSEN LAW Reminds Investors" }), "drop", "律所广告→drop");
 assert.equal(classifyNewsSeverity({ title: "Company faces SEC investigation" }), "high", "SEC调查→high");

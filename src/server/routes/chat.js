@@ -10,6 +10,7 @@ import { displayValuation } from "../services/valuationEngine.js";
 import { computeFinancialQuality } from "../services/financialQuality.js";
 import { PROMPTS } from "../../prompts.js";
 import { loadPortraitContext, updatePortraitFromPanel } from "../services/companyPortrait.js";
+import { addToWatch, getHiddenTickers } from "../repositories/watchlist.js";
 import { runTwoStageChat, runTwoStageChatStream } from "../services/twoStageChat.js";
 import { upsertPosition } from "../repositories/portfolio.js";
 import { extractOtherHoldings } from "../services/entityExtractor.js";
@@ -365,6 +366,19 @@ function finalizeChat({ payload, result, webEvidence, valuation, analyst, portra
     }
   }
 
+  // 研究过的公司自动进看盘：重新研究即重新关注，明确覆盖此前的手动隐藏
+  // （否则 hide 记录一直压着画像，出现"研究了却不在看盘"）。
+  let watchRestored = false;
+  if (portraitTicker && result.decisionPanel) {
+    try {
+      watchRestored = getHiddenTickers().has(portraitTicker);
+      addToWatch(portraitTicker, result.decisionPanel.companyName || payload.company?.nameZh);
+    } catch (err) {
+      watchRestored = false;
+      console.warn("watchlist 回写失败:", err?.message || err);
+    }
+  }
+
   return {
     mode: chatModel?.content ? "chat_model" : "chat_local",
     stages: chatModel?.stages || "none",
@@ -393,7 +407,9 @@ function finalizeChat({ payload, result, webEvidence, valuation, analyst, portra
     otherHoldings: lightHoldings(otherHoldings),
     // B2：港股口径实时价 + HKD 盈亏（asked=HK 且拉到才有），前端渲染"港股口径"小卡。
     dualQuote: dualQuote || null,
-    positionSaved
+    positionSaved,
+    // 本轮研究把此前手动隐藏的公司重新拉回了看盘（前端据此提示）。
+    watchRestored
   };
 }
 

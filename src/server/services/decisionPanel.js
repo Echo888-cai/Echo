@@ -172,9 +172,12 @@ export function buildDecisionPanel(input) {
   const modelStatus = modelPanel?.researchStatus;
   const researchStatus = RESEARCH_STATUS_VALUES.includes(modelStatus) ? modelStatus : deriveResearchStatus({ hasPrice, hasFinancials, hasFilings, hasEstimates, newsAvailable, userContext });
 
+  // 数据就绪度诊断（"已有财务数据…缺持仓上下文"）单独成字段，供 UI 标注数据完整度；
+  // oneLineView 只保留模型真实给出的投资观点——诊断文案不再冒充投资主线（脏数据根因）。
+  const dataReadiness = composeOneLineView({ hasPrice, hasFinancials, hasFilings, hasEstimates, newsAvailable, profile, userContext });
   const oneLineView = (typeof modelPanel?.oneLineView === "string" && modelPanel.oneLineView.length && modelPanel.oneLineView.length <= 120)
     ? modelPanel.oneLineView
-    : composeOneLineView({ hasPrice, hasFinancials, hasFilings, hasEstimates, newsAvailable, profile, userContext });
+    : "";
 
   const action = (typeof modelPanel?.action === "string" && modelPanel.action.length && modelPanel.action.length <= 60)
     ? modelPanel.action
@@ -189,6 +192,7 @@ export function buildDecisionPanel(input) {
     confidence,
     dataCompleteness,
     oneLineView,
+    dataReadiness,
     action,
     userContext: userContext || { cost: null, shares: null, horizon: null, note: "" },
     price: {
@@ -233,7 +237,7 @@ export function buildDecisionPanel(input) {
     evidence: [evidence({ source: profile.officialSources?.[0]?.label || "公司档案", confidence: "中", missingReason: "公司基础档案；具体指标缺失已在 keyDrivers 中标注" })],
     details: {
       overview: [
-        oneLineView,
+        oneLineView || dataReadiness,
         hasFilings ? `已导入 ${filings.length || (filingsData?.filings || []).length} 份材料，下一步看财务质量。` : "缺少财报解析，不能判断利润质量和现金流。",
         newsAvailable ? `新闻源返回 ${(newsSnapshot.articles || []).length} 条，需交叉验证。` : "新闻源不可用，本次判断不使用新闻信号。"
       ],

@@ -253,7 +253,8 @@ function applyChatResult(result, key, company) {
     }
     appendMessage("assistant", result.content || "本轮没有生成有效回复。", answerMetaFromResult(result), { keepScroll: true });
     if (result.positionSaved) toast(`已记账 ${label} 的持仓信息。`);
-    else if (result.portrait?.created) toast(`已为 ${label} 建立长期画像。`);
+    else if (result.portrait?.created) toast(`已为 ${label} 建立长期画像，并加入看盘。`);
+    else if (result.watchRestored) toast(`${label} 已重新加入看盘。`);
     else if (result.portrait?.changed) toast(`已更新 ${label} 的长期画像（判断有变化）。`);
     // 画像变了就作废公司页的画像缓存，下次切"画像"Tab 拉到最新时间线。
     if (result.portrait && result.portrait.ticker === S.watchStockTicker) S.stockPortrait = null;
