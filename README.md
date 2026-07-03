@@ -232,10 +232,10 @@ SERPAPI_API_KEY=
 
 ## Documentation
 
-- **[Master Plan（评审 + 分阶段改进计划 + 接手协议）](docs/MASTER_PLAN_2026-07-02.md)** ← start here to contribute
+- **[主计划（愿景 + 分阶段路线图 + 历史记录 + 接手协议）](docs/PLAN.md)** ← start here to contribute
 - [Architecture](docs/ARCHITECTURE.md) · [Database](docs/DATABASE.md) · [Data Pipeline](docs/DATA_PIPELINE.md)
 - [Data Source Strategy](docs/DATA_SOURCE_STRATEGY.md) · [Product Requirements](docs/PRD.md)
-- [平台调研备忘](docs/PLATFORM_BENCHMARK.md) · [AI Integration](docs/AI_INTEGRATION.md) · [GitHub Workflow](docs/GITHUB_WORKFLOW.md)
+- [AI Integration](docs/AI_INTEGRATION.md) · [GitHub Workflow](docs/GITHUB_WORKFLOW.md)
 
 ---
 

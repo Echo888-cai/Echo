@@ -23,7 +23,7 @@ https://github.com/ArlanHowarCai/Luvio.git
 ```bash
 cd "/Users/arlan/Vibe Coding/LUVIO"
 git push -u origin cleanup/pristine-refactor
-# 然后在 GitHub 上对 main 开 PR（PR 描述见 docs 或 PR_DESCRIPTION.md）
+# 然后在 GitHub 上对 main 开 PR
 ```
 
 `.env`（含 FMP / Tavily 等真实 key）已 gitignore，永远不会被推送。

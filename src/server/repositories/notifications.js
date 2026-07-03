@@ -7,7 +7,7 @@
  * dedupe_key：防刷屏。同 key 在窗口期内只落一条（如触线巡检每 30 分钟跑一次，
  * 同一根止损线 12 小时内只提醒一次）。
  *
- * 商业化预留：user_id 缺省 'local'（见 MASTER_PLAN ARCH-5 的新表约定）。
+ * 商业化预留：user_id 缺省 'local'（见 docs/PLAN.md §4 的新表 user_id 约定）。
  */
 
 import { getDb } from "../../db/index.js";
