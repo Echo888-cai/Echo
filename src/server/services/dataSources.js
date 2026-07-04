@@ -18,6 +18,43 @@ import { saveMarketSnapshot } from "../../db/index.js";
 import { getHkFinancials } from "../repositories/hkFinancialsRepository.js";
 import { hkRowToFinancials, refreshHkFinancialsInBackground } from "./hkFilingsPipeline.js";
 
+// B-5：展示级近似汇率（人民币列报 → 港元，估值口径用；非交易口径），与 portfolioReview.js
+// 的 FX_TO_USD 同一处理原则——不接汇率 API，只求量级不失真。
+const CNY_TO_HKD = 1.08;
+
+// 港股一手抽取（HKEX PDF）里的"绝对金额"字段：第三方源（腾讯等）拿不到时用来补空。
+// eps 不在其中——eps 要和第三方给的 pe 配对使用（PE = price / eps），若两者来自不同币种
+// 混用会把 PE 法算错，宁可保持第三方 eps 缺失时的"无法估值"，也不要拼出一个假自洽的数字。
+const HK_MONEY_FIELDS = [
+  "revenue", "grossProfit", "operatingIncome", "netIncome",
+  "cashAndEquivalents", "netCash", "operatingCashFlow"
+];
+const HK_RATIO_FIELDS = ["revenueGrowth", "grossMargin", "operatingMargin", "netMargin", "profitGrowth"];
+
+/**
+ * 把一手 HKEX 财报（hkRowToFinancials 的结果）里第三方源缺的字段补进 financialsData。
+ * 之前只在第三方"全挂"（providerStatus !== "ok"）时才合并一手数据——但港股最常见的情况是
+ * 腾讯免费接口成功（有价格/PE/市值）却只给基础行情，revenue/净利/现金流全是 null，
+ * 一手抽取的真实数据因此被晾在 financialsData.hkFilings 里只当证据引用，从没进过估值引擎的
+ * 数值字段。这正是"港股估值退化成机械 PE 带"的根因（B-5）。
+ */
+export function mergeHkFinancialGaps(target, hkFinancials) {
+  const needsFx = hkFinancials.currency === "CNY" && target.currency !== "CNY";
+  for (const key of HK_MONEY_FIELDS) {
+    if (target[key] != null) continue;
+    const v = hkFinancials[key];
+    if (v == null) continue;
+    target[key] = needsFx ? v * CNY_TO_HKD : v;
+  }
+  for (const key of HK_RATIO_FIELDS) {
+    if (target[key] == null && hkFinancials[key] != null) target[key] = hkFinancials[key];
+  }
+  if (target.revenueTrend == null && hkFinancials.revenueTrend != null) target.revenueTrend = hkFinancials.revenueTrend;
+  if (target.profitTrend == null && hkFinancials.profitTrend != null) target.profitTrend = hkFinancials.profitTrend;
+  if (target.period == null || target.period === "") target.period = hkFinancials.period;
+  target.firstPartySupplement = true;
+}
+
 export function fallbackMarketSnapshot(ticker, reason = "timeout") {
   return {
     source: "未接入",
@@ -119,15 +156,19 @@ export async function collectDataSources({ company, suppliedMarketSnapshot = nul
   if (financialsData?.providerStatus === "ok" && segments?.providerStatus === "ok") {
     financialsData.segments = segments;
   }
-  // P7 港股一手财报：hk_financials 已落库则同步附挂（零延迟）；第三方全挂时提升为主数据。
+  // P7 港股一手财报：hk_financials 已落库则同步附挂（零延迟）；第三方全挂时提升为主数据，
+  // 第三方部分成功（腾讯只给行情）时按字段补空（B-5，见 mergeHkFinancialGaps）。
   // 无数据或最新一期已过一个业绩季（>135 天）→ 后台摄取，不阻塞本次研究。
   if (!isUS(company.ticker)) {
     try {
       const hkRows = getHkFinancials(company.ticker, 4);
       if (hkRows.length) {
         financialsData.hkFilings = hkRows;
+        const hkFinancials = hkRowToFinancials(hkRows[0]);
         if (financialsData.providerStatus !== "ok") {
-          Object.assign(financialsData, hkRowToFinancials(hkRows[0]));
+          Object.assign(financialsData, hkFinancials);
+        } else {
+          mergeHkFinancialGaps(financialsData, hkFinancials);
         }
         const latest = Date.parse(hkRows[0].published_at || "") || 0;
         if (Date.now() - latest > 135 * 24 * 3600 * 1000) refreshHkFinancialsInBackground(company.ticker);

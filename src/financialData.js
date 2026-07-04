@@ -545,7 +545,10 @@ async function fetchTencentFinancials(ticker) {
     totalAssets: null,
     totalLiability: null,
     equity: null,
-    totalShares: marketCap && price ? Math.round(marketCap / price) : null,
+    // B-5：字段名对齐其它源（FMP/Finnhub/Yahoo 都叫 sharesOutstanding）——此前叫 totalShares，
+    // valuationEngine 的 EV/Sales 情景硬性要求 sharesOutstanding，字段名不对导致这个值从未
+    // 被估值引擎读到过，纯港股（无 FMP/Finnhub 三表）从没能算出 EV/Sales。
+    sharesOutstanding: marketCap && price ? Math.round(marketCap / price) : null,
     high,
     low,
     change,

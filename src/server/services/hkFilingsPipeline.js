@@ -470,6 +470,9 @@ export function hkRowToFinancials(row) {
     eps: row.eps ?? null,
     operatingCashFlow: row.operating_cash_flow ?? null,
     cashAndEquivalents: row.cash_and_equivalents ?? null,
+    // 公告 PDF 通常只给"净现金"一个数，不拆分现金/负债——单独暴露出来，
+    // 好让 valuationEngine 直接用它（而不是靠 cash-debt 相减，totalDebt 在这条链路上从不存在）。
+    netCash: row.net_cash ?? null,
     asOf: row.extracted_at || new Date().toISOString(),
     providerStatus: "ok",
     firstParty: true,
