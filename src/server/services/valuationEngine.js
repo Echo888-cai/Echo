@@ -36,6 +36,13 @@ import { compactNumberServer } from "../utils/format.js";
  * visualization is never misleading. Returns cannotValueReason when even a band
  * can't be built.
  */
+/**
+ * @param {Object} company
+ * @param {import("../types.js").MarketSnapshot} marketSnapshot
+ * @param {import("../types.js").FinancialsData} financialsData
+ * @param {import("../types.js").EstimatesData|null} [estimates]
+ * @returns {import("../types.js").Valuation}
+ */
 export function displayValuation(company, marketSnapshot, financialsData, estimates = null) {
   const v = computeValuation(company, marketSnapshot, financialsData);
   const price = parseFloat(v.currentPrice);

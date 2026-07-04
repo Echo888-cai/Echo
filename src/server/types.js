@@ -21,6 +21,13 @@
  * @property {number|null} [changePercent]
  * @property {number|null} [pe]
  * @property {number|null} [marketCap]
+ * @property {number|null} [open]
+ * @property {number|null} [high]
+ * @property {number|null} [low]
+ * @property {number|null} [volume]
+ * @property {number|null} [dividendYield]
+ * @property {number|null} [week52High]
+ * @property {number|null} [week52Low]
  * @property {string} asOf
  * @property {"ok"|"missing"} providerStatus
  * @property {{oneMonthPct?: number, ytdPct?: number, providerStatus?: string}} [ranges]
@@ -72,7 +79,8 @@
  * @property {"ok"|"missing"} providerStatus
  * @property {string} asOf
  * @property {Array<Object>} articles
- * @property {{label: string, score: number}} [sentiment]
+ * @property {{label: string, score: number, positiveCount?: number, negativeCount?: number, neutralCount?: number}} [sentiment]
+ * @property {Object} [scopeSummary]
  * @property {string[]} [coverageGaps]
  * @property {string[]} [errors]
  */
@@ -104,17 +112,20 @@
  * 见 chatOrchestrator.js 里反复出现的 `valuation.cannotValueReason ? null : valuation`）。
  * @typedef {Object} Valuation
  * @property {string} method
- * @property {string|number} bear
- * @property {string|number} base
- * @property {string|number} bull
- * @property {number} currentPrice
- * @property {string[]} methods
- * @property {Array<{name: string, bear: number, base: number, bull: number}>} methodDetail
+ * @property {string|number|null} bear
+ * @property {string|number|null} base
+ * @property {string|number|null} bull
+ * @property {number} [currentPrice] 早期"数据不足直接返回"分支可能没有现价
+ * @property {string[]} [methods]
+ * @property {Array<{name: string, bear: number, base: number, bull: number}>} [methodDetail]
  * @property {string[]} keyAssumptions
  * @property {Array<Object>} sensitivity
  * @property {string|null} cannotValueReason
  * @property {boolean} [dataSuspect] 数据存疑时的降级信号（估值被护栏抑制，见 finalizeChat 的置信度封顶逻辑）
- * @property {boolean} [stageAware]
+ * @property {boolean} [stageAware] 是否走了资产阶段分类（亏损/亏损高成长）的 EV/Sales 情景估值分支
+ * @property {string} [stage] classifyAssetStage() 的结果："loss_growth"|"loss"|"profitable"|"unknown"
+ * @property {string} [upside] 情景估值分支自带的 base 相对现价涨幅（百分比字符串，如 "12.3%"）
+ * @property {string} [downside] 情景估值分支自带的 bear 相对现价跌幅
  * @property {{target: number, low: number|null, high: number|null, upside: string|null, source: string}|null} [analyst]
  */
 
