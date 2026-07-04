@@ -2,7 +2,7 @@
 // 只用两个可比维度（利润质量分/回报风险赔率）下结论，两个维度指向同一边才敢说赢家；
 // 指向不同方向、或数据不够时诚实说清楚，不硬编赢家（B-1 事实锚定护栏在对比场景的延伸）。
 import "./setupTestDb.mjs";
-import { judgeComparison } from "../src/server/routes/chat.js";
+import { judgeComparison } from "../src/server/services/chatOrchestrator.js";
 
 let passed = 0;
 let failed = 0;

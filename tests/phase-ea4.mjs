@@ -3,7 +3,7 @@
 //     且"没拉到真实数据的其他持仓"（summary=null）被诚实排除，不会把壳记录也塞进看盘。
 // [2] watchlist 仓库：addToWatch 写入后 listWatchAdds 能读回、去重、且会覆盖此前的 hide。
 import "./setupTestDb.mjs";
-import { watchCandidatesFrom } from "../src/server/routes/chat.js";
+import { watchCandidatesFrom } from "../src/server/services/chatOrchestrator.js";
 import { addToWatch, removeFromWatch, listWatchAdds, getHiddenTickers } from "../src/server/repositories/watchlist.js";
 
 let passed = 0;

@@ -5,7 +5,7 @@
 import { findCompany, companyByTicker } from "../../data.js";
 import { runAgent } from "./agentService.js";
 import { runScreener, runMacro } from "./discovery.js";
-import { buildCompareSummary } from "../routes/chat.js";
+import { buildCompareSummary } from "./chatOrchestrator.js";
 import { resolveCompanyFromQuery } from "../routes/companies.js";
 import { researchWebEvidence } from "./webEvidenceService.js";
 

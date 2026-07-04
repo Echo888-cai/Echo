@@ -9,9 +9,10 @@
 //   - 不带 company → 发现层（screener/macro）。服务端用 classifyDiscoveryIntent 自行分类，
 //     同时尊重前端已算好的 kind 提示（前端 discoveryKindOf 已先排除点名公司的情况）。
 //
-// 旧的 /api/chat、/api/discover 暂保留为内部实现（D3 阶段再逐步内化），对外主推 /api/ask。
+// 旧的 /api/chat、/api/discover 暂保留为内部实现，对外主推 /api/ask。
+// D3：runChat 的核心编排已内化进 services/chatOrchestrator.js，chat.js 现在只是 HTTP 薄封装。
 import { readJsonBody, sendJson } from "../utils/async.js";
-import { runChat } from "./chat.js";
+import { runChat } from "../services/chatOrchestrator.js";
 import { runDiscover } from "./discover.js";
 import { classifyDiscoveryIntent } from "../services/intentClassifier.js";
 import { planCompare } from "../services/agentPlanner.js";
