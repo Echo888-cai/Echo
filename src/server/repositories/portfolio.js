@@ -9,26 +9,6 @@ import { getDb } from "../../db/index.js";
 import { normalizeTicker } from "../../data.js";
 import { detectMarket } from "../../market.js";
 
-let ensured = false;
-function ensureTable() {
-  if (ensured) return;
-  const db = getDb();
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS portfolio_positions (
-      ticker       TEXT PRIMARY KEY,
-      company_name TEXT,
-      shares       REAL,
-      avg_cost     REAL,
-      stop_loss    REAL,
-      take_profit  REAL,
-      note         TEXT,
-      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-  `);
-  ensured = true;
-}
-
 function ensureCompanyRow(db, ticker, name) {
   if (!ticker) return;
   try {
@@ -57,20 +37,17 @@ function hydrate(row) {
 }
 
 export function getPosition(ticker) {
-  ensureTable();
   const db = getDb();
   return hydrate(db.prepare("SELECT * FROM portfolio_positions WHERE ticker = ?").get(normalizeTicker(ticker)));
 }
 
 export function listPositions() {
-  ensureTable();
   const db = getDb();
   return db.prepare("SELECT * FROM portfolio_positions ORDER BY updated_at DESC").all().map(hydrate);
 }
 
 /** Upsert a position. Only provided (non-null) fields overwrite existing ones. */
 export function upsertPosition(ticker, patch = {}) {
-  ensureTable();
   const db = getDb();
   const normalized = normalizeTicker(ticker);
   ensureCompanyRow(db, normalized, patch.companyName);
@@ -99,7 +76,6 @@ export function upsertPosition(ticker, patch = {}) {
 }
 
 export function deletePosition(ticker) {
-  ensureTable();
   const db = getDb();
   return db.prepare("DELETE FROM portfolio_positions WHERE ticker = ?").run(normalizeTicker(ticker)).changes > 0;
 }

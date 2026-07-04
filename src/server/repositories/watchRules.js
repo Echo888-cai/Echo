@@ -11,31 +11,8 @@
 
 import { getDb } from "../../db/index.js";
 
-let ensured = false;
-function ensureTable() {
-  if (ensured) return;
-  getDb().exec(`
-    CREATE TABLE IF NOT EXISTS watch_rules (
-      id                INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id           TEXT NOT NULL DEFAULT 'local',
-      ticker            TEXT NOT NULL,
-      kind              TEXT NOT NULL,          -- price_below | price_above
-      threshold         REAL NOT NULL,
-      label             TEXT,                   -- 原文条件，展示用
-      source            TEXT NOT NULL DEFAULT 'falsifier',
-      session_id        TEXT,
-      active            INTEGER NOT NULL DEFAULT 1,
-      created_at        TEXT NOT NULL DEFAULT (datetime('now')),
-      last_triggered_at TEXT
-    );
-    CREATE INDEX IF NOT EXISTS idx_watch_rules_ticker ON watch_rules(ticker, active);
-  `);
-  ensured = true;
-}
-
 /** 某 ticker 的活跃规则。 */
 export function listRules(ticker) {
-  ensureTable();
   return getDb()
     .prepare("SELECT * FROM watch_rules WHERE ticker = ? AND active = 1 ORDER BY id")
     .all(String(ticker || "").toUpperCase())
@@ -44,7 +21,6 @@ export function listRules(ticker) {
 
 /** 全部活跃规则（巡检任务用）。 */
 export function listAllActiveRules() {
-  ensureTable();
   return getDb().prepare("SELECT * FROM watch_rules WHERE active = 1 ORDER BY ticker, id").all().map(hydrate);
 }
 
@@ -53,7 +29,6 @@ export function listAllActiveRules() {
  * 只动 source='falsifier'，不碰未来的手动规则。
  */
 export function replaceFalsifierRules(ticker, rules = [], { sessionId = null } = {}) {
-  ensureTable();
   const t = String(ticker || "").toUpperCase();
   if (!t) return 0;
   const db = getDb();
@@ -70,7 +45,6 @@ export function replaceFalsifierRules(ticker, rules = [], { sessionId = null } =
 }
 
 export function markTriggered(id) {
-  ensureTable();
   getDb().prepare("UPDATE watch_rules SET last_triggered_at = datetime('now') WHERE id = ?").run(Number(id));
 }
 

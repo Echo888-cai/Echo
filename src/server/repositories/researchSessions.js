@@ -1,11 +1,9 @@
 /**
  * research_sessions repository — persists /api/agent output to SQLite.
  *
- * The schema (in src/db/index.js) has columns: id, ticker, question, status,
- * report_markdown, rating, confidence, created_at, updated_at. For Phase-1
- * reliability, we additionally serialize the full decisionPanel + fullResearch
- * + dataSources into a JSON column when available, and we set `status` to
- * one of: draft | completed | error.
+ * Schema lives in src/db/migrations/001_init.sql. We serialize the full
+ * decisionPanel + fullResearch + dataSources into a JSON column when available,
+ * and set `status` to one of: draft | completed | error.
  */
 
 import { getDb } from "../../db/index.js";
@@ -30,49 +28,12 @@ function ensureCompanyRow(db, ticker, name) {
   }
 }
 
-const SCHEMA = {
-  id: "TEXT PRIMARY KEY",
-  ticker: "TEXT",
-  title: "TEXT",
-  question: "TEXT",
-  conversation_id: "TEXT",
-  status: "TEXT NOT NULL DEFAULT 'draft'",
-  report_markdown: "TEXT",
-  rating: "TEXT",
-  confidence: "TEXT",
-  decision_panel: "TEXT",
-  full_research: "TEXT",
-  data_sources: "TEXT",
-  thread_json: "TEXT",
-  turn_count: "INTEGER",
-  created_at: "TEXT NOT NULL DEFAULT (datetime('now'))",
-  updated_at: "TEXT NOT NULL DEFAULT (datetime('now'))"
-};
-
-let ensured = false;
-function ensureColumns() {
-  if (ensured) return;
-  const db = getDb();
-  const cols = new Set(db.prepare("PRAGMA table_info(research_sessions)").all().map((c) => c.name));
-  for (const [name, def] of Object.entries(SCHEMA)) {
-    if (!cols.has(name)) {
-      try {
-        db.exec(`ALTER TABLE research_sessions ADD COLUMN ${name} ${def.replace("PRIMARY KEY", "").trim()}`);
-      } catch {
-        // ignore: column already exists or alter failed for other reasons
-      }
-    }
-  }
-  ensured = true;
-}
-
 /**
  * Persist one research session. Accepts a payload shaped like:
  *   { id?, ticker, question, status?, decisionPanel, fullResearch, dataSources, reportMarkdown?, rating?, confidence? }
  */
 export function saveResearchSession(payload) {
   if (!payload?.ticker) throw new Error("research_sessions 需要 ticker");
-  ensureColumns();
   const db = getDb();
   ensureCompanyRow(db, payload.ticker, payload.companyName || payload.title);
   const id = payload.id || payload.sessionId || `s_${randomUUID()}`;
@@ -125,7 +86,6 @@ export function saveResearchSession(payload) {
 }
 
 export function getResearchSession(id) {
-  ensureColumns();
   const db = getDb();
   const row = db.prepare("SELECT * FROM research_sessions WHERE id = ?").get(id);
   if (!row) return null;
@@ -150,7 +110,6 @@ export function getResearchSession(id) {
 }
 
 export function listResearchSessions({ limit = 20, ticker } = {}) {
-  ensureColumns();
   const db = getDb();
   const rows = ticker
     ? db.prepare(`
@@ -182,7 +141,6 @@ export function listResearchSessions({ limit = 20, ticker } = {}) {
  * 和分组前的历史列表行为完全一致，不需要回填迁移。
  */
 export function listConversations({ limit = 20 } = {}) {
-  ensureColumns();
   const db = getDb();
   // 拉取比目标分组数更多的原始行，保证同一分组的历史成员不会因为行数上限被切掉。
   // 按 rowid（sqlite 隐式插入序）排序，而非 created_at：datetime('now') 只到秒级精度，
@@ -232,14 +190,12 @@ export function listConversations({ limit = 20 } = {}) {
 }
 
 export function deleteResearchSession(id) {
-  ensureColumns();
   const db = getDb();
   const result = db.prepare("DELETE FROM research_sessions WHERE id = ?").run(id);
   return result.changes > 0;
 }
 
 export function clearResearchSessions() {
-  ensureColumns();
   const db = getDb();
   const result = db.prepare("DELETE FROM research_sessions").run();
   return result.changes;

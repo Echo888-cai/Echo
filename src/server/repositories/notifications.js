@@ -12,34 +12,11 @@
 
 import { getDb } from "../../db/index.js";
 
-let ensured = false;
-function ensureTable() {
-  if (ensured) return;
-  getDb().exec(`
-    CREATE TABLE IF NOT EXISTS notifications (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id     TEXT NOT NULL DEFAULT 'local',
-      kind        TEXT NOT NULL,
-      title       TEXT NOT NULL,
-      body        TEXT,
-      ticker      TEXT,
-      payload     TEXT,
-      dedupe_key  TEXT,
-      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-      read_at     TEXT
-    );
-    CREATE INDEX IF NOT EXISTS idx_notif_read ON notifications(read_at);
-    CREATE INDEX IF NOT EXISTS idx_notif_dedupe ON notifications(dedupe_key, created_at);
-  `);
-  ensured = true;
-}
-
 /**
  * 落一条通知。带 dedupeKey 时，若窗口期（默认 12h）内已有同 key 通知则跳过。
  * @returns {{ id:number }|null} null = 被去重跳过
  */
 export function insertNotification({ kind, title, body = "", ticker = null, payload = null, dedupeKey = null, dedupeWindowHours = 12 }) {
-  ensureTable();
   const db = getDb();
   if (dedupeKey) {
     const dup = db
@@ -65,7 +42,6 @@ export function insertNotification({ kind, title, body = "", ticker = null, payl
 
 /** 最近通知（新的在前）。 */
 export function listNotifications(limit = 20) {
-  ensureTable();
   return getDb()
     .prepare("SELECT * FROM notifications ORDER BY id DESC LIMIT ?")
     .all(Math.min(100, Math.max(1, limit)))
@@ -73,17 +49,14 @@ export function listNotifications(limit = 20) {
 }
 
 export function unreadCount() {
-  ensureTable();
   return getDb().prepare("SELECT COUNT(*) AS n FROM notifications WHERE read_at IS NULL").get().n;
 }
 
 export function markRead(id) {
-  ensureTable();
   getDb().prepare("UPDATE notifications SET read_at = datetime('now') WHERE id = ? AND read_at IS NULL").run(Number(id));
 }
 
 export function markAllRead() {
-  ensureTable();
   getDb().prepare("UPDATE notifications SET read_at = datetime('now') WHERE read_at IS NULL").run();
 }
 

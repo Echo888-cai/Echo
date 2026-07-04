@@ -5,39 +5,6 @@
  */
 import "./setupTestDb.mjs";
 import assert from "node:assert/strict";
-import { getDb } from "../src/db/index.js";
-
-// ── 遗留迁移测试的前置：在仓库模块第一次 ensureTable 之前，先手工造一张
-//    旧结构的 company_profiles（事件挤在 events_json 里），验证首跑自动搬进 profile_events。
-const db = getDb();
-db.exec(`
-  CREATE TABLE IF NOT EXISTS company_profiles (
-    ticker          TEXT PRIMARY KEY,
-    company_name    TEXT,
-    thesis          TEXT,
-    research_status TEXT,
-    confidence      TEXT,
-    bull_json       TEXT,
-    bear_json       TEXT,
-    monitors_json   TEXT,
-    falsifiers_json TEXT,
-    valuation_json  TEXT,
-    events_json     TEXT,
-    profile_md      TEXT,
-    turn_count      INTEGER NOT NULL DEFAULT 0,
-    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-`);
-db.prepare("INSERT INTO company_profiles (ticker, company_name, thesis, events_json) VALUES (?, ?, ?, ?)").run(
-  "LEGA",
-  "遗留公司",
-  "老主线",
-  JSON.stringify([
-    { date: "2026-06-01", kind: "created", summary: "建立画像：老主线" },
-    { date: "2026-06-15", kind: "thesis_change", summary: "判断转谨慎" }
-  ])
-);
 
 const { getCompanyProfile, listProfileEvents, appendProfileEvent, renderProfileMarkdown } = await import(
   "../src/server/repositories/companyProfiles.js"
@@ -59,13 +26,6 @@ function check(description, fn) {
 }
 
 console.log("\n[7] 画像文档化（P4：profile_events 时间线 + markdown 主档案）");
-
-check("遗留 events_json 首跑自动迁入 profile_events", () => {
-  const events = listProfileEvents("LEGA");
-  assert.equal(events.length, 2);
-  assert.equal(events[0].summary, "建立画像：老主线");
-  assert.equal(events[1].kind, "thesis_change");
-});
 
 const panelRound1 = {
   companyName: "测试科技",

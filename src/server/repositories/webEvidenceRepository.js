@@ -1,34 +1,5 @@
 import { getDb } from "../../db/index.js";
 
-function ensureWebEvidenceTable() {
-  const db = getDb();
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS web_evidence (
-      id                TEXT PRIMARY KEY,
-      ticker            TEXT NOT NULL,
-      intent            TEXT NOT NULL,
-      query             TEXT,
-      title             TEXT,
-      url               TEXT NOT NULL,
-      source            TEXT,
-      source_type       TEXT,
-      snippet           TEXT,
-      published_at      TEXT,
-      fetched_at        TEXT NOT NULL,
-      relevance_score   REAL,
-      credibility_score REAL,
-      content_hash      TEXT,
-      raw_json          TEXT,
-      created_at        TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_web_evidence_ticker_intent ON web_evidence(ticker, intent);
-    CREATE INDEX IF NOT EXISTS idx_web_evidence_url ON web_evidence(url);
-    CREATE INDEX IF NOT EXISTS idx_web_evidence_fetched_at ON web_evidence(fetched_at);
-  `);
-}
-
 function safeJson(value) {
   try {
     return JSON.stringify(value ?? null);
@@ -68,7 +39,6 @@ function hydrate(row) {
 }
 
 export function saveWebEvidence(items = []) {
-  ensureWebEvidenceTable();
   if (!Array.isArray(items) || !items.length) return [];
   const db = getDb();
   const stmt = db.prepare(`
@@ -115,7 +85,6 @@ export function saveWebEvidence(items = []) {
 }
 
 export function listWebEvidence({ ticker, intent, limit = 12, maxAgeHours = 48 } = {}) {
-  ensureWebEvidenceTable();
   const db = getDb();
   const rows = db.prepare(`
     SELECT *

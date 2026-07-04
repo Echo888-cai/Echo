@@ -7,7 +7,7 @@
 import Database from "better-sqlite3";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync } from "node:fs";
+import { runMigrations } from "./migrate.js";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DB_PATH = join(root, "..", "..", "luvio.db");
@@ -25,93 +25,9 @@ export function getDb() {
     db = new Database(dbPath());
     db.pragma("journal_mode = WAL");
     db.pragma("foreign_keys = ON");
-    initSchema(db);
+    runMigrations(db);
   }
   return db;
-}
-
-function initSchema(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS companies (
-      ticker        TEXT PRIMARY KEY,
-      name_zh       TEXT NOT NULL,
-      name_en       TEXT,
-      sector        TEXT,
-      industry      TEXT,
-      listing_status TEXT NOT NULL DEFAULT 'active',
-      exchange      TEXT NOT NULL DEFAULT 'HKEX',
-      currency      TEXT NOT NULL DEFAULT 'HKD',
-      market_cap_category TEXT,
-      is_hsi        INTEGER NOT NULL DEFAULT 0,
-      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS company_details (
-      ticker            TEXT PRIMARY KEY,
-      aliases           TEXT,
-      price             REAL,
-      market_cap        TEXT,
-      week_52_range     TEXT,
-      dividend_yield    TEXT,
-      pe                TEXT,
-      pb                TEXT,
-      ps                TEXT,
-      latest_report     TEXT,
-      status            TEXT,
-      status_tone       TEXT,
-      summary           TEXT,
-      business_model    TEXT,
-      metrics           TEXT,
-      moat              TEXT,
-      management        TEXT,
-      risks             TEXT,
-      bull_case         TEXT,
-      bear_case         TEXT,
-      monitors          TEXT,
-      official_sources  TEXT,
-      FOREIGN KEY (ticker) REFERENCES companies(ticker)
-    );
-
-    CREATE TABLE IF NOT EXISTS market_snapshots (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      ticker          TEXT NOT NULL,
-      price           REAL,
-      previous_close  REAL,
-      change          REAL,
-      change_percent  REAL,
-      open            REAL,
-      high            REAL,
-      low             REAL,
-      volume          INTEGER,
-      market_cap      REAL,
-      pe              REAL,
-      dividend_yield  REAL,
-      week_52_high    REAL,
-      week_52_low     REAL,
-      source          TEXT,
-      as_of           TEXT NOT NULL,
-      created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-      FOREIGN KEY (ticker) REFERENCES companies(ticker)
-    );
-
-    CREATE TABLE IF NOT EXISTS research_sessions (
-      id              TEXT PRIMARY KEY,
-      ticker          TEXT,
-      question        TEXT,
-      status          TEXT NOT NULL DEFAULT 'draft',
-      report_markdown TEXT,
-      rating          TEXT,
-      confidence      TEXT,
-      created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
-      FOREIGN KEY (ticker) REFERENCES companies(ticker)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_market_ticker ON market_snapshots(ticker);
-    CREATE INDEX IF NOT EXISTS idx_market_as_of ON market_snapshots(as_of);
-    CREATE INDEX IF NOT EXISTS idx_sessions_ticker ON research_sessions(ticker);
-  `);
 }
 
 // ─── Company queries ────────────────────────────────────────
