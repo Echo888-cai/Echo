@@ -139,6 +139,7 @@
  * @property {string} [title]
  * @property {string} question
  * @property {"draft"|"completed"|"error"} [status]
+ * @property {string} [rating] 兼容旧字段名，等价于 researchStatus
  * @property {Object|null} [decisionPanel]
  * @property {string} [fullResearch]
  * @property {string} [reportMarkdown]
@@ -146,6 +147,9 @@
  * @property {string} [researchStatus]
  * @property {string} [confidence]
  * @property {Array<{role: "user"|"assistant", content: string, meta?: Object, createdAt: string}>} [thread]
+ * @property {number} [turnCount] getResearchSession() 读回时才有（对话轮次计数）
+ * @property {string} [createdAt]
+ * @property {string} [updatedAt]
  */
 
 /**

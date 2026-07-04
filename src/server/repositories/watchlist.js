@@ -10,7 +10,10 @@
 import { getDb } from "../../db/index.js";
 import { normalizeTicker } from "../../data.js";
 
-/** 手动加入的 [{ ticker, nameZh }]（最近加的在前）。 */
+/**
+ * 手动加入的（最近加的在前）。
+ * @returns {import("../types.js").WatchlistEntry[]}
+ */
 export function listWatchAdds() {
   return getDb()
     .prepare("SELECT ticker, company_name FROM watchlist_prefs WHERE mode = 'add' ORDER BY created_at DESC")

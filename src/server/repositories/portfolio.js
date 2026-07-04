@@ -22,6 +22,7 @@ function ensureCompanyRow(db, ticker, name) {
   }
 }
 
+/** @returns {import("../types.js").PortfolioPosition|null} */
 function hydrate(row) {
   if (!row) return null;
   return {
@@ -36,17 +37,24 @@ function hydrate(row) {
   };
 }
 
+/** @returns {import("../types.js").PortfolioPosition|null} */
 export function getPosition(ticker) {
   const db = getDb();
   return hydrate(db.prepare("SELECT * FROM portfolio_positions WHERE ticker = ?").get(normalizeTicker(ticker)));
 }
 
+/** @returns {import("../types.js").PortfolioPosition[]} */
 export function listPositions() {
   const db = getDb();
   return db.prepare("SELECT * FROM portfolio_positions ORDER BY updated_at DESC").all().map(hydrate);
 }
 
-/** Upsert a position. Only provided (non-null) fields overwrite existing ones. */
+/**
+ * Upsert a position. Only provided (non-null) fields overwrite existing ones.
+ * @param {string} ticker
+ * @param {{companyName?: string, shares?: number, avgCost?: number, stopLoss?: number, takeProfit?: number, note?: string}} [patch]
+ * @returns {import("../types.js").PortfolioPosition|null}
+ */
 export function upsertPosition(ticker, patch = {}) {
   const db = getDb();
   const normalized = normalizeTicker(ticker);
