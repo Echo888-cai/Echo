@@ -355,17 +355,19 @@ function screenerFilterChips(filters = {}) {
 function renderScreenerBlock(screener = {}) {
   const rows = Array.isArray(screener.rows) ? screener.rows : [];
   const notes = Array.isArray(screener.notes) ? screener.notes.filter(Boolean) : [];
+  // EA-3：可解释排序——每行一句"为什么排这里"（利润质量分或诚实的降级说明），不是只按市值堆。
   const body = rows.map((r) => `<tr class="${r.researched ? "scr-researched" : ""}">
       <td class="scr-name"><b>${esc(r.name)}</b><span>${esc(r.ticker)}</span>${r.researched ? '<i class="scr-badge">已研究</i>' : ""}</td>
       <td class="scr-ind">${esc(r.industry || r.sector || "—")}</td>
       <td class="scr-num">${fmtMcap(r.mcap)}</td>
       <td class="scr-num">${r.pe != null ? esc(String(r.pe)) : "—"}</td>
-      <td class="scr-num">${Number.isFinite(Number(r.price)) ? esc(String(r.price)) : "—"}</td>
+      <td class="scr-num">${r.price != null && Number.isFinite(Number(r.price)) ? esc(String(r.price)) : "—"}</td>
+      <td class="scr-reason">${r.reason ? esc(r.reason) : "—"}</td>
       <td class="scr-act"><button type="button" class="scr-research" data-action="choice-act" data-act="research" data-ticker="${esc(r.ticker)}" data-name="${esc(r.name)}">研究 →</button></td>
     </tr>`).join("");
   const table = rows.length
     ? `<div class="scr-tablewrap"><table class="scr-table">
-        <thead><tr><th>公司</th><th>行业</th><th>市值</th><th>PE</th><th>现价</th><th></th></tr></thead>
+        <thead><tr><th>公司</th><th>行业</th><th>市值</th><th>PE</th><th>现价</th><th>为什么排这里</th><th></th></tr></thead>
         <tbody>${body}</tbody>
       </table></div>`
     : `<p class="scr-empty">这个条件下没有筛到公司——放宽条件（去掉 PE 上限 / 换行业）再试一次。</p>`;

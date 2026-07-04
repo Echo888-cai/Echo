@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node server.js",
     "seed": "node scripts/seed-db.js",
-    "test": "node tests/smoke.mjs && node tests/reliability.mjs && node tests/phase3.mjs && node tests/phase4.mjs && node tests/notifications.mjs && node tests/phase6.mjs && node tests/phase7.mjs && node tests/phase-ea0.mjs && node tests/phase-ea1.mjs && node tests/phase-ea2.mjs",
+    "test": "node tests/smoke.mjs && node tests/reliability.mjs && node tests/phase3.mjs && node tests/phase4.mjs && node tests/notifications.mjs && node tests/phase6.mjs && node tests/phase7.mjs && node tests/phase-ea0.mjs && node tests/phase-ea1.mjs && node tests/phase-ea2.mjs && node tests/phase-ea3.mjs",
     "lint": "eslint .",
     "doctor": "node scripts/doctor.js",
     "clean:portraits": "node scripts/clean-portrait-noise.js",
