@@ -13,67 +13,6 @@ import { getDb } from "../../db/index.js";
 import { normalizeTicker } from "../../data.js";
 import { detectMarket } from "../../market.js";
 
-let ensured = false;
-function ensureTable() {
-  if (ensured) return;
-  const db = getDb();
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS company_profiles (
-      ticker          TEXT PRIMARY KEY,
-      company_name    TEXT,
-      thesis          TEXT,
-      research_status TEXT,
-      confidence      TEXT,
-      bull_json       TEXT,
-      bear_json       TEXT,
-      monitors_json   TEXT,
-      falsifiers_json TEXT,
-      valuation_json  TEXT,
-      events_json     TEXT,
-      profile_md      TEXT,
-      turn_count      INTEGER NOT NULL DEFAULT 0,
-      created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE IF NOT EXISTS profile_events (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      ticker        TEXT NOT NULL,
-      date          TEXT NOT NULL,
-      kind          TEXT NOT NULL,
-      summary       TEXT NOT NULL,
-      rationale     TEXT,
-      evidence_json TEXT,
-      session_id    TEXT,
-      user_id       TEXT NOT NULL DEFAULT 'local',
-      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE INDEX IF NOT EXISTS idx_profile_events_ticker ON profile_events(ticker, id);
-  `);
-  backfillLegacyEvents(db);
-  ensured = true;
-}
-
-/**
- * 一次性迁移：老库把事件存在 company_profiles.events_json（封顶 40 条、无理由无证据）。
- * profile_events 为空且存在老事件时搬进独立表；此后 events_json 只读不写（遗留列）。
- */
-function backfillLegacyEvents(db) {
-  if (db.prepare("SELECT 1 FROM profile_events LIMIT 1").get()) return;
-  const rows = db
-    .prepare("SELECT ticker, events_json FROM company_profiles WHERE events_json IS NOT NULL AND events_json != '[]'")
-    .all();
-  if (!rows.length) return;
-  const insert = db.prepare("INSERT INTO profile_events (ticker, date, kind, summary) VALUES (?, ?, ?, ?)");
-  const run = db.transaction(() => {
-    for (const row of rows) {
-      for (const e of safeParse(row.events_json, [])) {
-        if (e && e.summary) insert.run(row.ticker, e.date || "", e.kind || "note", String(e.summary).slice(0, 300));
-      }
-    }
-  });
-  run();
-}
-
 function ensureCompanyRow(db, ticker, name) {
   if (!ticker) return;
   try {
@@ -119,7 +58,6 @@ function hydrate(row) {
 
 /** 追加一条判断变化事件（画像时间线）。只有判断变化才该调它——不是交易日志。 */
 export function appendProfileEvent(ticker, event = {}) {
-  ensureTable();
   if (!event.summary) return;
   const db = getDb();
   db.prepare(`
@@ -138,7 +76,6 @@ export function appendProfileEvent(ticker, event = {}) {
 
 /** 按时间正序返回时间线（date/kind/summary/rationale/evidence/sessionId）。 */
 export function listProfileEvents(ticker, limit = 200) {
-  ensureTable();
   const db = getDb();
   const rows = db.prepare(`
     SELECT date, kind, summary, rationale, evidence_json, session_id
@@ -155,14 +92,12 @@ export function listProfileEvents(ticker, limit = 200) {
 }
 
 export function getCompanyProfile(ticker) {
-  ensureTable();
   const db = getDb();
   const row = db.prepare("SELECT * FROM company_profiles WHERE ticker = ?").get(normalizeTicker(ticker));
   return hydrate(row);
 }
 
 export function listCompanyProfiles(limit = 50) {
-  ensureTable();
   const db = getDb();
   const rows = db.prepare(`
     SELECT ticker, company_name, thesis, research_status, confidence, turn_count, updated_at
@@ -187,7 +122,6 @@ export function listCompanyProfiles(limit = 50) {
  * Current-view fields are overwritten (not accumulated); events are append-only.
  */
 export function upsertCompanyProfile(ticker, patch = {}) {
-  ensureTable();
   const db = getDb();
   const normalized = normalizeTicker(ticker);
   ensureCompanyRow(db, normalized, patch.companyName);
@@ -249,7 +183,6 @@ export function upsertCompanyProfile(ticker, patch = {}) {
 }
 
 export function deleteCompanyProfile(ticker) {
-  ensureTable();
   const db = getDb();
   const normalized = normalizeTicker(ticker);
   db.prepare("DELETE FROM profile_events WHERE ticker = ?").run(normalized);

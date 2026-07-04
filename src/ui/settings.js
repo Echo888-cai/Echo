@@ -59,5 +59,5 @@ export function renderSettings() {
         <button type="button" class="ghost-btn" data-action="notif-test">发送测试通知</button>
       </article>
     </div>
-  </section>`);
+  </section>`, { sidebar: false });
 }

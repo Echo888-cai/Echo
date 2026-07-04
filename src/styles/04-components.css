@@ -233,6 +233,30 @@
   background: color-mix(in srgb, var(--blue-ink) 9%, transparent);
 }
 
+/* B-3：胜负手判断——只在表格上方点出结论，具体数字仍以表格为准 */
+.comparison-verdict {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--panel-soft);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.cmp-verdict-badge {
+  flex: none;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--blue);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
 /* Valuation range + odds */
 .valuation-block {
   margin-top: 18px;

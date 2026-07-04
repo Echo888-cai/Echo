@@ -1,4 +1,4 @@
-import { anchorQueryToDate, beijingYear } from "../utils/time.js";
+import { beijingYear } from "../utils/time.js";
 
 export const RESEARCH_INTENTS = {
   companyStatus: "company_status",
@@ -141,8 +141,6 @@ export function buildEvidenceQueries({ company = {}, question = "", intent = cla
   };
   return [...base, ...(templates[intent] || templates[RESEARCH_INTENTS.companyStatus])]
     .map((query) => query.replace(/\s+/g, " ").trim())
-    // 相对时间问题（今天/最新/盘前…）先把绝对日期锚进查询，避免拿模糊词原样搜。
-    .map((query) => anchorQueryToDate(query, question))
     .filter(Boolean)
     .filter((query, index, arr) => arr.indexOf(query) === index)
     .slice(0, 6);

@@ -83,7 +83,7 @@ check("profile risks converted to radar with triggers", () => {
   assert.ok(r.risks.length > 0);
   assert.ok(r.totalIdentified > 0);
   for (const risk of r.risks) {
-    assert.ok(risk.trigger, `risk "${risk.risk}" should have a trigger`);
+    assert.ok(risk.trigger, `risk "${risk.label}" should have a trigger`);
     assert.ok(["高","中","低"].includes(risk.severity));
   }
 });
@@ -102,7 +102,9 @@ check("null company returns safe fallback", () => {
 
 check("missing news adds news-gap risk", () => {
   const r = buildRiskRadar({ ticker: "0700.HK", sector: "科技互联网", risks: [] }, { newsSnapshot: { providerStatus: "missing", articles: [] } });
-  assert.ok(r.risks.some(x => x.risk.includes("新闻源缺失")));
+  // B-4：字段从 risk 改名为 label（与 decisionPanel.js 的 riskTriggers 形状对齐），evidence
+  // 也从占位字符串数组换成真实的 evidence 对象数组。
+  assert.ok(r.risks.some(x => x.label.includes("新闻源缺失")));
 });
 
 console.log("\n[4] Model gateway");

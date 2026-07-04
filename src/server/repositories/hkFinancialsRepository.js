@@ -7,43 +7,7 @@
 
 import { getDb } from "../../db/index.js";
 
-let ensured = false;
-
-function ensureTable() {
-  if (ensured) return;
-  const db = getDb();
-  db.exec(`CREATE TABLE IF NOT EXISTS hk_financials (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker TEXT NOT NULL,
-    period_label TEXT,
-    period_end TEXT,
-    period_type TEXT,
-    currency TEXT,
-    unit_label TEXT,
-    revenue REAL,
-    revenue_prior REAL,
-    gross_profit REAL,
-    gross_profit_prior REAL,
-    operating_income REAL,
-    operating_income_prior REAL,
-    net_income REAL,
-    net_income_prior REAL,
-    net_income_attributable REAL,
-    eps REAL,
-    operating_cash_flow REAL,
-    cash_and_equivalents REAL,
-    net_cash REAL,
-    source_title TEXT,
-    source_url TEXT UNIQUE,
-    published_at TEXT,
-    extracted_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-  CREATE INDEX IF NOT EXISTS idx_hk_financials_ticker ON hk_financials(ticker, period_end);`);
-  ensured = true;
-}
-
 export function upsertHkFinancials(row) {
-  ensureTable();
   const db = getDb();
   db.prepare(`
     INSERT INTO hk_financials (
@@ -108,7 +72,6 @@ export function upsertHkFinancials(row) {
 }
 
 export function getHkFinancials(ticker, limit = 4) {
-  ensureTable();
   const db = getDb();
   return db.prepare(`
     SELECT * FROM hk_financials
@@ -119,7 +82,6 @@ export function getHkFinancials(ticker, limit = 4) {
 }
 
 export function hasHkFinancialsForUrl(sourceUrl) {
-  ensureTable();
   const db = getDb();
   return !!db.prepare("SELECT 1 FROM hk_financials WHERE source_url = ?").get(sourceUrl);
 }

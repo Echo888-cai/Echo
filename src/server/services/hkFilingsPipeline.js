@@ -146,15 +146,20 @@ function cnNumber(text) {
   return Number.isFinite(value) ? value : null;
 }
 
+const Q_END = { 1: [3, 31], 2: [6, 30], 3: [9, 30], 4: [12, 31] };
+
 /**
  * 公告标题 → { periodEnd, periodType, periodLabel }（纯函数）。
  * "截至二零二六年三月三十一日止三個月業績公佈" → { periodEnd:"2026-03-31", periodType:"Q1", … }
  * 覆盖：年度/三個月(Qn)/六個月(H1)/九個月(9M)，中文或阿拉伯数字日期。
+ * B-6：新增无"截至…止…日"从句的标题（如小鵬"XX發佈2025年第四季度及2025財政年度的未經
+ * 審計財務業績"）——直接从"YYYY年第N季度"推季末日。
  */
 export function parsePeriodFromTitle(title = "") {
   let year = null, month = null, day = null;
   const cn = title.match(/截至\s*([零〇一二三四五六七八九]{4})\s*年\s*([零〇一二三四五六七八九十]{1,3})\s*月\s*([零〇一二三四五六七八九十]{1,3})\s*日/);
   const monthEnd = title.match(/(\d{4})\s*年\s*([零〇一二三四五六七八九十]{1,3}|\d{1,2})\s*月底止/); // 阿里式 "2026年三月底止季度"
+  const dq = title.match(/(\d{4})\s*年\s*第([一二三四])\s*季度/); // 小鵬式 "2025年第四季度"（无"截至…止…日"从句）
   if (cn) {
     year = cnYear(cn[1]);
     month = cnNumber(cn[2]);
@@ -165,19 +170,37 @@ export function parsePeriodFromTitle(title = "") {
     if (month) day = new Date(year, month, 0).getDate(); // 该月最后一天
   } else {
     const ar = title.match(/截至\s*(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
-    if (ar) { year = Number(ar[1]); month = Number(ar[2]); day = Number(ar[3]); }
+    // 简体裸标题（如汇丰"2025年業績"）：没有"截至…止…日"从句、也不提季度/半年度，
+    // 港交所惯例下这类裸标题一律是年度业绩公告，按该年 12/31 处理。
+    const bareYear = title.match(/^(\d{4})\s*年\s*(業績|业绩)(公告|公佈)?$/);
+    if (ar) {
+      year = Number(ar[1]); month = Number(ar[2]); day = Number(ar[3]);
+    } else if (dq) {
+      year = Number(dq[1]);
+      const qn = CN_DIGIT[dq[2]];
+      if (Q_END[qn]) { [month, day] = Q_END[qn]; }
+    } else if (bareYear) {
+      year = Number(bareYear[1]); month = 12; day = 31;
+    }
   }
   const periodEnd = year && month && day
     ? `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`
     : null;
 
   // 类型：公告首列数字对应的口径。"三個月及九個月" 的简明报表首列是当季 → Qn。
-  // "季度業績及…財務年度業績"（阿里 3 月）先季度后全年 → 按季度处理，不启用 FY 区域限定。
+  // "季度業績及…財務年度業績"（阿里 3 月/小鵬 Q4 年报合刊）先季度后全年 → 按季度处理，
+  // 不启用 FY 区域限定——"第N季度"分支必须排在"年度|全年"前面，否则"…及2025財政年度"
+  // 里的"年度"子串会先命中，把合刊季报错标成 FY。
   let periodType = "";
   if (/月底止季度|止三個月|止三个月/.test(title)) periodType = month ? `Q${Math.ceil(month / 3)}` : "Q";
+  else if (/第[一二三四]季度/.test(title)) {
+    const qm = title.match(/第([一二三四])季度/);
+    periodType = `Q${CN_DIGIT[qm[1]]}`;
+  }
   else if (/年度|全年/.test(title)) periodType = "FY";
   else if (/九個月|九个月/.test(title)) periodType = "9M";
   else if (/六個月|六个月|中期/.test(title)) periodType = "H1";
+  else if (/^\d{4}\s*年\s*(業績|业绩)(公告|公佈)?$/.test(title)) periodType = "FY";
 
   const periodLabel = periodEnd
     ? `${year}${periodType ? ` ${periodType}` : ""}（截至 ${periodEnd}）`
@@ -209,20 +232,27 @@ export function lineNumbers(line) {
   return out;
 }
 
+// B-6：字段名覆盖扩到"总收入/经营亏损/净亏损/银行业净利润"等多种行业表述——
+// 腾讯/阿里式用"經營盈利/期內盈利"，小鵬（新能源车，常年亏损）用"經營虧損/淨（虧損）收益"，
+// 汇丰（银行，无"毛利"概念）用"營業利潤/本年度利潤"。任一行业新增表述都加进对应字段的
+// 备选项里，不新建字段——保持"一个字段=一个财务含义"，只是覆盖的中文表述变多。
+// 括号风格两种都有：小鵬 Q4+FY 合刊用全角（虧損），Q1 独立季报用半角(虧損)——
+// 数字列的负号解析（lineNumbers）依赖半角括号，不能全局归一化，只在这些标签正则里
+// 用 [（(]/[）)] 字符类兼容两种。
 const STATEMENT_FIELDS = [
-  ["revenue", /^(收入|收益總額|營業額|營業收入|营业收入)(?!成本|表)/],
+  ["revenue", /^(收入|收益總額|營業額|營業收入|营业收入|總收入|总收入|營業收益淨額|营业收益净额)(?!成本|表)/],
   ["grossProfit", /^毛利(?!率)/],
-  ["operatingIncome", /^(經營盈利|經營溢利|經營利潤|经营利润|營運溢利)(?!率)/],
-  ["netIncome", /^(期內盈利|期內溢利|期内利润|年度盈利|年度溢利|本期利潤|淨利潤|净利润)(?!率)/],
-  ["netIncomeAttributable", /^(本公司(權益持有人|擁有人|股東)應佔(盈利|溢利|利潤)|歸屬於普通股股東的淨利潤|归属于普通股股东的净利润)/],
+  ["operatingIncome", /^(經營盈利|經營溢利|經營利潤|经营利润|營運溢利|經營虧損|经营亏损|營業利潤|营业利润)(?!率)/],
+  ["netIncome", /^(期內盈利|期內溢利|期内利润|年度盈利|年度溢利|本期利潤|淨利潤|净利润|本年度利潤|本年度利润|淨[（(]虧損[）)]收益|净[（(]亏损[）)]收益|淨收益[（(]虧損[）)]|净收益[（(]亏损[）)]|淨虧損|净亏损)(?!率)/],
+  ["netIncomeAttributable", /(本公司(權益持有人|擁有人|股東)應佔(盈利|溢利|利潤)|歸屬於普通股股東的淨利潤|归属于普通股股东的净利润|股東應佔淨[（(]虧損[）)]收益|股东应占净[（(]亏损[）)]收益|股東應佔淨收益[（(]虧損[）)]|股东应占净收益[（(]亏损[）)]|股東應佔淨虧損|股东应占净亏损|股東應佔淨收益|股东应占净收益|^應佔淨[（(]虧損[）)]收益|^應佔淨虧損|^[－\-—–]?\s*母公司普通股股東|^[－\-—–]?\s*母公司股東)/],
   ["operatingCashFlow", /(經營活動所得現金流量淨額|經營活動產生的現金流量淨額|經營業務所得現金淨額|经营活动产生的现金流量净额)/],
   ["cashAndEquivalents", /^(期末)?現金及現金等價物/],
   ["netCash", /^現金淨額/]
 ];
 
-// 同行 EPS（阿里式摘要表）：基本优先，只有摊薄时用摊薄。
-const EPS_INLINE_BASIC = /^(基本每股收益|每股基本(及攤薄)?(盈利|收益))/;
-const EPS_INLINE_DILUTED = /^攤薄每股收益(?!率)/;
+// 同行 EPS（阿里/汇丰式摘要表）：基本优先，只有摊薄时用摊薄。
+const EPS_INLINE_BASIC = /^(基本每股收益|每股(普通股)?基本(及攤薄)?(盈利|收益|虧損))/;
+const EPS_INLINE_DILUTED = /^(攤薄每股收益|每股(普通股)?攤薄(後)?(盈利|收益|虧損))(?!率)/;
 
 /**
  * 表头年份行 → 列序（纯函数）。短行、无金额、含 ≥2 个不同年份时返回
@@ -245,6 +275,63 @@ export function detectColumnOrder(line) {
   return years[0] < years[1] ? "prior-first" : "current-first";
 }
 
+// B-6：部分港股 PDF 生成工具（实测小鵬 ADR 版式公告）逐字符/逐数字单独分词——
+// "小鵬汽車發佈2025年" 被抽成 "小 鵬 汽 車 發 佈 2 0 2 5 年"，破坏所有字段名/期间正则。
+// 判定规则：真正的分栏空格固定 ≥2 个（列间距，数字列从不被这种逐字排版影响），
+// 逐字符间距固定 1 个——按"单空格夹在两个中日韩字符/数字之间"坍缩，不动 ≥2 空格的列边界。
+const WORDISH = "[\\u4e00-\\u9fff0-9A-Za-z]";
+const CHAR_SPACING_RE = new RegExp(`(${WORDISH})\\x20(?=${WORDISH})`, "g");
+export function collapseCharSpacing(text) {
+  let out = String(text);
+  let prev;
+  do {
+    prev = out;
+    out = out.replace(CHAR_SPACING_RE, "$1");
+  } while (out !== prev);
+  return out;
+}
+
+/**
+ * B-6：部分港股 PDF（实测汇丰 0005.HK）的字体子集把大量常见汉字编码成外观相同但码位
+ * 不同的康熙部首／CJK 部首补充区变体（如"止"→⽌ U+2F4C、"月"→⽉ U+2F49、"行"→⾏ U+2F8F），
+ * 全篇通用、不是个例——"止年度"这类正则因此全篇一个都匹配不到，NFKC 是 Unicode 标准
+ * 兼容分解，能把这批变体准确折回标准汉字（js 内建 String.normalize，无需自建映射表）。
+ */
+export function normalizeCjkVariants(text) {
+  return String(text).normalize("NFKC");
+}
+
+const CURRENCY_MAP = { 人民幣: "CNY", 人民币: "CNY", 港幣: "HKD", 港币: "HKD", 港元: "HKD", 美元: "USD" };
+const UNIT_MAP = { 十億: 1e9, 十亿: 1e9, 百萬: 1e6, 百万: 1e6, 千: 1e3 };
+const UNIT_ALT = "十億|十亿|百萬|百万|千";
+// 币种+单位的词序两种都有：腾讯/阿里/小鵬式"人民幣百萬元"（币种在前），
+// 汇丰式"（百萬美元）"逐行单位标注（单位在前，英文语序影响的表述）。
+const CURRENCY_ALT = Object.keys(CURRENCY_MAP).join("|");
+const UNIT_DECL_RE = new RegExp(`(?:${CURRENCY_ALT})(${UNIT_ALT})元?|(${UNIT_ALT})(?:${CURRENCY_ALT})|以(${UNIT_ALT})[計计]`);
+
+/**
+ * 纯币种表头行（如小鵬 4 栏"人民幣  人民幣  人民幣  美元"）：不含数字、
+ * 每个分栏 token 都恰好是一个币种词 → 记录每栏币种，供后续数字行按"只留主报告币种列
+ * （丢掉尾栏美元换算）"过滤（纯函数）。
+ */
+function currencyHeaderColumns(line) {
+  if (/\d/.test(line)) return null;
+  const tokens = line.split(/\s{2,}/).map((t) => t.trim()).filter(Boolean);
+  // 取从头开始连续的币种词前缀，不要求整行都是（阿里式表头多一列非币种的说明栏
+  // "人民幣  人民幣  美元  %同比變動"——最后一栏是变动率标签，不是币种，但前 3 栏
+  // 仍是真实的分栏币种，且和去掉 % 列之后的数字列数（3）对得上）。
+  const prefix = [];
+  for (const t of tokens) {
+    if (!Object.prototype.hasOwnProperty.call(CURRENCY_MAP, t)) break;
+    prefix.push(CURRENCY_MAP[t]);
+  }
+  return prefix.length >= 2 ? prefix : null;
+}
+
+function endsWithProfitWord(line) {
+  return /(收益|虧損|亏损|溢利|盈利|利潤|利润)$/.test(line || "");
+}
+
 /**
  * 业绩公告全文 → 关键财务行（纯函数）。
  * 返回 { currency, unitLabel, unit, fields: { revenue: {current, prior}, … }, found }。
@@ -253,29 +340,21 @@ export function detectColumnOrder(line) {
  * periodType="FY" 时启用区域限定：年度公告（如腾讯）第一页先放"第四季摘要"再放
  * "全年摘要"，不加限定会把 Q4 列错标成全年。区域由表头行切换：
  * "截至…止三個月/六個月/九個月/第N季" → Q 区，"截至…止年度/全年" → FY 区。
+ *
+ * B-6：单位改成随行扫描的局部状态（不是整篇文档一次性正则）——同一份公告不同章节可能
+ * 用不同单位（小鵬摘要页"十億元"、三表页"千"），整篇一次性匹配只会抓到第一个撞见的
+ * 声明，套到后面章节的数字上就会差好几个数量级。数字列也扩展到 ≥3 栏（小鵬季报"上年同季
+ * / 上季 / 本季 / 美元换算"4 栏）：先按币种表头丢掉非主报告币种列（美元换算），剩 ≥3 栏
+ * 时取首列=去年同期、末列=本期（按年口径，和别处 revenueGrowth 一致）。
  */
-export function parseResultsText(text = "", { periodType = "" } = {}) {
+export function parseResultsText(rawText = "", { periodType = "" } = {}) {
   const wantScope = periodType === "FY" ? "FY" : null;
-  const lines = String(text).split("\n");
+  const text = collapseCharSpacing(normalizeCjkVariants(rawText));
+  const lines = text.split("\n");
 
-  const CURRENCY_MAP = { 人民幣: "CNY", 人民币: "CNY", 港幣: "HKD", 港币: "HKD", 港元: "HKD", 美元: "USD" };
+  // 整体币种：仍用词频（一份公告主币种通常占绝对多数，附注偶尔提到其它币种不影响判断）。
   let currency = null;
-  let unit = 1;
-  let unitLabel = "";
-  const unitMatch = text.match(/[（(]?(人民幣|人民币|港幣|港币|港元|美元)(百萬|百万|千)元?/);
-  if (unitMatch) {
-    currency = CURRENCY_MAP[unitMatch[1]] || null;
-    unit = unitMatch[2] === "千" ? 1e3 : 1e6;
-    unitLabel = `${unitMatch[1]}${unitMatch[2]}元`;
-  } else {
-    // 阿里式："（以百萬計，百分比及每股數據除外）"——单位与币种分开出现。
-    const bare = text.match(/以(百萬|百万|千)計|以(百萬|百万|千)计/);
-    if (bare) {
-      const u = bare[1] || bare[2];
-      unit = u === "千" ? 1e3 : 1e6;
-      unitLabel = `${u}元`;
-    }
-    // 币种取全文词频最高者（封面/附注常零星提到别的币种，报表主币种出现次数占绝对多数）。
+  {
     let best = 0;
     for (const [word, code] of Object.entries(CURRENCY_MAP)) {
       const count = (text.match(new RegExp(word, "g")) || []).length;
@@ -288,14 +367,51 @@ export function parseResultsText(text = "", { periodType = "" } = {}) {
   let epsSection = false;
   let scope = null; // null=未知区域，"Q"=季度/半年区，"FY"=年度区
   let priorFirst = false; // 列序：阿里等把去年同期放第一列（表头 "2024  2025"）
-  const pick = (nums, scale = 1) => ({
-    current: (nums.length > 1 && priorFirst ? nums[1] : nums[0]) * scale,
-    prior: nums.length > 1 ? (priorFirst ? nums[0] : nums[1]) * scale : null
-  });
+  let unit = 1;
+  let unitLabel = "";
+  let columnCurrencies = null; // 如 ["CNY","CNY","CNY","USD"]：数字行按此丢弃非主报告币种列
+  let skipSummary = false; // 是否处在"主要財務業績"粗精度摘要表区域内（跳过，等正式三表）
+  let prevLine = "";
+
+  const pick = (nums, scale = 1) => {
+    let vals = nums;
+    if (columnCurrencies && columnCurrencies.length === nums.length) {
+      const primary = vals.filter((_, i) => columnCurrencies[i] === currency);
+      if (primary.length) vals = primary;
+    }
+    if (vals.length >= 3) {
+      // 多栏（去年同季 / 上季 / 本季 [/ 美元换算已丢弃]）：首列=去年同期，末列=本期——
+      // 按年口径，和别处 revenueGrowth/profitGrowth 一致（不是按季环比）。
+      return { current: vals[vals.length - 1] * scale, prior: vals[0] * scale };
+    }
+    return {
+      current: (vals.length > 1 && priorFirst ? vals[1] : vals[0]) * scale,
+      prior: vals.length > 1 ? (priorFirst ? vals[0] : vals[1]) * scale : null
+    };
+  };
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
     if (!line) continue;
+    const prev = prevLine;
+    prevLine = line;
+
+    // B-6：部分公告在正式三表前先放一段"主要財務業績/財務摘要"展示表——数字是四舍五入过的
+    // 粗精度（如"22.25"十億元），列序也常和后面正式三表相反（当季在前，正式三表反而是
+    // 去年同期在前）。first-match-wins 会让这段粗数据抢在精确的正式三表数字前面锁定字段，
+    // 必须跳过直到进入真正的"未經審計簡明綜合…表"区域。
+    if (/^(主要財務|主要财务|財務摘要|財務業績|财务摘要|财务业绩|業務摘要|营运及财务摘要|營運及財務摘要)/.test(line)) { skipSummary = true; continue; }
+    if (skipSummary && /^(管理層評語|管理层评语|未經審計簡明綜合|簡明綜合|綜合收益表|綜合財務狀況表|綜合現金流量表|综合收益表|综合财务状况表|综合现金流量表)/.test(line)) skipSummary = false;
+    if (skipSummary) continue;
+
+    const cols = currencyHeaderColumns(line);
+    if (cols) { columnCurrencies = cols; continue; }
+
+    const unitDecl = line.match(UNIT_DECL_RE);
+    if (unitDecl) {
+      const word = unitDecl[1] || unitDecl[2] || unitDecl[3];
+      if (UNIT_MAP[word]) { unit = UNIT_MAP[word]; unitLabel = `${word}元`; }
+    }
 
     const order = detectColumnOrder(line);
     if (order) priorFirst = order === "prior-first";
@@ -304,13 +420,16 @@ export function parseResultsText(text = "", { periodType = "" } = {}) {
     else if (/止三個月|止六個月|止九個月|止三个月|止六个月|止九个月|第[一二三四]季/.test(line) && !/年度/.test(line)) scope = "Q";
     const scopeOk = !wantScope || scope === wantScope || scope === null;
 
-    // EPS 两种版式：腾讯式 "每股盈利" 标题 + 下一行 "－基本"；阿里式同行 "攤薄每股收益 2.55 0.74"。
+    // EPS 三种版式：腾讯式 "每股盈利" 标题 + 下一行 "－基本"；阿里/汇丰式同行
+    // "攤薄每股收益 2.55 0.74"；小鵬式两行头（"…每股普通股" + "淨（虧損）收益"）+
+    // 下一行 "基本"（无破折号）——用"上一行以盈利/亏损类名词结尾"识别这第三种，
+    // 并用量级护栏（<1000）排除紧邻的"加权平均股数"基本/摊薄行（那是股数不是每股盈利）。
     if (/^每股(盈利|溢利|收益)/.test(line) && !/非國際|非国际/.test(line)) epsSection = true;
-    else if (epsSection && /^[－\-—]?\s*基本/.test(line)) {
+    else if (epsSection && /^[－\-—–]?\s*基本/.test(line)) {
       const nums = lineNumbers(line);
       if (nums.length && fields.eps === undefined && scopeOk) fields.eps = pick(nums);
       epsSection = false;
-    } else if (epsSection && !/^[－\-—（(]/.test(line)) {
+    } else if (epsSection && !/^[－\-—–（(]/.test(line)) {
       epsSection = false;
     }
     if (scopeOk && fields.eps === undefined && EPS_INLINE_BASIC.test(line)) {
@@ -319,13 +438,20 @@ export function parseResultsText(text = "", { periodType = "" } = {}) {
     } else if (scopeOk && !epsDiluted && EPS_INLINE_DILUTED.test(line)) {
       const nums = lineNumbers(line);
       if (nums.length) epsDiluted = pick(nums);
+    } else if (scopeOk && fields.eps === undefined && /^基本(及攤薄)?\s/.test(line) && endsWithProfitWord(prev)) {
+      const nums = lineNumbers(line);
+      if (nums.length && nums.every((n) => Math.abs(n) < 1000)) fields.eps = pick(nums);
     }
 
     if (!scopeOk) continue;
     for (const [key, pattern] of STATEMENT_FIELDS) {
       if (fields[key] !== undefined || !pattern.test(line)) continue;
       const nums = lineNumbers(line);
-      if (!nums.length) continue;
+      // 分部/业务线拆分表（如汇丰按 5 个业务分部+总计列出的"营业利润"）常年年年和总表
+      // 共用同一套词汇，却挤在正式合并报表前面出现；first-match-wins 会让分部数字抢注
+      // 合并总表的字段。真正的合并三表目前见过最多 4 栏（本期/上期[/上季][/美元换算]），
+      // 超过这个栏数基本就是分部拆分表，跳过等真正的合并总表行。
+      if (!nums.length || nums.length > 4) continue;
       fields[key] = pick(nums, unit);
     }
   }
@@ -390,6 +516,12 @@ export async function ingestHkFinancials(ticker, { limit = 3, force = false } = 
       const parsed = parseResultsText(text, { periodType: period.periodType });
       if (!parsed.fields.revenue && !parsed.fields.netIncome) {
         throw new Error("解析不到收入/盈利行（可能非标准业绩公告格式）");
+      }
+      // 可信度护栏：营收为负是不可能的真实财务状态（一定是抓到了备注/附注里的某个
+      // "收入/(开支)"分项而非合并利润表——如寿险公司大量附注表恰好也以"收入"开头）。
+      // 宁可报错跳过，也不能把这种明显不合理的数字写进库、后续被估值引擎当真数据用。
+      if (parsed.fields.revenue?.current < 0) {
+        throw new Error(`解析到的收入为负（${parsed.fields.revenue.current}），疑似匹配到附注/分项表而非合并利润表`);
       }
       const f = parsed.fields;
       upsertHkFinancials({
@@ -470,6 +602,9 @@ export function hkRowToFinancials(row) {
     eps: row.eps ?? null,
     operatingCashFlow: row.operating_cash_flow ?? null,
     cashAndEquivalents: row.cash_and_equivalents ?? null,
+    // 公告 PDF 通常只给"净现金"一个数，不拆分现金/负债——单独暴露出来，
+    // 好让 valuationEngine 直接用它（而不是靠 cash-debt 相减，totalDebt 在这条链路上从不存在）。
+    netCash: row.net_cash ?? null,
     asOf: row.extracted_at || new Date().toISOString(),
     providerStatus: "ok",
     firstParty: true,

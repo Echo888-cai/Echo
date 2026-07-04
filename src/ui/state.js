@@ -8,6 +8,7 @@ export const storeKeys = {
   panel: "luvio.v3.panel",
   documents: "luvio.v3.documents",
   sessionId: "luvio.v3.sessionId",
+  conversationId: "luvio.v3.conversationId",
   theme: "luvio.v3.theme"
 };
 
@@ -34,6 +35,7 @@ applyTheme(getTheme());
 export const S = {
   apiStatus: null,
   recentSessions: [],
+  conversationGroups: [],
   sessionsLoaded: false,
   historyOpen: true,
   // 看盘：研究过的公司 ∪ 持仓，聚合成关注列表（画像主线 + 今日最重事件 + 价格/盈亏 + 状态）。
@@ -88,7 +90,7 @@ export function activeRun() { return running.get(activeRunKey()) || null; }
 export function isActiveBusy() { return running.has(activeRunKey()); }
 // 当前视图是否在"忙"（解析阶段 或 当前会话有在跑的 run）——决定是否显示等待/流式卡。
 export function isViewBusy() { return S.resolving || isActiveBusy(); }
-export function snapshotActive() { return { thread: getThread(), company: getCompany(), panel: getPanel(), sessionId: getSessionId() }; }
+export function snapshotActive() { return { thread: getThread(), company: getCompany(), panel: getPanel(), sessionId: getSessionId(), conversationId: getConversationId() }; }
 
 export function startRun(key, label = "正在检索和思考") {
   running.set(key, { label, startedAt: Date.now(), reasoningChars: 0, snapshot: snapshotActive() });
@@ -169,6 +171,24 @@ export function setSessionId(id) {
   else clearStore(storeKeys.sessionId);
 }
 
+// EA-5.1：一次对话的分组键。和 sessionId 的区别——sessionId 每换一家公司就换新（每家公司
+// 独立一行落库），conversationId 在同一次连续对话里换公司也不变（把这些行分到侧栏同一组）。
+// 只在"新建研究"（clearResearch）时清空，公司切换（switch-divider）不动它。
+export function getConversationId() {
+  return readStore(storeKeys.conversationId, null);
+}
+
+export function setConversationId(id) {
+  if (id) writeStore(storeKeys.conversationId, id);
+  else clearStore(storeKeys.conversationId);
+}
+
+export function ensureConversationId() {
+  let id = getConversationId();
+  if (!id) { id = genSessionId(); setConversationId(id); }
+  return id;
+}
+
 // 研究开始前生成稳定 sessionId（前缀 s_ 与后端 s_<uuid> 同形）。取代旧的"全程 null、跑完才落库"——
 // 那会导致：生成期侧栏没条目、且每条 null 消息后端都 INSERT 新行 → 同公司重复。
 export function genSessionId() {
@@ -186,7 +206,7 @@ export function ensureSessionId() {
 // 乐观插入/更新一条本地 session 到侧栏列表（不等服务端）。转圈靠 renderSessionItem 里的
 // running.has(id)；服务端刷新时按 id 合并、服务端版覆盖乐观版（见 refreshSessions）。
 // 已存在同 id（追问/深研）时保留原标题，只前置 + 标记 optimistic 让它转圈。
-export function optimisticSession(id, { company, question } = {}) {
+export function optimisticSession(id, { company, question, conversationId } = {}) {
   const existing = S.recentSessions.find((s) => s.id === id);
   const entry = {
     ...existing,
@@ -195,6 +215,7 @@ export function optimisticSession(id, { company, question } = {}) {
     question: existing?.question || question || "",
     companyName: company?.nameZh || company?.ticker || existing?.companyName || "",
     ticker: company?.ticker || existing?.ticker || "",
+    conversationId: conversationId || existing?.conversationId || id,
     updatedAt: new Date().toISOString(),
     optimistic: true
   };

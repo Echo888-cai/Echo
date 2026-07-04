@@ -13,6 +13,7 @@
 import { RESEARCH_STATUS_VALUES, KEY_DRIVER_NAMES, RESEARCH_STATUS_LABELS } from "../schemas/agentPanel.js";
 import { hasUserContext, missingContextFields } from "./userContext.js";
 import { fmtPercent, missing, compactNumberServer, quoteStatusFor } from "../utils/format.js";
+import { buildRiskRadar } from "./riskEngine.js";
 
 const STATUS_PRESENT = "实时/盘中";
 const STATUS_DELAYED = "延迟/当日";
@@ -55,8 +56,12 @@ function buildKeyDrivers({ hasPrice, hasFinancials, hasFilings, hasEstimates, ne
     {
       name: "基本面",
       status: hasFinancials ? "有数据" : hasFilings ? "待验证" : "暂不评分",
+      // B-2：有多期趋势判断时优先说趋势（"连续放缓/加速/拐点"），比单期同比更接近专业分析师的读法；
+      // 没有趋势数据（只拿到 1 期，或 FMP 没返回历史）时退回原来的单期同比，不强求。
       summary: hasFinancials
-        ? `收入增速 ${fmtPercent(financialsData.revenueGrowth)}，毛利率 ${fmtPercent(financialsData.grossMargin)}`
+        ? (financialsData.revenueTrend
+            ? `${financialsData.revenueTrend.label}，毛利率 ${fmtPercent(financialsData.grossMargin)}`
+            : `收入增速 ${fmtPercent(financialsData.revenueGrowth)}，毛利率 ${fmtPercent(financialsData.grossMargin)}`)
         : hasFilings ? "已导入材料，等待结构化解析" : "财报数据未接入",
       evidence: [
         evidence({
@@ -183,13 +188,15 @@ export function buildDecisionPanel(input) {
     ? modelPanel.action
     : composeAction({ hasPrice, hasFinancials, hasFilings, hasEstimates, newsAvailable, userContext });
 
-  const confidence = modelPanel?.confidence || deriveConfidence({ hasPrice, hasFinancials, hasEstimates, hasFilings, newsAvailable });
+  const groundedConfidence = deriveConfidence({ hasPrice, hasFinancials, hasEstimates, hasFilings, newsAvailable });
+  const { confidence, confidenceNote } = reconcileConfidence(modelPanel?.confidence, groundedConfidence);
 
   const basePanel = {
     ticker: profile.ticker,
     companyName: profile.nameZh || profile.nameEn || profile.ticker,
     researchStatus,
     confidence,
+    confidenceNote,
     dataCompleteness,
     oneLineView,
     dataReadiness,
@@ -223,10 +230,13 @@ export function buildDecisionPanel(input) {
     keyDrivers: buildKeyDrivers({ hasPrice, hasFinancials, hasFilings, hasEstimates, newsAvailable, financialsData, marketSnapshot, profile, newsSnapshot, filingsData }),
     connectedData: connected,
     missingData,
-    riskTriggers: (profile.risks || []).slice(0, 3).map((label) => ({
-      label,
-      evidence: [evidence({ source: "公司档案", confidence: "中", missingReason: "来自 seed profile，待公告核验" })]
-    })),
+    // B-4：riskEngine.js 原本是一套没被接进主链路的死代码——真正显示的风险一直只是
+    // profile.risks 原样回显 + 一个万能占位 evidence。改用 buildRiskRadar()，它会用真实
+    // 财务阈值（负债率/FCF/毛利率）+ B-2 的多期趋势（收入/利润连续放缓或拐点）+ 行情波动 +
+    // 新闻负面信号识别风险，每条都带指向具体来源和数字的 evidence，不再是空占位符。
+    riskTriggers: buildRiskRadar(profile, { marketSnapshot, financialsData, newsSnapshot, filingsData })
+      .risks.slice(0, 3)
+      .map((r) => ({ label: r.label, evidence: r.evidence })),
     sources: [
       ...(profile.officialSources || []).slice(0, 4).map((source) => ({ label: source.label, url: source.url, type: "official", timestamp: null })),
       hasPrice ? { label: marketSnapshot.source, url: "", type: "market", timestamp: marketSnapshot.asOf || null } : null,
@@ -267,7 +277,11 @@ export function buildDecisionPanel(input) {
 }
 
 function pickModelOverrides(model, base) {
-  const allow = ["ticker", "companyName", "researchStatus", "confidence", "dataCompleteness", "oneLineView", "action", "fullResearch"];
+  // "confidence" 特意不在这个白名单里：它已经在 buildDecisionPanel 里经过
+  // reconcileConfidence() 核对过（模型自称的置信度不能超过真实数据接地程度支持的上限），
+  // 这里再原样透传模型的 confidence 会把那道护栏架空——这正是过去"模型说高就是高，
+  // 不管证据薄不薄"的根因。
+  const allow = ["ticker", "companyName", "researchStatus", "dataCompleteness", "oneLineView", "action", "fullResearch"];
   const out = {};
   for (const key of allow) {
     if (model[key] !== undefined && model[key] !== null && model[key] !== "") out[key] = model[key];
@@ -293,6 +307,26 @@ function deriveConfidence({ hasPrice, hasFinancials, hasEstimates, hasFilings, n
   if (score >= 5) return "高";
   if (score >= 3) return "中";
   return "低";
+}
+
+const CONFIDENCE_RANK = { 低: 0, 中: 1, 高: 2 };
+
+/**
+ * 事实锚定护栏：模型自称的置信度不能超过真实数据接地程度（groundedConfidence）算出来的上限。
+ * 模型说"低"或"中"、而数据其实接地更充分——放行（模型可能看出了数据之外的判断依据，
+ * 比如口径矛盟、异常持仓），只砍"模型说高、但接地的数据维度撑不起高"这种虚高。
+ * 返回 { confidence, confidenceNote }：confidenceNote 只在真的发生下调时才非空，
+ * 前端可以把它当 tooltip，说清"为什么显示的置信度比模型原话低"。
+ */
+export function reconcileConfidence(modelConfidence, groundedConfidence) {
+  const modelRank = CONFIDENCE_RANK[modelConfidence];
+  if (modelRank === undefined) return { confidence: groundedConfidence, confidenceNote: null };
+  const groundedRank = CONFIDENCE_RANK[groundedConfidence];
+  if (modelRank <= groundedRank) return { confidence: modelConfidence, confidenceNote: null };
+  return {
+    confidence: groundedConfidence,
+    confidenceNote: `模型给出的置信度是"${modelConfidence}"，但已接地的数据维度（行情/财报/预期/公告/新闻）只支持到"${groundedConfidence}"，已按事实锚定规则下调，避免证据薄却显得笃定。`
+  };
 }
 
 function deriveResearchStatus({ hasPrice, hasFinancials, hasFilings, hasEstimates, newsAvailable, userContext }) {

@@ -9,7 +9,7 @@
  */
 
 import { readJsonBody, sendOk, sendError } from "../utils/async.js";
-import { listResearchSessions, getResearchSession, saveResearchSession, deleteResearchSession, clearResearchSessions } from "../repositories/researchSessions.js";
+import { listResearchSessions, listConversations, getResearchSession, saveResearchSession, deleteResearchSession, clearResearchSessions } from "../repositories/researchSessions.js";
 import { composeReport } from "../services/reportComposer.js";
 
 export async function handleSessionList(req, res) {
@@ -29,6 +29,22 @@ export async function handleSessionList(req, res) {
     sendOk(res, { sessions: withPreview, count: withPreview.length });
   } catch (error) {
     sendError(res, 500, error.message || "获取研究会话失败");
+  }
+}
+
+/**
+ * EA-5.1：GET /api/research/conversations —— 按对话分组的侧栏数据源。
+ * 一次对话里研究过多家公司时，这里把它们收进同一组（组内按时间顺序列出途经的每家公司），
+ * 取代 handleSessionList 的扁平列表，作为研究前端侧栏唯一权威来源。
+ */
+export async function handleConversationList(req, res) {
+  try {
+    const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
+    const limit = Math.min(50, parseInt(url.searchParams.get("limit") || "20", 10));
+    const conversations = listConversations({ limit });
+    sendOk(res, { conversations, count: conversations.length });
+  } catch (error) {
+    sendError(res, 500, error.message || "获取对话列表失败");
   }
 }
 

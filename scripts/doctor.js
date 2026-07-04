@@ -68,7 +68,7 @@ const CHECKS = [
   {
     name: "港股行情",
     check() {
-      return { mark: OK, detail: "腾讯财经免费源，无需 key（注意：商用前必须替换为授权源，见 MASTER_PLAN ARCH-6）" };
+      return { mark: OK, detail: "腾讯财经免费源，无需 key（注意：商用前必须替换为授权源，见 docs/PLAN.md §4 商业化合规阻断项）" };
     }
   },
   {
@@ -125,7 +125,7 @@ const CHECKS = [
     check() {
       if (has("TELEGRAM_BOT_TOKEN") && has("TELEGRAM_CHAT_ID")) return { mark: OK, detail: "已配置，盘前摘要/触线提醒可推送" };
       if (has("TELEGRAM_BOT_TOKEN")) return { mark: DEGRADED, detail: "有 token 缺 TELEGRAM_CHAT_ID（给 bot 发条消息后访问 getUpdates 拿 chat id）" };
-      return { mark: DEGRADED, detail: "未配置 → Web 内通知中心照常，仅无法推到手机。配法见 docs/MASTER_PLAN P1" };
+      return { mark: DEGRADED, detail: "未配置 → Web 内通知中心照常，仅无法推到手机。配法见 docs/PLAN.md" };
     },
     async liveProbe() {
       if (!has("TELEGRAM_BOT_TOKEN")) return null;

@@ -80,7 +80,17 @@ export function renderComparisonTable(comparison) {
       ${cell(row, left, right)}
       ${cell(row, right, left)}
     </tr>`).join("");
+  // B-3：胜负手判断——只在两个可比维度（利润质量/赔率）指向同一边时才敢说"谁更优"，
+  // 数据不够或指向不同方向时诚实说清楚（tie/mixed/insufficient），不硬造赢家。
+  const verdict = comparison?.verdict;
+  const verdictBadge = verdict?.winner === "left" || verdict?.winner === "right"
+    ? `<span class="cmp-verdict-badge">${esc((verdict.winner === "left" ? left : right).name || "")} 更优</span>`
+    : "";
+  const verdictBlock = verdict
+    ? `<div class="comparison-verdict">${verdictBadge}<span>${esc(verdict.reason)}</span></div>`
+    : "";
   return `<div class="comparison-block">
+    ${verdictBlock}
     <table class="comparison-table">
       <thead><tr><th></th><th>${esc(left.name || left.ticker || "—")}<span>${esc(left.ticker || "")}</span></th><th>${esc(right.name || right.ticker || "—")}<span>${esc(right.ticker || "")}</span></th></tr></thead>
       <tbody>${body}</tbody>
@@ -322,7 +332,8 @@ export function renderAnswerMeta(meta = {}) {
   const spans = [];
   if (meta.confidence) {
     const lvl = meta.confidence === "高" ? "high" : meta.confidence === "低" ? "low" : "mid";
-    spans.push(`<span class="conf conf-${lvl}">置信度 ${esc(meta.confidence)}</span>`);
+    const title = meta.confidenceNote ? ` title="${esc(meta.confidenceNote)}"` : "";
+    spans.push(`<span class="conf conf-${lvl}"${title}>置信度 ${esc(meta.confidence)}${meta.confidenceNote ? " ⓘ" : ""}</span>`);
   }
   if (meta.mode) spans.push(`<span>${/model/.test(meta.mode) ? "模型生成" : "本地兜底"}</span>`);
   if (typeof meta.webCount === "number") spans.push(`<span>网页证据 ${meta.webCount} 条</span>`);
@@ -355,17 +366,19 @@ function screenerFilterChips(filters = {}) {
 function renderScreenerBlock(screener = {}) {
   const rows = Array.isArray(screener.rows) ? screener.rows : [];
   const notes = Array.isArray(screener.notes) ? screener.notes.filter(Boolean) : [];
+  // EA-3：可解释排序——每行一句"为什么排这里"（利润质量分或诚实的降级说明），不是只按市值堆。
   const body = rows.map((r) => `<tr class="${r.researched ? "scr-researched" : ""}">
       <td class="scr-name"><b>${esc(r.name)}</b><span>${esc(r.ticker)}</span>${r.researched ? '<i class="scr-badge">已研究</i>' : ""}</td>
       <td class="scr-ind">${esc(r.industry || r.sector || "—")}</td>
       <td class="scr-num">${fmtMcap(r.mcap)}</td>
       <td class="scr-num">${r.pe != null ? esc(String(r.pe)) : "—"}</td>
-      <td class="scr-num">${Number.isFinite(Number(r.price)) ? esc(String(r.price)) : "—"}</td>
+      <td class="scr-num">${r.price != null && Number.isFinite(Number(r.price)) ? esc(String(r.price)) : "—"}</td>
+      <td class="scr-reason">${r.reason ? esc(r.reason) : "—"}</td>
       <td class="scr-act"><button type="button" class="scr-research" data-action="choice-act" data-act="research" data-ticker="${esc(r.ticker)}" data-name="${esc(r.name)}">研究 →</button></td>
     </tr>`).join("");
   const table = rows.length
     ? `<div class="scr-tablewrap"><table class="scr-table">
-        <thead><tr><th>公司</th><th>行业</th><th>市值</th><th>PE</th><th>现价</th><th></th></tr></thead>
+        <thead><tr><th>公司</th><th>行业</th><th>市值</th><th>PE</th><th>现价</th><th>为什么排这里</th><th></th></tr></thead>
         <tbody>${body}</tbody>
       </table></div>`
     : `<p class="scr-empty">这个条件下没有筛到公司——放宽条件（去掉 PE 上限 / 换行业）再试一次。</p>`;

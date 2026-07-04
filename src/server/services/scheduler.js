@@ -27,20 +27,6 @@ import { listAllActiveRules, markTriggered } from "../repositories/watchRules.js
 import { evaluateRule } from "./falsifyRules.js";
 import { getMarketSnapshot } from "../../marketData.js";
 
-let ensured = false;
-function ensureTable() {
-  if (ensured) return;
-  getDb().exec(`
-    CREATE TABLE IF NOT EXISTS scheduler_state (
-      job_id       TEXT PRIMARY KEY,
-      last_run_at  TEXT,
-      last_status  TEXT,
-      last_detail  TEXT
-    );
-  `);
-  ensured = true;
-}
-
 // ── 时间判定（纯函数，可测） ──────────────────────────────────
 
 /** 北京时区的 { dow: 1(一)-7(日), hm: "HH:MM" }。 */
@@ -189,12 +175,10 @@ export const JOBS = [
 // ── 引擎 ─────────────────────────────────────────────────────
 
 function getState(jobId) {
-  ensureTable();
   return getDb().prepare("SELECT * FROM scheduler_state WHERE job_id = ?").get(jobId) || null;
 }
 
 function setState(jobId, { lastRunAt, status, detail }) {
-  ensureTable();
   getDb().prepare(`
     INSERT INTO scheduler_state (job_id, last_run_at, last_status, last_detail)
     VALUES (@jobId, @lastRunAt, @status, @detail)

@@ -11,17 +11,63 @@
  */
 import { fmpGet, FMP_TTL } from "../../fmpClient.js";
 import { companies } from "../../data.js";
+import { getFinancials } from "../../financialData.js";
+import { computeFinancialQuality } from "./financialQuality.js";
 import { listCompanyProfiles } from "../repositories/companyProfiles.js";
 import { macroWebEvidence, webEvidenceToPrompt } from "./webEvidenceService.js";
 import { callModel, getProviderStatus } from "./modelGateway.js";
 import { PROMPTS } from "../../prompts.js";
-import { anchorQueryToDate, beijingYear, beijingDate } from "../utils/time.js";
+import { beijingYear, beijingDate } from "../utils/time.js";
 import { withTimeout } from "../utils/async.js";
 
 // ── 筛选条件解析（纯函数） ─────────────────────────────────
 
 // 中文行业词 → FMP sector/industry。sector 用大类兜底，industry 只映射拿得准的枚举值。
+// EA-3：细分赛道（光模块/CPO、液冷、存储/HBM、EDA、半导体设备）没有对应的 FMP industry
+// 枚举值，关键词匹配也太粗——FMP 的 "Semiconductors" 装不下"存储芯片"这种主题。这类条目
+// 带 tickers（HK/US 已上市龙头名单兜底），runScreener 命中时直接用这份名单起筛，而不是
+// 硬套一个匹配不上的 industry 枚举。放在通用大类（半导体/科技）前面，保证优先命中。
 const SECTOR_MAP = [
+  [/光模块|光互联|CPO|光通信/i, {
+    label: "光模块/光通信",
+    tickers: [
+      { ticker: "COHR", name: "Coherent Corp." },
+      { ticker: "LITE", name: "Lumentum Holdings" },
+      { ticker: "FN", name: "Fabrinet" },
+      { ticker: "CIEN", name: "Ciena Corporation" }
+    ]
+  }],
+  [/液冷|散热|热管理/, {
+    label: "液冷/数据中心热管理",
+    tickers: [
+      { ticker: "VRT", name: "Vertiv Holdings" },
+      { ticker: "NVT", name: "nVent Electric" }
+    ]
+  }],
+  [/存储芯片|HBM|内存芯片/i, {
+    label: "存储芯片/HBM",
+    tickers: [
+      { ticker: "MU", name: "Micron Technology" },
+      { ticker: "WDC", name: "Western Digital" },
+      { ticker: "STX", name: "Seagate Technology" }
+    ]
+  }],
+  [/\bEDA\b|芯片设计软件/i, {
+    label: "EDA",
+    tickers: [
+      { ticker: "SNPS", name: "Synopsys" },
+      { ticker: "CDNS", name: "Cadence Design Systems" }
+    ]
+  }],
+  [/半导体设备|光刻机|刻蚀设备/, {
+    label: "半导体设备",
+    tickers: [
+      { ticker: "ASML", name: "ASML Holding" },
+      { ticker: "AMAT", name: "Applied Materials" },
+      { ticker: "LRCX", name: "Lam Research" },
+      { ticker: "KLAC", name: "KLA Corporation" }
+    ]
+  }],
   [/半导体|芯片/, { industry: "Semiconductors", label: "半导体" }],
   [/生物科技|创新药/, { industry: "Biotechnology", label: "生物科技" }],
   [/汽车|车企/, { industry: "Auto Manufacturers", label: "汽车" }],
@@ -82,6 +128,9 @@ export function parseScreenerQuery(question = "") {
     priceMin: price && price.op === "gt" ? price.value : null,
     mcapMin: mcap && mcap.op === "gt" ? mcap.value : null,
     mcapMax: mcap && mcap.op === "lt" ? mcap.value : null,
+    // EA-3：命中的细分赛道自带 HK/US 龙头名单时，直接用这份名单起筛（FMP industry 枚举
+    // 装不下"存储芯片""光模块"这类主题词）。
+    curatedTickers: sectorHit && Array.isArray(sectorHit[1].tickers) ? sectorHit[1].tickers : null,
     ignored
   };
 }
@@ -126,7 +175,7 @@ function localHkPool(filters) {
     .map((c) => ({ ticker: c.ticker, name: c.nameZh, sector: c.sector || "", industry: c.industry || "", researched: false }));
 }
 
-// FMP 批量报价（补 PE）：先试 stable 批量，再试 legacy v3；都不行就放弃（行里 PE 显示 —）。
+// FMP 批量报价（补 PE + 市值）：先试 stable 批量，再试 legacy v3；都不行就放弃（行里显示 —）。
 async function enrichPe(rows) {
   const symbols = rows.map((r) => r.ticker).slice(0, 25);
   if (!symbols.length) return;
@@ -136,7 +185,7 @@ async function enrichPe(rows) {
   } catch {
     try {
       quotes = await fmpGet(`/api/v3/quote/${symbols.join(",")}`, {}, { ttl: FMP_TTL.fast, timeoutMs: 7000 });
-    } catch { /* PE 补不上就诚实显示 — */ }
+    } catch { /* PE/市值补不上就诚实显示 — */ }
   }
   if (!Array.isArray(quotes)) return;
   const byTicker = new Map(quotes.map((q) => [String(q.symbol || "").toUpperCase(), q]));
@@ -146,53 +195,109 @@ async function enrichPe(rows) {
     if (Number.isFinite(Number(q.pe))) row.pe = Number(Number(q.pe).toFixed(1));
     if (Number.isFinite(Number(q.price))) row.price = Number(q.price);
     if (Number.isFinite(Number(q.changesPercentage))) row.changePct = Number(Number(q.changesPercentage).toFixed(1));
+    if (row.mcap == null && Number.isFinite(Number(q.marketCap))) row.mcap = Number(q.marketCap);
   }
 }
 
-/** 跑筛选：FMP screener（美股）/ 本地池（港股）+ 已研究画像池 + 条件过滤。 */
+// EA-3：细分赛道命中 SECTOR_MAP 的 curatedTickers 时，直接用这份 HK/US 已上市龙头名单
+// 起筛——不是穷举全市场，是"这个主题目前能给的、真实存在的对照名单"。
+function curatedPool(tickers) {
+  return tickers.map((t) => ({
+    ticker: t.ticker,
+    name: t.name,
+    sector: "",
+    industry: "",
+    mcap: null,
+    price: null,
+    pe: null,
+    researched: false
+  }));
+}
+
+// EA-3："值得买" = 可解释排序，不是只按市值堆。对候选池里最多 8 家跑一轮财务质量打分
+// （并发 + 单家超时保护），按 qualityScore 从高到低重排，每行附一句"为什么排这里"；
+// 拿不到财务数据的行保留原有市值/已研究排序，reason 诚实写"未核到，按市值排序"。
+async function rankByQuality(rows) {
+  const candidates = rows.slice(0, 8);
+  const scored = await Promise.all(
+    candidates.map(async (row) => {
+      const financials = await withTimeout(getFinancials(row.ticker), 6000, { providerStatus: "missing" });
+      return { ticker: row.ticker, quality: computeFinancialQuality(financials).quality };
+    })
+  );
+  const byTicker = new Map(scored.map((s) => [s.ticker, s]));
+  for (const row of rows) {
+    const s = byTicker.get(row.ticker);
+    if (!s || s.quality.qualityScore == null) {
+      row.qualityScore = null;
+      row.reason = row.researched ? "已研究，按市值排序" : "财务数据未核，按市值排序";
+      continue;
+    }
+    row.qualityScore = s.quality.qualityScore;
+    const bits = [];
+    if (s.quality.revenueGrowth != null) bits.push(`收入增速 ${s.quality.revenueGrowth.toFixed(1)}%`);
+    if (s.quality.grossMargin != null) bits.push(`毛利率 ${s.quality.grossMargin.toFixed(1)}%`);
+    row.reason = `利润质量 ${s.quality.qualityScore}/100${bits.length ? `（${bits.join("、")}）` : ""}`;
+  }
+  rows.sort((a, b) => {
+    if (a.qualityScore != null && b.qualityScore != null) return b.qualityScore - a.qualityScore;
+    if (a.qualityScore != null) return -1;
+    if (b.qualityScore != null) return 1;
+    return Number(b.researched) - Number(a.researched) || (b.mcap || 0) - (a.mcap || 0);
+  });
+  return rows;
+}
+
+/** 跑筛选：FMP screener（美股）/ 细分赛道龙头名单 / 本地池（港股）+ 已研究画像池 + 条件过滤 + 可解释排序。 */
 export async function runScreener(question) {
   const filters = parseScreenerQuery(question);
   const notes = [...filters.ignored];
   let rows = [];
 
   if (filters.market === "US") {
-    const params = { isActivelyTrading: true, limit: 40, exchange: "NYSE,NASDAQ" };
-    if (filters.sector) params.sector = filters.sector;
-    if (filters.industry) params.industry = filters.industry;
-    if (filters.mcapMin) params.marketCapMoreThan = Math.round(filters.mcapMin);
-    if (filters.mcapMax) params.marketCapLowerThan = Math.round(filters.mcapMax);
-    if (filters.priceMin) params.priceMoreThan = filters.priceMin;
-    if (filters.priceMax) params.priceLowerThan = filters.priceMax;
-    try {
-      const data = await fmpGet("/stable/company-screener", params, { ttl: FMP_TTL.estimates, timeoutMs: 9000 });
-      rows = (Array.isArray(data) ? data : [])
-        .filter((r) => r.symbol && !r.isEtf)
-        .sort((a, b) => (b.marketCap || 0) - (a.marketCap || 0))
-        .slice(0, 20)
-        .map((r) => ({
-          ticker: String(r.symbol).toUpperCase(),
-          name: r.companyName || r.symbol,
-          sector: r.sector || "",
-          industry: r.industry || "",
-          mcap: Number.isFinite(Number(r.marketCap)) ? Number(r.marketCap) : null,
-          price: Number.isFinite(Number(r.price)) ? Number(r.price) : null,
-          pe: null,
-          researched: false
-        }));
-      // PE 是筛选高频条件但 screener 原生不带 → 批量报价补一轮（best-effort）。
+    if (filters.curatedTickers) {
+      rows = curatedPool(filters.curatedTickers);
       await withTimeout(enrichPe(rows), 8000, null);
-      if (filters.peMax != null || filters.peMin != null) {
-        const before = rows.length;
-        rows = rows.filter((r) => {
-          if (r.pe == null || r.pe <= 0) return false; // PE 条件下，取不到 PE/亏损的剔除
-          if (filters.peMax != null && r.pe > filters.peMax) return false;
-          if (filters.peMin != null && r.pe < filters.peMin) return false;
-          return true;
-        });
-        if (!rows.length && before) notes.push("PE 数据本轮未取到或全部不满足条件，名单可能偏少");
+      notes.push(`"${filters.sectorLabel}"是细分主题，免费筛选器覆盖不到——名单来自已知 HK/US 上市龙头，非全市场穷举`);
+    } else {
+      const params = { isActivelyTrading: true, limit: 40, exchange: "NYSE,NASDAQ" };
+      if (filters.sector) params.sector = filters.sector;
+      if (filters.industry) params.industry = filters.industry;
+      if (filters.mcapMin) params.marketCapMoreThan = Math.round(filters.mcapMin);
+      if (filters.mcapMax) params.marketCapLowerThan = Math.round(filters.mcapMax);
+      if (filters.priceMin) params.priceMoreThan = filters.priceMin;
+      if (filters.priceMax) params.priceLowerThan = filters.priceMax;
+      try {
+        const data = await fmpGet("/stable/company-screener", params, { ttl: FMP_TTL.estimates, timeoutMs: 9000 });
+        rows = (Array.isArray(data) ? data : [])
+          .filter((r) => r.symbol && !r.isEtf)
+          .sort((a, b) => (b.marketCap || 0) - (a.marketCap || 0))
+          .slice(0, 20)
+          .map((r) => ({
+            ticker: String(r.symbol).toUpperCase(),
+            name: r.companyName || r.symbol,
+            sector: r.sector || "",
+            industry: r.industry || "",
+            mcap: Number.isFinite(Number(r.marketCap)) ? Number(r.marketCap) : null,
+            price: Number.isFinite(Number(r.price)) ? Number(r.price) : null,
+            pe: null,
+            researched: false
+          }));
+        // PE 是筛选高频条件但 screener 原生不带 → 批量报价补一轮（best-effort）。
+        await withTimeout(enrichPe(rows), 8000, null);
+      } catch (err) {
+        notes.push(`FMP 筛选端点本轮不可用（${String(err.message || "").slice(0, 60)}），仅返回本地公司池`);
       }
-    } catch (err) {
-      notes.push(`FMP 筛选端点本轮不可用（${String(err.message || "").slice(0, 60)}），仅返回本地公司池`);
+    }
+    if (filters.peMax != null || filters.peMin != null) {
+      const before = rows.length;
+      rows = rows.filter((r) => {
+        if (r.pe == null || r.pe <= 0) return false; // PE 条件下，取不到 PE/亏损的剔除
+        if (filters.peMax != null && r.pe > filters.peMax) return false;
+        if (filters.peMin != null && r.pe < filters.peMin) return false;
+        return true;
+      });
+      if (!rows.length && before) notes.push("PE 数据本轮未取到或全部不满足条件，名单可能偏少");
     }
   } else {
     rows = localHkPool(filters);
@@ -207,7 +312,9 @@ export async function runScreener(question) {
   }
   const extra = researched.filter((p) => !seen.has(p.ticker));
   rows = [...rows, ...extra].slice(0, 20);
-  rows.sort((a, b) => Number(b.researched) - Number(a.researched) || (b.mcap || 0) - (a.mcap || 0));
+
+  // EA-3：财务质量重排 + 逐行"为什么排这里"。超时兜底：拿不到就保留市值/已研究序，不阻塞返回。
+  rows = await withTimeout(rankByQuality(rows), 10000, rows);
 
   return { kind: "screener", filters, rows, notes };
 }
@@ -240,9 +347,7 @@ export function buildMacroQueries(question = "") {
         `美股 本周 关键事件 财报 美联储 数据`,
         `S&P 500 Nasdaq outlook catalysts ${year}`
       ];
-  return base
-    .map((q) => anchorQueryToDate(q, question))
-    .filter((q, i, arr) => arr.indexOf(q) === i);
+  return base.filter((q, i, arr) => arr.indexOf(q) === i);
 }
 
 // 指数行情全部走腾讯免费源（无 Key、美/港指数都覆盖；Yahoo v8 无浏览器 UA 会 403）。

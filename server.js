@@ -1,5 +1,5 @@
 /**
- * Luvio server entry point.
+ * Echo Research server entry point.
  *
  * Thin HTTP layer: serves the static SPA and dispatches the JSON API the
  * frontend actually uses — company search, chat research, deep report,
@@ -17,9 +17,10 @@ import { loadEnvFile } from "./src/server/utils/env.js";
 import { handleStatusApi } from "./src/server/routes/status.js";
 import { handleDocumentParseApi } from "./src/server/routes/documents.js";
 import { handleCompanySearch, handleCompanyResolve, handleCompanyVerify } from "./src/server/routes/companies.js";
-import { handleSessionList, handleSessionClear, handleSessionGet, handleSessionDelete } from "./src/server/routes/research.js";
+import { handleSessionList, handleConversationList, handleSessionClear, handleSessionGet, handleSessionDelete } from "./src/server/routes/research.js";
 import { handleChatApi } from "./src/server/routes/chat.js";
 import { handleDiscoverApi } from "./src/server/routes/discover.js";
+import { handleAskApi } from "./src/server/routes/ask.js";
 import { handleReportGenerateApi } from "./src/server/routes/reports.js";
 import { handleProfileList, handleProfileGet, handleProfileDelete } from "./src/server/routes/portraits.js";
 import { handleEventsDigest } from "./src/server/routes/events.js";
@@ -67,6 +68,9 @@ const server = createServer(async (req, res) => {
   // ── Documents (upload parsing for the composer) ────────
   if (method === "POST" && url.startsWith("/api/parse-document")) return handleDocumentParseApi(req, res);
 
+  // ── 统一入口（EA-0：一条对话的所有问题都从这进，服务端决定路由） ──
+  if (method === "POST" && url.startsWith("/api/ask")) return handleAskApi(req, res);
+
   // ── Research conversation + deep report ────────────────
   if (method === "POST" && url.startsWith("/api/chat")) return handleChatApi(req, res);
   if (method === "POST" && url.startsWith("/api/report/generate")) return handleReportGenerateApi(req, res);
@@ -106,6 +110,7 @@ const server = createServer(async (req, res) => {
   if (method === "DELETE" && url.startsWith("/api/company/profile")) return handleProfileDelete(req, res);
 
   // ── Research sessions ──────────────────────────────────
+  if (method === "GET" && url.startsWith("/api/research/conversations")) return handleConversationList(req, res);
   if (method === "GET" && url.startsWith("/api/research/sessions") && !url.includes("/api/research/sessions/")) return handleSessionList(req, res);
   if (method === "DELETE" && url.split("?")[0] === "/api/research/sessions") return handleSessionClear(req, res);
   if (method === "GET" && /^\/api\/research\/sessions\/[^/]+$/.test(url.split("?")[0])) {
@@ -141,7 +146,7 @@ process.on("unhandledRejection", (reason) => console.error("[unhandledRejection]
 process.on("uncaughtException", (err) => console.error("[uncaughtException]", err));
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`Luvio is running at http://127.0.0.1:${port}`);
+  console.log(`Echo Research is running at http://127.0.0.1:${port}`);
   // 定时任务（盘前速报/触线巡检）随服务启动；LUVIO_DISABLE_SCHEDULER=1 可关。
   startScheduler();
 });

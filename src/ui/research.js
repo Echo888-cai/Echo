@@ -3,10 +3,11 @@ import {
   S, render, running, runKey, activeRunKey, activeRun, isViewBusy,
   getThread, setThread, getCompany, setCompany, getPanel, setPanel,
   getDocuments, setDocuments, getSessionId, setSessionId, genSessionId, ensureSessionId,
+  getConversationId, setConversationId, ensureConversationId,
   optimisticSession, appendMessage, busyElapsedSeconds, waitPhase, startRun, endRun
 } from "./state.js";
 import { api, chatStream } from "./api.js";
-import { esc, uid, toast, marketLabelOf, isNum, fmtSigned, dirClass } from "./format.js";
+import { esc, uid, toast, marketLabelOf } from "./format.js";
 import { markdownToHtml } from "./markdown.js";
 import {
   resolveCompany, stripCompanyMentions, isComparisonQuestion, isMultiHoldingQuestion,
@@ -15,13 +16,18 @@ import {
 import { provenanceFromPanel, dataSourceLabels, dataSourceGrounding, renderMessage } from "./components.js";
 import { shell } from "./shell.js";
 import { refreshWatchDesk } from "./watch.js";
+import { companySubtitle } from "./sidebar.js";
 
 // ── 会话列表 ─────────────────────────────────────────────
 
 export async function refreshSessions() {
   try {
-    const data = await api("/api/research/sessions?limit=30");
-    const server = data.sessions || [];
+    // EA-5.1：改吃分组端点——一次对话里换过的每家公司都在同一组里，摊平成 S.recentSessions
+    // 供既有按 id/ticker 查找的逻辑复用，分组结构单独存 S.conversationGroups 给侧栏渲染用。
+    const data = await api("/api/research/conversations?limit=30");
+    const groups = data.conversations || [];
+    const server = groups.flatMap((g) => g.sessions.map((s) => ({ ...s, conversationId: g.conversationId })));
+    S.conversationGroups = groups;
     const serverIds = new Set(server.map((s) => s.id));
     // 按 id 合并：仍在跑、服务端还没落库的乐观条目（在途新研究）留在最前并继续转圈；
     // 服务端版覆盖同 id 乐观版（跑完即被真实数据替换）。
@@ -99,6 +105,7 @@ export function clearResearch() {
   setCompany(null);
   setDocuments([]);
   setSessionId(null);
+  setConversationId(null); // 新建研究 = 新开一组对话，换公司才延续同一组
   toast("已新建研究。");
   location.hash = "#/research";
   render();
@@ -138,6 +145,7 @@ export async function loadSession(id) {
   if (run?.snapshot) {
     const s = run.snapshot;
     setSessionId(s.sessionId || id);
+    setConversationId(s.conversationId || s.sessionId || id);
     setCompany(s.company);
     setPanel(s.panel);
     setThread(s.thread);
@@ -157,6 +165,7 @@ export async function loadSession(id) {
     }
     if (!company && panel?.ticker) company = { ticker: panel.ticker, nameZh: panel.companyName || panel.ticker };
     setSessionId(session.id);
+    setConversationId(session.conversationId || session.id);
     setCompany(company);
     setPanel(panel);
     setThread(fallbackThreadFromSession(session));
@@ -183,6 +192,7 @@ export async function deleteSession(id) {
       setCompany(null);
       setDocuments([]);
       setSessionId(null);
+      setConversationId(null);
     }
     await refreshSessions();
     toast("已删除历史研究。");
@@ -204,6 +214,7 @@ export async function clearAllSessions() {
     setCompany(null);
     setDocuments([]);
     setSessionId(null);
+    setConversationId(null);
     await refreshSessions();
     toast("已清空全部历史研究。");
     render();
@@ -225,6 +236,7 @@ function answerMetaFromResult(result) {
     completeness: typeof result.decisionPanel?.dataCompleteness === "number" ? result.decisionPanel.dataCompleteness : null,
     missing: Array.isArray(result.decisionPanel?.missingData) ? result.decisionPanel.missingData : [],
     confidence: result.decisionPanel?.confidence || null,
+    confidenceNote: result.decisionPanel?.confidenceNote || null,
     valuation: result.valuation || null,
     // ① 估值被护栏抑制时的诚实说明（前端出一行"数据不足"，而非静默无卡）。
     valuationNote: result.valuationNote || null,
@@ -258,6 +270,14 @@ function applyChatResult(result, key, company) {
     else if (result.portrait?.changed) toast(`已更新 ${label} 的长期画像（判断有变化）。`);
     // 画像变了就作废公司页的画像缓存，下次切"画像"Tab 拉到最新时间线。
     if (result.portrait && result.portrait.ticker === S.watchStockTicker) S.stockPortrait = null;
+    // EA-4 柱2：本轮对比对象/其他持仓自动进了看盘（主公司自己的提示已在上面几行覆盖）——
+    // 后台刷新看盘数据，无需用户手动点刷新；只对"额外"标的单独提示，避免和主公司提示重复。
+    if (Array.isArray(result.newlyWatched) && result.newlyWatched.length) {
+      void refreshWatchDesk();
+      const mainTicker = result.decisionPanel?.ticker || company?.ticker;
+      const extras = result.newlyWatched.filter((w) => w.ticker !== mainTicker);
+      if (extras.length) toast(`已加入看盘：${extras.map((w) => w.name || w.ticker).join("、")}`);
+    }
     return true;
   }
   toast(`${label} 的研究完成了，点左侧查看。`);
@@ -345,7 +365,8 @@ export async function runComparison(target) {
   const question = `把 ${current.nameZh || current.ticker} 和 ${target.name} 做个对比`;
   appendMessage("user", question);
   const sessionId = ensureSessionId();
-  optimisticSession(sessionId, { company: current, question });
+  const conversationId = ensureConversationId();
+  optimisticSession(sessionId, { company: current, question, conversationId });
   const key = runKey(sessionId, current.ticker);
   startRun(key, "正在对比两家公司");
   render();
@@ -355,6 +376,7 @@ export async function runComparison(target) {
       company: current,
       compareWith: { ticker: target.ticker, nameZh: target.name },
       sessionId,
+      conversationId,
       sessionTitle: sessionTitle(question),
       history: apiHistory(question),
       documents: getDocuments(),
@@ -410,7 +432,7 @@ async function runDiscovery(question, kind) {
   startRun(key, kind === "screener" ? "正在按条件筛选" : "正在梳理宏观信号");
   render();
   try {
-    const result = await api("/api/discover", { method: "POST", body: JSON.stringify({ question, kind }) });
+    const result = await api("/api/ask", { method: "POST", body: JSON.stringify({ question, kind }) });
     if (result.kind === "screener") {
       appendMessage("assistant", "", { type: "screener", screener: result });
     } else {
@@ -527,8 +549,11 @@ export async function sendChat(question, preResolved = null) {
   // 识别完成 → 研究开始前先落地稳定 sessionId（新研究/切换后都是全新一条），run 全程用它当键、
   // chat 体带上它 → 后端 upsert 同一行；并乐观插入侧栏 → 新研究立刻出现（转圈），不等服务端。
   // 推理中可切到别的对话、并行再发；结果按 key 落回对应会话（见 applyChatResult）。
+  // EA-5.1：conversationId 换公司也不变（只在"新建研究"时清空）——这是同一次对话里研究
+  // 多家公司在侧栏归到同一组的关键。
   const sessionId = ensureSessionId();
-  optimisticSession(sessionId, { company, question });
+  const conversationId = ensureConversationId();
+  optimisticSession(sessionId, { company, question, conversationId });
   const key = runKey(sessionId, company.ticker);
   startRun(key, "正在检索和思考");
   render();
@@ -537,6 +562,7 @@ export async function sendChat(question, preResolved = null) {
       question,
       company,
       sessionId,
+      conversationId,
       sessionTitle: sessionTitle(question),
       history: apiHistory(question),
       documents: getDocuments(),
@@ -564,7 +590,8 @@ export async function generateDeepResearch() {
 
   const lastQuestion = [...thread].reverse().find((m) => m.role === "user")?.content || `分析 ${company.ticker}`;
   const sessionId = ensureSessionId();
-  optimisticSession(sessionId, { company, question: lastQuestion });
+  const conversationId = ensureConversationId();
+  optimisticSession(sessionId, { company, question: lastQuestion, conversationId });
   const key = runKey(sessionId, company.ticker);
   startRun(key, "正在生成深度研究");
   render();
@@ -575,6 +602,7 @@ export async function generateDeepResearch() {
         question: lastQuestion,
         company,
         sessionId,
+        conversationId,
         sessionTitle: sessionTitle(lastQuestion),
         documents: getDocuments(),
         history: thread.slice(-16).map((m) => ({ role: m.role, content: m.content })),
@@ -623,179 +651,51 @@ export async function parseFiles(input) {
 
 const EXPORT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v10"/><path d="M8 11l4 4 4-4"/><path d="M5 19.5h14"/></svg>';
 
-// desk-head 副标题：永远给可读信息，绝不显示占位的"待补充"。优先市场标签，
-// 再补真实行业（排除"美股/港股/待补充"这类占位）。
-const PLACEHOLDER_INDUSTRY = new Set(["美股", "港股", "待补充", "待定", ""]);
-function companySubtitle(company) {
-  if (!company) return "问一句就开始，复杂研究再沉到底层。";
-  const mkt = marketLabelOf(company.ticker);
-  const ind = company.industry || company.sector || "";
-  const realInd = PLACEHOLDER_INDUSTRY.has(ind) ? "" : ind;
-  return [mkt, realInd].filter(Boolean).join(" · ") || mkt || company.ticker || "美股";
+// EA-5.3：本次对话涉及的公司作为可切换的分节 Tab——同一 conversationId 下换过的
+// 每家公司都在这里，点一个就跳到它当时的研究快照（复用 loadSession，和侧栏嵌套行走
+// 同一条路径，只是把它前置到主内容区，不用先展开侧栏历史才能切公司）。
+// 只有一家公司时不渲染（不给单公司对话添加视觉噪音）。
+function renderCompanyTabs() {
+  const convId = getConversationId();
+  if (!convId) return "";
+  const members = S.recentSessions.filter((s) => (s.conversationId || s.id) === convId);
+  if (members.length <= 1) return "";
+  const activeId = getSessionId();
+  return `<div class="company-tabs">
+    ${members.map((s) => {
+      const isRunning = running.has(s.id);
+      return `<button type="button" class="company-tab ${s.id === activeId ? "is-active" : ""}" data-action="load-session" data-id="${esc(s.id)}">
+        <strong>${esc(s.companyName || s.ticker || "研究对象")}</strong>
+        <span>${isRunning ? '<i class="session-spin" aria-hidden="true"></i>生成中' : esc(s.ticker || "")}</span>
+      </button>`;
+    }).join("")}
+  </div>`;
 }
 
-function renderSnapshotCard(company, panel, thread) {
-  const name = panel?.companyName || company?.nameZh || "未选择公司";
-  const ticker = company?.ticker || panel?.ticker || "";
-  const marketLabel = marketLabelOf(ticker);
-  const confLevel = panel?.confidence === "高" ? "high" : panel?.confidence === "低" ? "low" : "mid";
-  const confChip = panel?.confidence
-    ? `<span class="conf conf-${confLevel}">置信度 ${esc(panel.confidence)}</span>`
-    : "";
-
-  // ② 对话化侧栏：从最近一条带多标的的回答里取"本轮聚焦"，把"研究公司（单一）"软化为"本轮聚焦（1/N）"。
-  const focusOthers = (() => {
-    if (!Array.isArray(thread)) return [];
-    for (let i = thread.length - 1; i >= 0; i--) {
-      const m = thread[i];
-      if (m?.role === "assistant" && Array.isArray(m.meta?.otherHoldings) && m.meta.otherHoldings.length) return m.meta.otherHoldings;
-    }
-    return [];
-  })();
-  const focusLabel = focusOthers.length ? "本轮聚焦" : "研究公司";
-  const focusChips = focusOthers.length
-    ? `<div class="focus-mini">
-        <span class="fm-chip fm-main">${esc(ticker || name)}</span>
-        ${focusOthers.map((h) => {
-          const pnl = isNum(h.pnlPct) ? ` <em class="${dirClass(h.pnlPct)}">${fmtSigned(h.pnlPct)}</em>` : "";
-          return `<span class="fm-chip">${esc(h.ticker || h.name)}${pnl}</span>`;
-        }).join("")}
-      </div>`
-    : "";
-
-  const priceRaw = panel?.price?.value && panel.price.value !== "暂不可用" ? String(panel.price.value) : "";
-  const [priceNum, ...ccyParts] = priceRaw.split(" ");
-  const ccy = ccyParts.join(" ");
-  const changeRaw = panel?.price?.change && panel.price.change !== "暂不可用" ? String(panel.price.change) : "";
-  const chgNum = parseFloat(changeRaw);
-  const chgDir = !changeRaw || Number.isNaN(chgNum) ? "is-flat" : chgNum > 0 ? "is-up" : chgNum < 0 ? "is-down" : "is-flat";
-  const chgText = changeRaw ? (chgNum > 0 && !changeRaw.startsWith("+") ? `+${changeRaw}` : changeRaw) : "";
-
-  const metricValue = (metricName) => {
-    const found = (panel?.metrics || []).find((item) => item.name === metricName);
-    const value = found?.value;
-    return value && value !== "暂不可用" ? String(value) : "";
-  };
-  const pe = metricValue("PE");
-  const cap = metricValue("市值");
-  // 区间回报（近1月/年初至今）——美股可得，港股缺则不显示。带涨跌色。
-  const ranges = panel?.price?.ranges || null;
-  const pctChip = (label, pct) => {
-    if (pct === null || pct === undefined || Number.isNaN(Number(pct))) return "";
-    const n = Number(pct);
-    const dir = n > 0 ? "is-up" : n < 0 ? "is-down" : "is-flat";
-    return `<div class="snapshot-metric"><span>${label}</span><strong class="rng ${dir}">${n > 0 ? "+" : ""}${n}%</strong></div>`;
-  };
-  const rangeChips = ranges ? `${pctChip("近1月", ranges.oneMonthPct)}${pctChip("年初至今", ranges.ytdPct)}` : "";
-
-  const quoteBlock = priceNum
-    ? `<div class="snapshot-quote">
-        <span class="price">${esc(priceNum)}</span>${ccy ? `<span class="ccy">${esc(ccy)}</span>` : ""}
-        ${chgText ? `<span class="chg ${chgDir}">${esc(chgText)}</span>` : ""}
-      </div>`
-    : "";
-
-  const metricChips = (pe || cap || rangeChips)
-    ? `<div class="snapshot-metrics">
-        ${pe ? `<div class="snapshot-metric"><span>TTM PE</span><strong>${esc(pe)}</strong></div>` : ""}
-        ${cap ? `<div class="snapshot-metric"><span>市值</span><strong>${esc(cap)}</strong></div>` : ""}
-        ${rangeChips}
-      </div>`
-    : "";
-
-  const dual = company?.dualListing;
-  // 智能默认：基本面/估值始终走美股 ADR（数据全）；用户问的若是港股代码，则点明盈亏按港股口径。
-  const askedHk = !!(dual && dual.asked && /\.HK$/i.test(dual.asked));
-  const dualNote = dual
-    ? `<div class="snapshot-dual" title="同一家公司在港股和美股双重上市；FMP 免费档只覆盖美股 ADR，所以基本面与估值统一按美股口径。${askedHk ? "你问的是港股，盈亏请按港股价 + HKD 成本算。" : "行情两地可分别查。"}">
-        <span class="dual-badge">双重上市</span>
-        <span class="dual-text">港股 ${esc(dual.hk)}｜美股 ${esc(dual.us)} · 基本面按美股 ADR 口径${askedHk ? "；你问港股 → 盈亏按港股口径" : ""}</span>
-      </div>`
-    : "";
-
-  return `<section class="research-snapshot">
-    <div class="snapshot-head">
-      <div class="snapshot-id">
-        <p>${focusLabel}</p>
-        <h2>${esc(name)}</h2>
-        <span>${ticker ? `${esc(ticker)}${marketLabel ? ` · ${marketLabel}` : ""}` : "输入公司名、港股或美股代码"}</span>
-      </div>
-      ${confChip}
-    </div>
-    ${focusChips}
-    ${dualNote}
-    ${quoteBlock}
-    ${metricChips}
-  </section>`;
-}
-
+// EA-5.2：侧栏（当前研究快照 + 会话分组历史）提升为全局导航（shell.js 统一渲染，
+// 研究/看盘共用），研究页只负责渲染右侧的 desk 内容。
 export function renderResearch() {
   const company = getCompany();
-  const panel = getPanel();
   const thread = getThread();
-  const activeSessionId = getSessionId();
   const hasResearch = Boolean(company || thread.length);
 
   shell(`
-    <section class="workspace">
-      <aside class="sidebar">
-        <button class="primary wide" data-action="new">新建研究</button>
-        ${renderSnapshotCard(company, panel, thread)}
-        ${renderSessionHistory(activeSessionId)}
-        <div class="sidebar-tagline"><b>Seek signal. Ignore noise.</b>喧声之外，见真知。研究参考，非投资建议。</div>
-      </aside>
-
-      <section class="desk">
-        ${hasResearch ? `<div class="desk-head">
-          <div>
-            <p>Echo Research</p>
-            <h1>${company ? `${esc(company.nameZh)} ${esc(company.ticker)}` : "输入公司，开始判断"}</h1>
-            <span>${esc(companySubtitle(company))} </span>
-          </div>
-          ${thread.length ? `<button class="desk-export-btn" type="button" data-action="export" aria-label="导出研究" title="导出研究">${EXPORT_ICON}</button>` : ""}
-        </div>` : ""}
-        <div class="conversation ${hasResearch ? "" : "is-empty"}">
-          ${thread.length ? thread.map(renderMessage).join("") : renderEmptyState()}
-          ${(S.streamingKey && S.streamingKey === activeRunKey()) ? renderStreamingCard() : (isViewBusy() ? renderWaitingCard() : "")}
+    <section class="desk">
+      ${hasResearch ? `<div class="desk-head">
+        <div>
+          <p>Echo Research</p>
+          <h1>${company ? `${esc(company.nameZh)} ${esc(company.ticker)}` : "输入公司，开始判断"}</h1>
+          <span>${esc(companySubtitle(company))} </span>
         </div>
-        ${renderComposer(company)}
-      </section>
+        ${thread.length ? `<button class="desk-export-btn" type="button" data-action="export" aria-label="导出研究" title="导出研究">${EXPORT_ICON}</button>` : ""}
+      </div>` : ""}
+      ${renderCompanyTabs()}
+      <div class="conversation ${hasResearch ? "" : "is-empty"}">
+        ${thread.length ? thread.map(renderMessage).join("") : renderEmptyState()}
+        ${(S.streamingKey && S.streamingKey === activeRunKey()) ? renderStreamingCard() : (isViewBusy() ? renderWaitingCard() : "")}
+      </div>
+      ${renderComposer(company)}
     </section>`);
-}
-
-function renderSessionHistory(activeSessionId) {
-  const count = S.recentSessions.length;
-  const toggle = `<button class="history-toggle ${S.historyOpen ? "is-open" : ""}" type="button" data-action="toggle-history" aria-expanded="${S.historyOpen}">
-      <span>历史研究${count ? ` · ${count}` : ""}</span>
-      <i>${S.historyOpen ? "收起" : "展开"}</i>
-    </button>`;
-  if (!S.historyOpen) {
-    return `<section class="history-panel collapsed">${toggle}</section>`;
-  }
-  const body = !S.sessionsLoaded
-    ? `<div class="history-empty">正在读取历史...</div>`
-    : count
-      ? `<div class="session-list">${S.recentSessions.map((session) => renderSessionItem(session, activeSessionId)).join("")}</div>`
-      : `<div class="history-empty">还没有历史研究。完成第一轮回答后会自动保存。</div>`;
-  return `<section class="history-panel">
-    ${toggle}
-    ${count ? `<div class="history-actions"><button type="button" data-action="clear-sessions">清空全部</button></div>` : ""}
-    ${body}
-  </section>`;
-}
-
-function renderSessionItem(session, activeSessionId) {
-  const active = session.id === activeSessionId;
-  const title = session.title || session.question || session.companyName || session.ticker || "未命名研究";
-  const company = session.companyName || session.company_name || session.ticker || "研究对象";
-  const isRunning = running.has(session.id); // 这条会话正在后台生成 → 显示转圈
-  return `<div class="session-item ${active ? "is-active" : ""} ${isRunning ? "is-running" : ""}">
-    <button class="session-open" type="button" data-action="load-session" data-id="${esc(session.id)}">
-      <strong>${esc(title)}</strong>
-      <span>${isRunning ? '<i class="session-spin" aria-hidden="true"></i>正在生成…' : esc(company)}</span>
-    </button>
-    ${isRunning ? "" : `<button class="session-delete" type="button" data-action="delete-session" data-id="${esc(session.id)}" aria-label="删除历史研究">×</button>`}
-  </div>`;
 }
 
 function renderWaitingCard() {

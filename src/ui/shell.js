@@ -1,10 +1,16 @@
-// ── 页面外壳：顶栏（品牌 / 导航 / 通知铃 / 主题切换）─────────
+// ── 页面外壳：顶栏（品牌 / 导航 / 通知铃 / 主题切换）+ 全局侧栏 ─────────
 import { S, currentRoute, getTheme } from "./state.js";
 import { renderNotifPanel } from "./notifications.js";
+import { renderGlobalSidebar } from "./sidebar.js";
 
 const app = document.querySelector("#app");
 
-export function shell(content) {
+// EA-5.2：侧栏（当前研究快照 + 会话历史）从"研究页专属"提升为跨页的全局导航——
+// 默认所有页面都带（研究/看盘），只有设置页这类"与研究上下文无关"的页面显式关闭。
+export function shell(content, { sidebar = true } = {}) {
+  const main = sidebar
+    ? `<section class="workspace">${renderGlobalSidebar()}${content}</section>`
+    : content;
   app.innerHTML = `
     <div class="app">
       <header class="topbar">
@@ -23,7 +29,7 @@ export function shell(content) {
           <button class="theme-toggle" type="button" data-action="toggle-theme" aria-label="切换深色 / 浅色" title="切换深色 / 浅色">${themeIcon()}</button>
         </nav>
       </header>
-      <main>${content}</main>
+      <main>${main}</main>
     </div>`;
 }
 

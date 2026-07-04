@@ -147,7 +147,13 @@ function classifyAssetStage(f) {
   const netMargin = numOrNull(f.netMargin);
   const opMargin = numOrNull(f.operatingMargin);
   const growth = numOrNull(f.revenueGrowth);
-  const lossMaking = (eps !== null && eps < 0) || (netMargin !== null && netMargin < 0) || (opMargin !== null && opMargin < 0);
+  // 净利润/EPS 是判断"亏损"的主信号；经营利润率单独告负、但净利润明确为正时大概率是一次性费用
+  // /汇兑噪音，不该覆盖清晰为正的底线盈利——B-5 港股实测抓到：阿里 26Q1 经营利润率 -0.05%（一次性
+  // 费用导致的噪音），净利率 +9.7%，旧逻辑三者任一为负就判亏损，会把这种巨头误判成"亏损高成长"，
+  // 掉进 EV/Sales 情景算出远低于合理区间的估值带。经营利润率只在净利润/EPS 都缺失时才当亏损信号用。
+  const netLoss = (eps !== null && eps < 0) || (netMargin !== null && netMargin < 0);
+  const opLossOnly = eps === null && netMargin === null && opMargin !== null && opMargin < 0;
+  const lossMaking = netLoss || opLossOnly;
   if (lossMaking) return growth !== null && growth >= 20 ? "loss_growth" : "loss";
   return "profitable";
 }
@@ -156,12 +162,14 @@ function classifyAssetStage(f) {
 // → 加净现金（现金−负债）→ ÷ 稀释股本 → 价格区间。赔率由 bull/bear vs 现价推出（非自循环），
 // 并反推"当前价隐含的 EV/Sales"（市场在押注什么）。倍数用按增速分档的行业规则默认值，每条情景
 // 显式列假设。缺收入/股本返回 null（落回传统逻辑，多半给 cannotValue）。
-function computeEvSalesValuation({ stage, price, marketCap, revenue, revenueGrowth, grossMargin, sharesOutstanding, cashAndEquivalents, totalDebt }) {
+function computeEvSalesValuation({ stage, price, marketCap, revenue, revenueGrowth, grossMargin, sharesOutstanding, cashAndEquivalents, totalDebt, netCash: explicitNetCash }) {
   const rev = numOrNull(revenue);
   const shares = numOrNull(sharesOutstanding);
   const p = numOrNull(price);
   if (!rev || rev <= 0 || !shares || shares <= 0 || !p || p <= 0) return null;
-  const netCash = (numOrNull(cashAndEquivalents) || 0) - (numOrNull(totalDebt) || 0);
+  // 同 DCF 的净现金口径修复：优先用来源已给出的净现金（如港股一手抽取只给"净现金"一个数，
+  // 不拆分现金/负债两项），否则才用 现金-负债；`totalDebt` 缺失（非 0）时不当净现金为 0。
+  const netCash = numOrNull(explicitNetCash) ?? ((numOrNull(cashAndEquivalents) || 0) - (numOrNull(totalDebt) || 0));
   const growthRaw = numOrNull(revenueGrowth);
   const growth = growthRaw === null ? 0 : clamp(growthRaw / 100, -0.5, 1.5);
   // 前瞻 1 年收入（高成长股用前瞻更贴市场口径）；增速缺失则退回 TTM。
@@ -274,7 +282,8 @@ export function computeValuation(company, marketSnapshot, financialsData) {
       grossMargin: hasFinancialsData.grossMargin ?? hasFinancialsData.grossMargins,
       sharesOutstanding: hasFinancialsData.sharesOutstanding,
       cashAndEquivalents: hasFinancialsData.cashAndEquivalents,
-      totalDebt: hasFinancialsData.totalDebt
+      totalDebt: hasFinancialsData.totalDebt,
+      netCash: hasFinancialsData.netCash
     });
     if (ev) return ev;
   }
@@ -355,10 +364,11 @@ export function computeValuation(company, marketSnapshot, financialsData) {
     }
     const terminal = fcf * (1 + terminalGrowth) / (wacc - terminalGrowth) / Math.pow(1 + wacc, 5);
     const enterpriseValue = pv + terminal;
-    let netCash = 0;
-    if (hasFinancialsData.cashAndEquivalents && hasFinancialsData.totalDebt) {
-      netCash = hasFinancialsData.cashAndEquivalents - hasFinancialsData.totalDebt;
-    }
+    // B-5 修复：原判断用 `&&`，无负债公司 totalDebt===0（falsy）会导致净现金整段被当 0 处理，
+    // 净现金再多也不计入 DCF——债务为 0 是完全合法的财务状态，不该被当"数据缺失"。
+    // 港股一手抽取（B-5）常见净现金充裕但零负债的公司，这个 bug 之前会把它们的 DCF 压低。
+    const netCash = numOrNull(hasFinancialsData.netCash) ??
+      ((numOrNull(hasFinancialsData.cashAndEquivalents) || 0) - (numOrNull(hasFinancialsData.totalDebt) || 0));
     const equityValue = enterpriseValue + netCash;
     const sharesOut = hasFinancialsData.sharesOutstanding || (marketCap && hasPrice ? marketCap / hasPrice : null);
     if (sharesOut && sharesOut > 0) {
