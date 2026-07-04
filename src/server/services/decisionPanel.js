@@ -55,8 +55,12 @@ function buildKeyDrivers({ hasPrice, hasFinancials, hasFilings, hasEstimates, ne
     {
       name: "基本面",
       status: hasFinancials ? "有数据" : hasFilings ? "待验证" : "暂不评分",
+      // B-2：有多期趋势判断时优先说趋势（"连续放缓/加速/拐点"），比单期同比更接近专业分析师的读法；
+      // 没有趋势数据（只拿到 1 期，或 FMP 没返回历史）时退回原来的单期同比，不强求。
       summary: hasFinancials
-        ? `收入增速 ${fmtPercent(financialsData.revenueGrowth)}，毛利率 ${fmtPercent(financialsData.grossMargin)}`
+        ? (financialsData.revenueTrend
+            ? `${financialsData.revenueTrend.label}，毛利率 ${fmtPercent(financialsData.grossMargin)}`
+            : `收入增速 ${fmtPercent(financialsData.revenueGrowth)}，毛利率 ${fmtPercent(financialsData.grossMargin)}`)
         : hasFilings ? "已导入材料，等待结构化解析" : "财报数据未接入",
       evidence: [
         evidence({

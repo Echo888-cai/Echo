@@ -24,6 +24,61 @@ function compactNumber(value) {
   return `${number.toFixed(2)}`;
 }
 
+/**
+ * B-2 财报理解：把"只看最新一期同比"升级成"多期增速的连续趋势"。专业分析师读财报会说
+ * "增速连续两年放缓"，不会只报一个孤立的百分比。
+ *
+ * @param {number[]} growthRatesAsc 按时间升序排列的同比增速（%），最早的一段在前。
+ * @returns {{direction:string, label:string, series:number[]}|null} 数据点 <2 个时无法判断趋势，返回 null。
+ */
+export function classifyTrend(growthRatesAsc) {
+  const valid = (growthRatesAsc || []).filter((g) => g !== null && g !== undefined && Number.isFinite(g));
+  if (valid.length < 2) return null;
+
+  const last = valid[valid.length - 1];
+  const prior = valid[valid.length - 2];
+  const deltas = [];
+  for (let i = 1; i < valid.length; i++) deltas.push(valid[i] - valid[i - 1]);
+  const seriesText = valid.map((v) => `${v.toFixed(1)}%`).join(" → ");
+
+  if (last < 0 && prior >= 0) {
+    return { direction: "inflection_down", label: `增速由正转负（${seriesText}），出现下行拐点`, series: valid };
+  }
+  if (last >= 0 && prior < 0) {
+    return { direction: "inflection_up", label: `增速由负转正（${seriesText}），出现修复拐点`, series: valid };
+  }
+  if (deltas.every((d) => d < -0.5)) {
+    return { direction: "decelerating", label: `增速连续 ${deltas.length} 期放缓（${seriesText}）`, series: valid };
+  }
+  if (deltas.every((d) => d > 0.5)) {
+    return { direction: "accelerating", label: `增速连续 ${deltas.length} 期加速（${seriesText}）`, series: valid };
+  }
+  const avg = valid.reduce((a, b) => a + b, 0) / valid.length;
+  if (Math.abs(last - avg) < 2) {
+    return { direction: "flat", label: `增速在 ${avg.toFixed(1)}% 附近波动，未见明显加速或放缓（${seriesText}）`, series: valid };
+  }
+  return { direction: "mixed", label: `增速波动、无单一方向（${seriesText}）`, series: valid };
+}
+
+/**
+ * Finnhub `/stock/metric?metric=all` 的免费档其实带了 `series.annual.*`——每股口径的
+ * 多年历史（salesPerShare/eps 等，实测 AAPL 有近 40 年数据）。FMP 的 income-statement
+ * 端点被 402 挡住时，这是唯一能在免费档上做"多期趋势"的数据源，用每股口径代理绝对值
+ * （分母是股本，YoY 场景下股本变动通常远小于业务本身的增速，够用）。
+ * @param {Array<{period:string, v:number}>} seriesArr 与 Finnhub 一致：index 0 = 最新一期。
+ */
+export function trendFromAnnualSeries(seriesArr) {
+  if (!Array.isArray(seriesArr) || seriesArr.length < 3) return null;
+  const recentAscending = seriesArr.slice(0, 6).map((p) => numberOrNull(p?.v)).reverse();
+  const growthSeries = [];
+  for (let i = 1; i < recentAscending.length; i++) {
+    const prior = recentAscending[i - 1];
+    const cur = recentAscending[i];
+    if (prior !== null && cur !== null && prior !== 0) growthSeries.push(((cur - prior) / Math.abs(prior)) * 100);
+  }
+  return classifyTrend(growthSeries);
+}
+
 async function fetchJson(url, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs || 5000);
@@ -53,8 +108,10 @@ function toFmpSymbol(ticker) {
 
 async function fetchFmpFinancials(ticker) {
   const symbol = toFmpSymbol(ticker);
+  // B-2：limit 从 2 提到 6——只拿 2 期只够算"这期同比"，够不成"连续趋势"。6 期年报能算出
+  // 5 段同比增速，分类出"连续放缓/加速/拐点"，这是专业分析师读财报的方式，不是单期快照。
   const [incomeStmt, balanceSheet, cashFlow] = await Promise.all([
-    fmpGet("/stable/income-statement", { symbol, limit: 2 }, { ttl: FMP_TTL.financials, timeoutMs: 10000 }),
+    fmpGet("/stable/income-statement", { symbol, limit: 6 }, { ttl: FMP_TTL.financials, timeoutMs: 10000 }),
     fmpGet("/stable/balance-sheet-statement", { symbol, limit: 2 }, { ttl: FMP_TTL.financials, timeoutMs: 10000 }),
     fmpGet("/stable/cash-flow-statement", { symbol, limit: 2 }, { ttl: FMP_TTL.financials, timeoutMs: 10000 })
   ]);
@@ -69,6 +126,18 @@ async function fetchFmpFinancials(ticker) {
   const revenueGrowth = previous.revenue ? ((latest.revenue - previous.revenue) / Math.abs(previous.revenue)) * 100 : null;
   const profitGrowth = previous.netIncome && previous.netIncome !== 0 ? ((latest.netIncome - previous.netIncome) / Math.abs(previous.netIncome)) * 100 : null;
 
+  // 按时间升序（最早的一段同比 → 最新一段）算逐期增速，喂给 classifyTrend 判断方向。
+  const revenueGrowthSeries = [];
+  const profitGrowthSeries = [];
+  for (let i = incomeStmt.length - 2; i >= 0; i--) {
+    const cur = incomeStmt[i];
+    const prior = incomeStmt[i + 1];
+    if (prior?.revenue) revenueGrowthSeries.push(((cur.revenue - prior.revenue) / Math.abs(prior.revenue)) * 100);
+    if (prior?.netIncome) profitGrowthSeries.push(((cur.netIncome - prior.netIncome) / Math.abs(prior.netIncome)) * 100);
+  }
+  const revenueTrend = classifyTrend(revenueGrowthSeries);
+  const profitTrend = classifyTrend(profitGrowthSeries);
+
   return {
     source: "FMP",
     ticker: normalizeTicker(ticker),
@@ -76,6 +145,7 @@ async function fetchFmpFinancials(ticker) {
     currency: latest.reportedCurrency || "HKD",
     revenue: numberOrNull(latest.revenue),
     revenueGrowth: numberOrNull(revenueGrowth),
+    revenueTrend,
     grossProfit: numberOrNull(latest.grossProfit),
     grossMargin: latest.revenue ? numberOrNull((latest.grossProfit / latest.revenue) * 100) : null,
     operatingIncome: numberOrNull(latest.operatingIncome),
@@ -83,6 +153,7 @@ async function fetchFmpFinancials(ticker) {
     netIncome: numberOrNull(latest.netIncome),
     netMargin: latest.revenue ? numberOrNull((latest.netIncome / latest.revenue) * 100) : null,
     profitGrowth: numberOrNull(profitGrowth),
+    profitTrend,
     eps: numberOrNull(latest.eps),
     sharesOutstanding: numberOrNull(latest.weightedAverageShsOutDil ?? latest.weightedAverageShsOut),
     totalAssets: numberOrNull(latestBs.totalAssets),
@@ -255,6 +326,10 @@ async function fetchFinnhubFinancials(ticker) {
   const m = metrics?.metric || {};
   if (!Object.keys(m).length) throw new Error("Finnhub 没有返回基础财务指标");
 
+  // B-2：免费档 series.annual 拿多期每股口径算趋势（见 trendFromAnnualSeries 注释）。
+  const revenueTrend = trendFromAnnualSeries(metrics?.series?.annual?.salesPerShare);
+  const profitTrend = trendFromAnnualSeries(metrics?.series?.annual?.eps);
+
   // 付费端点：能拿到绝对额（营收/净利）就补充，拿不到就只用 metric 的比率。
   let annual = null;
   try {
@@ -308,6 +383,7 @@ async function fetchFinnhubFinancials(ticker) {
     currency: detectMarket(ticker) === "US" ? "USD" : "HKD",
     revenue,
     revenueGrowth: pick(m.revenueGrowthTTMYoy, m.revenueGrowthQuarterlyYoy, m.revenueGrowth5Y),
+    revenueTrend,
     grossProfit: pick(annual?.grossIncome),
     grossMargin: pick(m.grossMarginTTM, m.grossMarginAnnual, m.grossMargin5Y),
     operatingIncome: pick(annual?.operatingIncome),
@@ -315,6 +391,7 @@ async function fetchFinnhubFinancials(ticker) {
     netIncome: pick(annual?.netIncome),
     netMargin: pick(m.netProfitMarginTTM, m.netProfitMarginAnnual, m.netProfitMargin5Y),
     profitGrowth: pick(m.epsGrowthTTMYoy, m.epsGrowth5Y, m.netMarginGrowth5Y),
+    profitTrend,
     eps: pick(m.epsTTM, m.epsInclExtraItemsTTM, m.epsAnnual),
     sharesOutstanding: shares,
     marketCap: mktCap,
@@ -654,10 +731,12 @@ export function financialsToMarkdown(financials) {
   return [
     `财务数据来源：${financials.source}${period}（唯一财务事实源——下列没有的财务数字一律写"未核到"，禁止编造或估算）`,
     `收入${financials.period ? `（${financials.period}）` : "（TTM）"}：${fmtCompact(financials.revenue)} | 增速：${fmt(financials.revenueGrowth, "%")}`,
+    financials.revenueTrend ? `收入增速趋势（近 ${financials.revenueTrend.series.length + 1} 期年报）：${financials.revenueTrend.label}` : "",
     `毛利：${fmtCompact(financials.grossProfit)} | 毛利率：${fmtPercent(financials.grossMargin)}`,
     `经营利润：${fmtCompact(financials.operatingIncome)} | 经营利润率：${fmtPercent(financials.operatingMargin)}`,
     `净利润：${fmtCompact(financials.netIncome)} | 净利率：${fmtPercent(financials.netMargin)}`,
     `利润增速：${fmt(financials.profitGrowth, "%")}`,
+    financials.profitTrend ? `利润增速趋势（近 ${financials.profitTrend.series.length + 1} 期年报）：${financials.profitTrend.label}` : "",
     `EPS：${fmt(financials.eps)}`,
     `自由现金流：${fmtCompact(financials.freeCashFlow)}`,
     `经营现金流：${fmtCompact(financials.operatingCashFlow)}`,
