@@ -59,6 +59,54 @@
 .desk-export-btn:hover { border-color: var(--line-strong); background: var(--panel-soft); }
 .desk-export-btn svg { width: 17px; height: 17px; }
 
+/* EA-5.3：本次对话涉及的公司分节 Tab（只在同一对话里换过 ≥2 家公司时出现） */
+.company-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: min(100%, 860px);
+  margin: 12px auto 0;
+  padding-bottom: 10px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.company-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: none;
+  padding: 7px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 0.16s var(--ease-soft), border-color 0.16s var(--ease-soft);
+}
+
+.company-tab:hover {
+  background: var(--panel-soft);
+}
+
+.company-tab.is-active {
+  border-color: rgba(191, 92, 62, 0.24);
+  background: var(--blue-soft);
+  color: var(--ink);
+}
+
+.company-tab strong {
+  font-size: 12.5px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.company-tab span {
+  font-size: 10.5px;
+  color: var(--muted-2);
+  white-space: nowrap;
+}
+
 .conversation {
   flex: 1;
   overflow: auto;

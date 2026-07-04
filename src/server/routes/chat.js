@@ -483,6 +483,7 @@ function persistFinalChatSession(payload, result, content, extra = {}) {
     const saved = saveResearchSession({
       id: payload.sessionId || result.sessionId || undefined,
       ticker,
+      conversationId: payload.conversationId || undefined,
       companyName: panel?.companyName || payload.company?.nameZh || payload.company?.name || ticker,
       title: payload.sessionTitle || payload.question || panel?.companyName || ticker,
       question: payload.question || "",

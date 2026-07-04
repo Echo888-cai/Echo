@@ -177,7 +177,8 @@ export async function runAgent(input, options = {}) {
     memory = {},
     documents = [],
     sessionId = null,
-    sessionTitle = ""
+    sessionTitle = "",
+    conversationId = null
   } = input || {};
   if (!company?.ticker) {
     const err = new Error("缺少公司上下文");
@@ -208,7 +209,7 @@ export async function runAgent(input, options = {}) {
       financialsData: data.financialsData, filingsData: data.filingsData, estimatesData: data.estimatesData,
       documents, memory: effectiveMemory, userContext,
       mode: providerStatus.configured ? "local_panel" : "model_key_missing", dataSources: data,
-      history, sessionId, sessionTitle, persist
+      history, sessionId, sessionTitle, conversationId, persist
     });
   }
 
@@ -264,7 +265,7 @@ export async function runAgent(input, options = {}) {
       marketSnapshot: data.marketSnapshot, newsSnapshot: data.newsSnapshot,
       financialsData: data.financialsData, filingsData: data.filingsData, estimatesData: data.estimatesData,
       documents, memory: effectiveMemory, userContext, mode: "repair_failed", dataSources: data,
-      history, sessionId, sessionTitle, persist
+      history, sessionId, sessionTitle, conversationId, persist
     });
   }
 
@@ -300,12 +301,12 @@ export async function runAgent(input, options = {}) {
   };
 
   result.sessionId = persist
-    ? persistSession(result, profile, { question, userContext, repaired, sessionId, sessionTitle, history })
+    ? persistSession(result, profile, { question, userContext, repaired, sessionId, sessionTitle, conversationId, history })
     : (sessionId || null);
   return result;
 }
 
-function assembleLocal({ question, company, filings, marketSnapshot, newsSnapshot, financialsData, filingsData, estimatesData, documents, memory, userContext, mode, dataSources, history = [], sessionId = null, sessionTitle = "", persist = true }) {
+function assembleLocal({ question, company, filings, marketSnapshot, newsSnapshot, financialsData, filingsData, estimatesData, documents, memory, userContext, mode, dataSources, history = [], sessionId = null, sessionTitle = "", conversationId = null, persist = true }) {
   const profile = companyByTicker(company.ticker) || company;
   const localContent = buildLocalContent({
     question, company: profile, filings,
@@ -328,7 +329,7 @@ function assembleLocal({ question, company, filings, marketSnapshot, newsSnapsho
   };
 
   result.sessionId = persist
-    ? persistSession(result, profile, { question, userContext, repaired: false, sessionId, sessionTitle, history })
+    ? persistSession(result, profile, { question, userContext, repaired: false, sessionId, sessionTitle, conversationId, history })
     : (sessionId || null);
   return result;
 }
@@ -353,11 +354,12 @@ function sessionThread(history = [], question = "", content = "") {
   return thread;
 }
 
-function persistSession(result, profile, { question, userContext, repaired, sessionId, sessionTitle, history }) {
+function persistSession(result, profile, { question, userContext, repaired, sessionId, sessionTitle, conversationId, history }) {
   try {
     const saved = saveResearchSession({
       id: sessionId || undefined,
       ticker: profile.ticker,
+      conversationId: conversationId || undefined,
       title: sessionTitle || question,
       question,
       status: result.mode === "model" ? "completed" : "completed",
