@@ -236,6 +236,7 @@ function answerMetaFromResult(result) {
     completeness: typeof result.decisionPanel?.dataCompleteness === "number" ? result.decisionPanel.dataCompleteness : null,
     missing: Array.isArray(result.decisionPanel?.missingData) ? result.decisionPanel.missingData : [],
     confidence: result.decisionPanel?.confidence || null,
+    confidenceNote: result.decisionPanel?.confidenceNote || null,
     valuation: result.valuation || null,
     // ① 估值被护栏抑制时的诚实说明（前端出一行"数据不足"，而非静默无卡）。
     valuationNote: result.valuationNote || null,

@@ -469,6 +469,7 @@ function persistFinalChatSession(payload, result, content, extra = {}) {
     completeness: typeof panel?.dataCompleteness === "number" ? panel.dataCompleteness : null,
     missing: Array.isArray(panel?.missingData) ? panel.missingData : [],
     confidence: panel?.confidence || null,
+    confidenceNote: panel?.confidenceNote || null,
     valuation: extra.valuation || null,
     valuationNote: extra.valuationNote || null,
     valuationName: extra.valuationName || null,

@@ -19,8 +19,9 @@ function renderSnapshotCard(company, panel, thread) {
   const ticker = company?.ticker || panel?.ticker || "";
   const marketLabel = marketLabelOf(ticker);
   const confLevel = panel?.confidence === "高" ? "high" : panel?.confidence === "低" ? "low" : "mid";
+  const confTitle = panel?.confidenceNote ? ` title="${esc(panel.confidenceNote)}"` : "";
   const confChip = panel?.confidence
-    ? `<span class="conf conf-${confLevel}">置信度 ${esc(panel.confidence)}</span>`
+    ? `<span class="conf conf-${confLevel}"${confTitle}>置信度 ${esc(panel.confidence)}${panel.confidenceNote ? " ⓘ" : ""}</span>`
     : "";
 
   // ② 对话化侧栏：从最近一条带多标的的回答里取"本轮聚焦"，把"研究公司（单一）"软化为"本轮聚焦（1/N）"。

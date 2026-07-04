@@ -322,7 +322,8 @@ export function renderAnswerMeta(meta = {}) {
   const spans = [];
   if (meta.confidence) {
     const lvl = meta.confidence === "高" ? "high" : meta.confidence === "低" ? "low" : "mid";
-    spans.push(`<span class="conf conf-${lvl}">置信度 ${esc(meta.confidence)}</span>`);
+    const title = meta.confidenceNote ? ` title="${esc(meta.confidenceNote)}"` : "";
+    spans.push(`<span class="conf conf-${lvl}"${title}>置信度 ${esc(meta.confidence)}${meta.confidenceNote ? " ⓘ" : ""}</span>`);
   }
   if (meta.mode) spans.push(`<span>${/model/.test(meta.mode) ? "模型生成" : "本地兜底"}</span>`);
   if (typeof meta.webCount === "number") spans.push(`<span>网页证据 ${meta.webCount} 条</span>`);
