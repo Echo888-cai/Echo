@@ -258,6 +258,14 @@ function applyChatResult(result, key, company) {
     else if (result.portrait?.changed) toast(`已更新 ${label} 的长期画像（判断有变化）。`);
     // 画像变了就作废公司页的画像缓存，下次切"画像"Tab 拉到最新时间线。
     if (result.portrait && result.portrait.ticker === S.watchStockTicker) S.stockPortrait = null;
+    // EA-4 柱2：本轮对比对象/其他持仓自动进了看盘（主公司自己的提示已在上面几行覆盖）——
+    // 后台刷新看盘数据，无需用户手动点刷新；只对"额外"标的单独提示，避免和主公司提示重复。
+    if (Array.isArray(result.newlyWatched) && result.newlyWatched.length) {
+      void refreshWatchDesk();
+      const mainTicker = result.decisionPanel?.ticker || company?.ticker;
+      const extras = result.newlyWatched.filter((w) => w.ticker !== mainTicker);
+      if (extras.length) toast(`已加入看盘：${extras.map((w) => w.name || w.ticker).join("、")}`);
+    }
     return true;
   }
   toast(`${label} 的研究完成了，点左侧查看。`);

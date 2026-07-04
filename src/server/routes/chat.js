@@ -10,7 +10,7 @@ import { displayValuation } from "../services/valuationEngine.js";
 import { computeFinancialQuality } from "../services/financialQuality.js";
 import { PROMPTS } from "../../prompts.js";
 import { loadPortraitContext, updatePortraitFromPanel } from "../services/companyPortrait.js";
-import { addToWatch, getHiddenTickers } from "../repositories/watchlist.js";
+import { addToWatch, getHiddenTickers, listWatchAdds } from "../repositories/watchlist.js";
 import { runTwoStageChat, runTwoStageChatStream } from "../services/twoStageChat.js";
 import { upsertPosition } from "../repositories/portfolio.js";
 import { extractOtherHoldings } from "../services/entityExtractor.js";
@@ -143,6 +143,21 @@ function buildComparison({ payload, result, valuation, analyst, compareData }) {
     analyst: compareData.analyst
   });
   return { left, right };
+}
+
+// EA-4 柱2：这一轮该进看盘的候选标的——会话主公司（有面板才算）+ 对比对象 + 对话里
+// 顺带提到、且真拉到 summary（真实数据）的其他持仓。纯函数，不碰 DB，可单测；
+// 实际的"是否已在看盘""写入"留在 finalizeChat 里做（那部分要读写 DB）。
+export function watchCandidatesFrom({ portraitTicker, decisionPanel, companyName, compareData, otherHoldings }) {
+  return [
+    portraitTicker && decisionPanel
+      ? { ticker: portraitTicker, name: decisionPanel.companyName || companyName }
+      : null,
+    compareData?.ticker ? { ticker: compareData.ticker, name: compareData.name } : null,
+    ...(Array.isArray(otherHoldings) ? otherHoldings : [])
+      .filter((h) => h.company?.ticker && h.summary)
+      .map((h) => ({ ticker: h.company.ticker, name: h.company.nameZh || h.summary?.name }))
+  ].filter(Boolean);
 }
 
 export async function handleChatApi(req, res) {
@@ -374,16 +389,31 @@ function finalizeChat({ payload, result, webEvidence, valuation, analyst, portra
     }
   }
 
-  // 研究过的公司自动进看盘：重新研究即重新关注，明确覆盖此前的手动隐藏
-  // （否则 hide 记录一直压着画像，出现"研究了却不在看盘"）。
+  // EA-4 柱2：自动进看盘从"只加会话主公司"扩到"本轮所有拉到真实数据的标的"——
+  // 对比对象（compareData）、对话里顺带提到的其他持仓（otherHoldings，只算真正拉到
+  // summary 的，壳记录不算）都一起进看盘，不再只有主公司会出现在看盘里。
+  // watchRestored 只跟踪主公司（前端已有的"重新关注"文案专属于它）；newlyWatched 是
+  // 这一轮真正新增的（之前不在看盘里的），供前端判断要不要提示 + 刷新看盘数据。
+  const alreadyWatched = new Set(listWatchAdds().map((w) => w.ticker));
+  const watchCandidates = watchCandidatesFrom({
+    portraitTicker,
+    decisionPanel: result.decisionPanel,
+    companyName: payload.company?.nameZh,
+    compareData,
+    otherHoldings
+  });
+
   let watchRestored = false;
-  if (portraitTicker && result.decisionPanel) {
+  const newlyWatched = [];
+  for (const candidate of watchCandidates) {
     try {
-      watchRestored = getHiddenTickers().has(portraitTicker);
-      addToWatch(portraitTicker, result.decisionPanel.companyName || payload.company?.nameZh);
+      const wasHidden = getHiddenTickers().has(candidate.ticker);
+      if (candidate.ticker === portraitTicker) watchRestored = wasHidden;
+      addToWatch(candidate.ticker, candidate.name);
+      if (!alreadyWatched.has(candidate.ticker)) newlyWatched.push({ ticker: candidate.ticker, name: candidate.name });
     } catch (err) {
-      watchRestored = false;
-      console.warn("watchlist 回写失败:", err?.message || err);
+      if (candidate.ticker === portraitTicker) watchRestored = false;
+      console.warn("watchlist 回写失败:", candidate.ticker, err?.message || err);
     }
   }
 
@@ -419,7 +449,9 @@ function finalizeChat({ payload, result, webEvidence, valuation, analyst, portra
     dualQuote: dualQuote || null,
     positionSaved,
     // 本轮研究把此前手动隐藏的公司重新拉回了看盘（前端据此提示）。
-    watchRestored
+    watchRestored,
+    // EA-4 柱2：本轮真正新增进看盘的标的（含对比对象/其他持仓，去重后此前已在看盘的不算）。
+    newlyWatched
   };
 }
 
