@@ -181,6 +181,7 @@ export async function runAgent(input, options = {}) {
     conversationId = null
   } = input || {};
   if (!company?.ticker) {
+    /** @type {Error & {statusCode?: number}} */
     const err = new Error("缺少公司上下文");
     err.statusCode = 400;
     throw err;

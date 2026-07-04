@@ -239,6 +239,7 @@ export function lineNumbers(line) {
 // 括号风格两种都有：小鵬 Q4+FY 合刊用全角（虧損），Q1 独立季报用半角(虧損)——
 // 数字列的负号解析（lineNumbers）依赖半角括号，不能全局归一化，只在这些标签正则里
 // 用 [（(]/[）)] 字符类兼容两种。
+/** @type {Array<[string, RegExp]>} */
 const STATEMENT_FIELDS = [
   ["revenue", /^(收入|收益總額|營業額|營業收入|营业收入|總收入|总收入|營業收益淨額|营业收益净额)(?!成本|表)/],
   ["grossProfit", /^毛利(?!率)/],

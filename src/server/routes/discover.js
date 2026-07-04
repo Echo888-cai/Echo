@@ -9,6 +9,7 @@ import { runScreener, runMacro } from "../services/discovery.js";
 export async function runDiscover(payload) {
   const question = String(payload.question || "").trim();
   if (!question) {
+    /** @type {Error & {statusCode?: number}} */
     const err = new Error("缺少 question");
     err.statusCode = 400;
     throw err;
@@ -16,6 +17,7 @@ export async function runDiscover(payload) {
   const kind = payload.kind || classifyDiscoveryIntent(question);
   if (kind === "screener") return runScreener(question);
   if (kind === "macro") return runMacro(question);
+  /** @type {Error & {statusCode?: number}} */
   const err = new Error("这不是筛选或宏观问题，请走公司研究通道。");
   err.statusCode = 400;
   throw err;

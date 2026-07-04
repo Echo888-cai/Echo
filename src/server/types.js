@@ -41,6 +41,8 @@
  * @property {number} [pe]
  * @property {number} [revenue]
  * @property {number} [revenueGrowth]
+ * @property {{direction: string, label: string, series: number[]}} [revenueTrend] classifyTrend() 的分类结果（financialData.js）
+ * @property {{direction: string, label: string, series: number[]}} [profitTrend]
  * @property {number} [netMargin]
  * @property {number} [operatingMargin]
  * @property {number} [grossMargin]

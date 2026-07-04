@@ -293,6 +293,7 @@ const sectorDefaults = {
   }
 };
 
+/** @param {string[]} row [ticker, nameZh, nameEn, sector, industry] */
 function makeDefaultCompany([ticker, nameZh, nameEn, sector, industry], index) {
   const defaults = sectorDefaults[sector];
   const price = Number((8 + index * 3.7).toFixed(2));

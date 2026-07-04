@@ -48,7 +48,8 @@ export async function sendTelegram(text) {
 
 /**
  * 发出一条通知：落库 + 尽力 Telegram。
- * @returns {{ ok:true, id?:number, deduped?:boolean, telegram:string }}
+ * @param {{kind: string, title: string, body?: string, ticker?: string|null, payload?: Object|null, dedupeKey?: string|null, dedupeWindowHours?: number}} args
+ * @returns {Promise<{ ok:true, id?:number, deduped?:boolean, telegram:string }>}
  */
 export async function notify({ kind, title, body = "", ticker = null, payload = null, dedupeKey = null, dedupeWindowHours = 12 }) {
   const inserted = insertNotification({ kind, title, body, ticker, payload, dedupeKey, dedupeWindowHours });
