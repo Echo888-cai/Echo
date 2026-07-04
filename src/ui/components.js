@@ -80,7 +80,17 @@ export function renderComparisonTable(comparison) {
       ${cell(row, left, right)}
       ${cell(row, right, left)}
     </tr>`).join("");
+  // B-3：胜负手判断——只在两个可比维度（利润质量/赔率）指向同一边时才敢说"谁更优"，
+  // 数据不够或指向不同方向时诚实说清楚（tie/mixed/insufficient），不硬造赢家。
+  const verdict = comparison?.verdict;
+  const verdictBadge = verdict?.winner === "left" || verdict?.winner === "right"
+    ? `<span class="cmp-verdict-badge">${esc((verdict.winner === "left" ? left : right).name || "")} 更优</span>`
+    : "";
+  const verdictBlock = verdict
+    ? `<div class="comparison-verdict">${verdictBadge}<span>${esc(verdict.reason)}</span></div>`
+    : "";
   return `<div class="comparison-block">
+    ${verdictBlock}
     <table class="comparison-table">
       <thead><tr><th></th><th>${esc(left.name || left.ticker || "—")}<span>${esc(left.ticker || "")}</span></th><th>${esc(right.name || right.ticker || "—")}<span>${esc(right.ticker || "")}</span></th></tr></thead>
       <tbody>${body}</tbody>

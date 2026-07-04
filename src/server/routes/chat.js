@@ -122,6 +122,59 @@ function comparisonSide({ name, ticker, marketSnapshot, financialsData, valuatio
   };
 }
 
+// B-3：公司对比不能只是并排数据表——专业分析师会说"谁更值得"，并且说清楚是因为哪几个数字。
+// 只用两个可比、可解释的维度下判断：利润质量分（经营确定性）+ 回报风险赔率（当下值不值得买）。
+// 两个维度都指向同一边才敢下"谁更优"的结论；一个维度都缺就诚实说"数据不足，判断不了"——
+// 这是事实锚定护栏（B-1）在对比场景的延伸：不能因为要给结论就在证据不够时硬编一个赢家。
+export function judgeComparison(left, right) {
+  const hasQuality = Number.isFinite(left.qualityScore) && Number.isFinite(right.qualityScore);
+  const hasOdds = Number.isFinite(left.odds) && Number.isFinite(right.odds);
+
+  if (!hasQuality && !hasOdds) {
+    return { winner: "insufficient", reason: `${left.name} 和 ${right.name} 的利润质量分与回报风险赔率都缺数据，暂时判断不了谁更值得。` };
+  }
+
+  const qualityWinner = hasQuality ? (left.qualityScore === right.qualityScore ? "tie" : left.qualityScore > right.qualityScore ? "left" : "right") : null;
+  const oddsWinner = hasOdds ? (left.odds === right.odds ? "tie" : left.odds > right.odds ? "left" : "right") : null;
+
+  const sideOf = (key) => (key === "left" ? left : right);
+  const otherOf = (key) => (key === "left" ? right : left);
+
+  if (hasQuality && hasOdds) {
+    if (qualityWinner === oddsWinner) {
+      if (qualityWinner === "tie") {
+        return { winner: "tie", reason: `${left.name} 和 ${right.name} 的利润质量分（${left.qualityScore} vs ${right.qualityScore}）与赔率（${left.odds}:1 vs ${right.odds}:1）都接近，暂时难分高下。` };
+      }
+      const w = sideOf(qualityWinner), l = otherOf(qualityWinner);
+      return { winner: qualityWinner, reason: `${w.name} 利润质量分更高（${w.qualityScore} vs ${l.qualityScore}）、回报风险赔率也更好（${w.odds}:1 vs ${l.odds}:1），两个维度一致占优。` };
+    }
+    // 两个维度的赢家不一致——先排掉"其中一个维度其实是平手"这种假冲突（不能把 tie
+    // 误当成某一边真的"更好"，那是 B-1 事实锚定护栏要挡的那类虚假结论）。
+    if (qualityWinner === "tie") {
+      const w = sideOf(oddsWinner), l = otherOf(oddsWinner);
+      return { winner: oddsWinner, reason: `${left.name} 和 ${right.name} 利润质量分接近（${left.qualityScore} vs ${right.qualityScore}），但 ${w.name} 回报风险赔率更好（${w.odds}:1 vs ${l.odds}:1），赔率上占优。` };
+    }
+    if (oddsWinner === "tie") {
+      const w = sideOf(qualityWinner), l = otherOf(qualityWinner);
+      return { winner: qualityWinner, reason: `${w.name} 利润质量分更高（${w.qualityScore} vs ${l.qualityScore}），赔率两者接近（${left.odds}:1 vs ${right.odds}:1），质量上占优。` };
+    }
+    // 两个维度都有决定性结果，但指向不同的一边——真正的取舍，不是假冲突。
+    const qw = sideOf(qualityWinner), qwOther = otherOf(qualityWinner);
+    const ow = sideOf(oddsWinner), owOther = otherOf(oddsWinner);
+    return { winner: "mixed", reason: `${qw.name} 利润质量分更高（${qw.qualityScore} vs ${qwOther.qualityScore}），但 ${ow.name} 回报风险赔率更好（${ow.odds}:1 vs ${owOther.odds}:1）——质量和赔率指向不同方向，取决于你更看重经营确定性还是当下的赔率。` };
+  }
+
+  if (hasQuality) {
+    if (qualityWinner === "tie") return { winner: "tie", reason: `两者利润质量分接近（${left.qualityScore} vs ${right.qualityScore}），且都缺赔率数据，暂时难分高下。` };
+    const w = sideOf(qualityWinner), l = otherOf(qualityWinner);
+    return { winner: qualityWinner, reason: `${w.name} 利润质量分更高（${w.qualityScore} vs ${l.qualityScore}），但两者都缺回报风险赔率数据，无法从赔率角度交叉验证。` };
+  }
+
+  if (oddsWinner === "tie") return { winner: "tie", reason: `两者回报风险赔率接近（${left.odds}:1 vs ${right.odds}:1），且都缺利润质量分，暂时难分高下。` };
+  const w = sideOf(oddsWinner), l = otherOf(oddsWinner);
+  return { winner: oddsWinner, reason: `${w.name} 回报风险赔率更好（${w.odds}:1 vs ${l.odds}:1），但两者都缺利润质量分，无法从盈利质量角度交叉验证。` };
+}
+
 // A-P1.1：把主公司与对比对象的结构化数据收口成 { left, right } 两列，前端 renderComparisonTable
 // 直接渲染并排表（散文保留在表下）。只有带了 compareWith 且对比对象拿到行情时才有。
 function buildComparison({ payload, result, valuation, analyst, compareData }) {
@@ -142,7 +195,7 @@ function buildComparison({ payload, result, valuation, analyst, compareData }) {
     valuation: compareData.valuation,
     analyst: compareData.analyst
   });
-  return { left, right };
+  return { left, right, verdict: judgeComparison(left, right) };
 }
 
 // EA-4 柱2：这一轮该进看盘的候选标的——会话主公司（有面板才算）+ 对比对象 + 对话里
