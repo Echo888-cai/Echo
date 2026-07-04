@@ -49,6 +49,13 @@
  * @property {number} [cashAndEquivalents]
  * @property {number} [totalDebt]
  * @property {number} [netCash]
+ * @property {number} [freeCashFlow]
+ * @property {number} [debtToEquity]
+ * @property {number} [returnOnEquity]
+ * @property {number} [repurchaseOfStock]
+ * @property {number} [dividendPaid]
+ * @property {string} [source]
+ * @property {string} [asOf]
  * @property {boolean} [firstPartySupplement] 是否被港股一手 HKEX 抽取数据补过缺口字段（dataSources.js）
  * @property {Array<Object>} [hkFilings]
  * @property {Object} [segments]

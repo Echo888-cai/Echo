@@ -347,7 +347,7 @@ export function computeValuation(company, marketSnapshot, financialsData) {
   if (company.sector?.includes("金融") && company.pb) {
     const pb = parseFloat(String(company.pb).replace("x", ""));
     if (!isNaN(pb) && pb > 0) {
-      const bookValue = hasPrice / pb;
+      const bookValue = price / pb;
       const bear = bookValue * (pb * 0.7);
       const base = bookValue * pb;
       const bull = bookValue * (pb * 1.3);
@@ -377,7 +377,7 @@ export function computeValuation(company, marketSnapshot, financialsData) {
     const netCash = numOrNull(hasFinancialsData.netCash) ??
       ((numOrNull(hasFinancialsData.cashAndEquivalents) || 0) - (numOrNull(hasFinancialsData.totalDebt) || 0));
     const equityValue = enterpriseValue + netCash;
-    const sharesOut = hasFinancialsData.sharesOutstanding || (marketCap && hasPrice ? marketCap / hasPrice : null);
+    const sharesOut = hasFinancialsData.sharesOutstanding || (marketCap && hasPrice ? marketCap / price : null);
     if (sharesOut && sharesOut > 0) {
       const dcfValue = equityValue / sharesOut;
       methods.push({ name: "DCF", bear: dcfValue * 0.8, base: dcfValue || price, bull: dcfValue * 1.2, weight: 1 });
@@ -392,7 +392,7 @@ export function computeValuation(company, marketSnapshot, financialsData) {
     const peBear = pe * 0.7;
     const peBase = pe;
     const peBull = pe * 1.3;
-    const eps = hasPrice / pe;
+    const eps = price / pe;
     methods.push({ name: "简单 PE", bear: eps * peBear, base: eps * peBase, bull: eps * peBull, weight: 1 });
     assumptions.push(`仅基于行情 PE ${pe}x，缺 EPS 验证`);
   }
