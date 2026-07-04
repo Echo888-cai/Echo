@@ -84,6 +84,7 @@ export function saveWebEvidence(items = []) {
   return items;
 }
 
+/** @param {{ticker?: string, intent?: string, limit?: number, maxAgeHours?: number}} [opts] */
 export function listWebEvidence({ ticker, intent, limit = 12, maxAgeHours = 48 } = {}) {
   const db = getDb();
   const rows = db.prepare(`

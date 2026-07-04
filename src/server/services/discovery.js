@@ -27,6 +27,7 @@ import { withTimeout } from "../utils/async.js";
 // 枚举值，关键词匹配也太粗——FMP 的 "Semiconductors" 装不下"存储芯片"这种主题。这类条目
 // 带 tickers（HK/US 已上市龙头名单兜底），runScreener 命中时直接用这份名单起筛，而不是
 // 硬套一个匹配不上的 industry 枚举。放在通用大类（半导体/科技）前面，保证优先命中。
+/** @type {Array<[RegExp, {label: string, sector?: string, industry?: string, tickers?: Array<{ticker: string, name: string}>}]>} */
 const SECTOR_MAP = [
   [/光模块|光互联|CPO|光通信/i, {
     label: "光模块/光通信",

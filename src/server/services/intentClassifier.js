@@ -63,6 +63,7 @@ function compactName(company = {}) {
     .slice(0, 4);
 }
 
+/** @param {{company?: {ticker?: string, nameZh?: string, nameEn?: string, aliases?: string[]}, question?: string, intent?: string}} [args] */
 export function buildEvidenceQueries({ company = {}, question = "", intent = classifyResearchIntent(question) } = {}) {
   const names = compactName(company);
   const main = names[0] || company.ticker || "company";
