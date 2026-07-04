@@ -294,7 +294,7 @@ function appendCompareChoice(current, target) {
       prompt: `你是想把 ${cName} 和 ${tName} 做对比，还是改为只研究 ${tName}？`,
       options: [
         { label: `在本对话里对比：${cName} vs ${tName}`, hint: "拉两家真实数据并排比，不跳走", act: "compare", ticker: target.ticker, name: tName, recommended: true },
-        { label: `只研究 ${tName}`, hint: "切换到新公司、开新研究", act: "switch", ticker: target.ticker, name: tName }
+        { label: `只研究 ${tName}`, hint: "切换到新公司、开新研究", act: "switch", ticker: target.ticker, name: tName, recommended: false }
       ]
     }
   });
@@ -311,7 +311,7 @@ function appendDidYouMeanChoice(badTicker, suggestions = []) {
     name: s.name || s.ticker,
     recommended: i === 0
   }));
-  options.push({ label: `仍按 ${badTicker} 研究`, hint: "冷门 / 刚 IPO 的票数据源可能还没收录", act: "force", ticker: badTicker, name: badTicker });
+  options.push({ label: `仍按 ${badTicker} 研究`, hint: "冷门 / 刚 IPO 的票数据源可能还没收录", act: "force", ticker: badTicker, name: badTicker, recommended: false });
   appendMessage("assistant", "", {
     type: "choice",
     choice: {

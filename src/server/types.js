@@ -3,7 +3,7 @@
  *
  * 这些对象在服务端到处流动（agentService → chatOrchestrator → 前端 JSON），
  * 字段是逐次功能迭代里长出来的，从没有一个地方能一眼看全形状。这个文件不是新增行为，
- * 只是把已经存在的隐式契约写成 @typedef，供其他文件 `@param {import("../types.js").X}`
+ * 只是把已经存在的隐式契约写成 JSDoc typedef，供其他文件 `@param {import("../types.js").X}`
  * 引用，换取编辑器补全 + `checkJs` 静态检查（jsconfig.json）。
  *
  * 范围收窄到 D 阶段明确点名的六类跨模块对象：dataSources / valuation / research session /

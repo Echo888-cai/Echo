@@ -206,6 +206,10 @@ export function ensureSessionId() {
 // 乐观插入/更新一条本地 session 到侧栏列表（不等服务端）。转圈靠 renderSessionItem 里的
 // running.has(id)；服务端刷新时按 id 合并、服务端版覆盖乐观版（见 refreshSessions）。
 // 已存在同 id（追问/深研）时保留原标题，只前置 + 标记 optimistic 让它转圈。
+/**
+ * @param {string} id
+ * @param {{company?: {ticker?: string, nameZh?: string}, question?: string, conversationId?: string}} [opts]
+ */
 export function optimisticSession(id, { company, question, conversationId } = {}) {
   const existing = S.recentSessions.find((s) => s.id === id);
   const entry = {
