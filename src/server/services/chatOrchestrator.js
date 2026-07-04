@@ -24,6 +24,10 @@ import { getNewsSnapshot } from "../../newsData.js";
 // 对话内对比：只拉"对比对象"做并排比较真正需要的几项（行情/区间回报/财报/评级），
 // 不跑 news/filings/segments——精简后更快，避免和主公司的全量管道并发争抢时超时拿不到数据
 // （之前用 collectDataSources 全量跑，并发下常超时→对比块为空，模型只能说"未核到对方数据"）。
+/**
+ * @param {{ticker: string, nameZh?: string}} compareWith
+ * @returns {Promise<{ticker: string, name: string, marketSnapshot: import("../types.js").MarketSnapshot, financialsData: import("../types.js").FinancialsData, valuation: import("../types.js").Valuation|null, analyst: Object|null, newsSnapshot: import("../types.js").NewsSnapshot}|null>}
+ */
 export async function buildCompareSummary(compareWith) {
   const company = companyByTicker(compareWith.ticker) || compareWith;
   if (!company?.ticker) return null;
@@ -129,6 +133,11 @@ function comparisonSide({ name, ticker, marketSnapshot, financialsData, valuatio
 // 只用两个可比、可解释的维度下判断：利润质量分（经营确定性）+ 回报风险赔率（当下值不值得买）。
 // 两个维度都指向同一边才敢下"谁更优"的结论；一个维度都缺就诚实说"数据不足，判断不了"——
 // 这是事实锚定护栏（B-1）在对比场景的延伸：不能因为要给结论就在证据不够时硬编一个赢家。
+/**
+ * @param {{name: string, ticker: string, qualityScore: number|null, odds: number|null}} left
+ * @param {{name: string, ticker: string, qualityScore: number|null, odds: number|null}} right
+ * @returns {{winner: "left"|"right"|"tie"|"mixed"|"insufficient", reason: string}}
+ */
 export function judgeComparison(left, right) {
   const hasQuality = Number.isFinite(left.qualityScore) && Number.isFinite(right.qualityScore);
   const hasOdds = Number.isFinite(left.odds) && Number.isFinite(right.odds);
@@ -204,6 +213,10 @@ function buildComparison({ payload, result, valuation, analyst, compareData }) {
 // EA-4 柱2：这一轮该进看盘的候选标的——会话主公司（有面板才算）+ 对比对象 + 对话里
 // 顺带提到、且真拉到 summary（真实数据）的其他持仓。纯函数，不碰 DB，可单测；
 // 实际的"是否已在看盘""写入"留在 finalizeChat 里做（那部分要读写 DB）。
+/**
+ * @param {{portraitTicker?: string, decisionPanel?: Object, companyName?: string, compareData?: {ticker: string, name: string}, otherHoldings?: Array<{company: Object, summary: Object|null}>}} args
+ * @returns {Array<{ticker: string, name: string}>}
+ */
 export function watchCandidatesFrom({ portraitTicker, decisionPanel, companyName, compareData, otherHoldings }) {
   return [
     portraitTicker && decisionPanel
@@ -218,6 +231,11 @@ export function watchCandidatesFrom({ portraitTicker, decisionPanel, companyName
 
 // EA-0：/api/chat 与统一入口 /api/ask 共用的可复用核心；也是 EA-1 工具层
 // researchCompany()/compareCompanies() 的落点。payload 已解析，res 用于 JSON 或 SSE 流式。
+/**
+ * @param {{question?: string, company?: Object, compareWith?: Object, history?: Array<Object>, stream?: boolean, sessionId?: string, conversationId?: string, sessionTitle?: string, plan?: Array<Object>}} payload
+ * @param {import("node:http").ServerResponse} res
+ * @returns {Promise<void>} 非流式路径通过 sendJson 写入 res；流式路径写 SSE，不 return 数据
+ */
 export async function runChat(payload, res) {
   try {
     const question = payload.question || "";
@@ -356,6 +374,7 @@ function lightHoldings(otherHoldings = []) {
 
 // 模型作答之后的统一收口：归一化 → 证据并入面板 → 估值挂载 → 自然语言记账 → 画像回写 →
 // 落库，返回前端要的完整响应对象。流式 / 非流式共用，保证两条路径产物完全一致。
+/** @returns {import("../types.js").ChatFinalResponse} */
 function finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData, otherHoldings, dualQuote }) {
   const question = payload.question || "";
   content = normalizeResearchAnswer(content, result.decisionPanel, result.dataSources);

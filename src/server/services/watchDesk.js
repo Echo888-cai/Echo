@@ -87,8 +87,9 @@ function evaluatedRules(ticker, price) {
 
 /**
  * 为一组公司构建盯盘台。
- * @param {Array} companies [{ ticker, nameZh }]
- * @returns { generatedAt, slot, cards, counts, failures }
+ * @param {Array<{ticker: string, nameZh?: string}>} companies
+ * @param {{slot?: string, events?: boolean}} [opts]
+ * @returns {Promise<{generatedAt: string, slot: string, cards: Array<Object>, counts: Object, failures: Array<Object>}>}
  */
 export async function buildWatchDesk(companies = [], { slot = "premarket", events: withEvents = true } = {}) {
   const universe = companies.slice(0, 30);

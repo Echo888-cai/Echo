@@ -54,8 +54,8 @@ export function inTradingWindow(now = new Date()) {
 
 /**
  * 任务是否到点。
- * @param schedule {kind:"daily", at:"HH:MM"} | {kind:"interval", everyMinutes:N, tradingHoursOnly?:bool}
- * @param lastRunAtIso 上次运行的 ISO 时间（UTC），无则 null
+ * @param {{kind: string, at?: string, everyMinutes?: number, tradingHoursOnly?: boolean}} schedule
+ * @param {string|null} lastRunAtIso 上次运行的 ISO 时间（UTC），无则 null
  */
 export function isDue(schedule, lastRunAtIso, now = new Date()) {
   if (schedule.kind === "daily") {
