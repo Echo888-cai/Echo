@@ -6,6 +6,7 @@ import { findCompany, companyByTicker } from "../../data.js";
 import { runAgent } from "./agentService.js";
 import { runScreener, runMacro } from "./discovery.js";
 import { buildCompareSummary } from "../routes/chat.js";
+import { resolveCompanyFromQuery } from "../routes/companies.js";
 import { researchWebEvidence } from "./webEvidenceService.js";
 
 async function safeRun(fn) {
@@ -19,13 +20,15 @@ async function safeRun(fn) {
 export const agentTools = {
   resolveCompany: {
     name: "resolveCompany",
-    description: "把自由文本/代码解析成已知公司档案（ticker/名称/板块）。",
+    description: "把自由文本/代码解析成已知公司档案（ticker/名称/板块）。先查本地已研究库（零延迟），未命中再走 alias/FMP/Finnhub/LLM 四级解析（与【新建研究】入口一致）。",
     inputSchema: { query: "string" },
     run: ({ query } = {}) =>
-      safeRun(() => {
-        const company = companyByTicker(query) || findCompany(query);
-        if (!company) throw new Error(`未识别公司：${query}`);
-        return company;
+      safeRun(async () => {
+        const local = companyByTicker(query) || findCompany(query);
+        if (local) return local;
+        const resolved = await resolveCompanyFromQuery(query);
+        if (!resolved?.company) throw new Error(`未识别公司：${query}`);
+        return resolved.company;
       })
   },
   researchCompany: {

@@ -407,6 +407,8 @@ function finalizeChat({ payload, result, webEvidence, valuation, analyst, portra
     valuationName: result.decisionPanel?.companyName || payload.company?.nameZh || payload.company?.ticker || null,
     analyst,
     comparison,
+    // EA-2：规划器命中"两标的对比"时回显执行步骤（可解释），前端可选择展示；无规划时为 null。
+    plan: Array.isArray(payload.plan) ? payload.plan : null,
     webEvidence,
     portrait: portrait
       ? { ticker: portraitTicker, created: portrait.created, changed: portrait.changed, turnCount: portrait.profile?.turnCount || 0 }

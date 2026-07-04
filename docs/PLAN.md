@@ -170,7 +170,7 @@ Echo 现在是"**单公司深度问答**"这一形态里做得最扎实的：一
 |------|------|:---:|------|
 | EA-0 | 统一入口 `/api/ask` | ✅ 2026-07-03 | 服务端路由权威 routeAsk(带 company→chat；否则分类 screener·macro)；runChat/runDiscover 抽出复用(EA-1 工具层落点)；前端只改调用 URL、路由逻辑零变更；实测四类分派+SSE final 全通；测试 +12 |
 | EA-1 | 分析框架注册表 + 工具层 ★ | ✅ 2026-07-04 | `src/server/frameworks/index.js` 把 `PROMPTS` 9 个角色框架收敛成 `{id,name,appliesTo,systemPrompt,rubric}` 注册表（systemPrompt/rubric 与迁移前逐字节一致，零行为变更）；`src/server/services/agentTools.js` 包 6 个统一签名工具（resolveCompany/researchCompany/screenStocks/compareCompanies/macroRead/webEvidence，均薄包装已有服务，run() 失败返回 `{status:"error"}` 不抛出）；`chat.js` 的 `buildCompareSummary` 导出供工具层复用；测试 `tests/phase-ea1.mjs` +43，`npm test` 全绿 |
-| EA-2 | 受控规划器 + 问题模板 ★核心 | ⬜ | 会串工具、会挑框架 |
+| EA-2 | 受控规划器 + 问题模板 ★核心 | 🟡 2026-07-04 | `src/server/services/agentPlanner.js` 落地第一类复合问题——"两标的对比"句式（如"英伟达和AMD谁赔率好"）：规则先行识别比较句式 + 拆候选标的 → 逐个 resolveCompany（EA-1 工具层，≤3 步）→ 命中两个不同标的就注入 compareWith，复用既有 runChat/comparison 管道（前端对比表零改动）；ask.js 接入、响应回显 `plan`。已在浏览器实测：本地公司对（腾讯×阿里巴巴）与真实外部标的（英伟达×AMD，经 resolveCompanyFromQuery 网络解析）均正确渲染对比表+模型赔率对比。测试 phase-ea2.mjs +14。**标 🟡 非 ✅**：只覆盖"两标的对比"一类问题模板，"存储芯片选股排序"“还能买吗”这类仍走原有单公司/screener 路径未接入规划器，且暂无模型兜底的 JSON 计划步（纯规则），留待需要时再补 |
 | EA-3 | 深化选股：赛道词典 + 可解释排序 | ⬜ | "值得买"落地 |
 | EA-4 | 对话即容器 + 全标的自动进看盘 | ⬜ | 用户明确要 |
 | EA-5 | 研究前端重设计（对话为中心） | ⬜ | 灵活性在 UI 兑现 |

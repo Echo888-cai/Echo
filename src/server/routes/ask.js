@@ -14,6 +14,7 @@ import { readJsonBody, sendJson } from "../utils/async.js";
 import { runChat } from "./chat.js";
 import { runDiscover } from "./discover.js";
 import { classifyDiscoveryIntent } from "../services/intentClassifier.js";
+import { planCompare } from "../services/agentPlanner.js";
 
 /**
  * 决定一条 /api/ask 请求走哪条路由。纯函数，可单测。
@@ -36,6 +37,24 @@ export async function handleAskApi(req, res) {
     payload = await readJsonBody(req);
   } catch {
     return sendJson(res, 400, { error: "请求体解析失败" });
+  }
+
+  // EA-2：规则优先的受控规划——命中"两标的对比"句式（如"英伟达和 AMD 谁赔率好"）就
+  // 自动补上 compareWith，复用既有公司管道；命中不了原样落回下面的既有路由，零行为变更。
+  if (!payload.compareWith?.ticker) {
+    try {
+      const compare = await planCompare(payload.question, {
+        primaryCompany: payload.company?.ticker ? payload.company : null
+      });
+      if (compare) {
+        payload = {
+          ...payload,
+          company: payload.company?.ticker ? payload.company : compare.primary,
+          compareWith: compare.secondary,
+          plan: compare.plan
+        };
+      }
+    } catch { /* 规划失败静默降级，交给下面既有路由 */ }
   }
 
   const route = routeAsk(payload);
