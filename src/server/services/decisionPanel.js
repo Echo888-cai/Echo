@@ -13,6 +13,7 @@
 import { RESEARCH_STATUS_VALUES, KEY_DRIVER_NAMES, RESEARCH_STATUS_LABELS } from "../schemas/agentPanel.js";
 import { hasUserContext, missingContextFields } from "./userContext.js";
 import { fmtPercent, missing, compactNumberServer, quoteStatusFor } from "../utils/format.js";
+import { buildRiskRadar } from "./riskEngine.js";
 
 const STATUS_PRESENT = "实时/盘中";
 const STATUS_DELAYED = "延迟/当日";
@@ -229,10 +230,13 @@ export function buildDecisionPanel(input) {
     keyDrivers: buildKeyDrivers({ hasPrice, hasFinancials, hasFilings, hasEstimates, newsAvailable, financialsData, marketSnapshot, profile, newsSnapshot, filingsData }),
     connectedData: connected,
     missingData,
-    riskTriggers: (profile.risks || []).slice(0, 3).map((label) => ({
-      label,
-      evidence: [evidence({ source: "公司档案", confidence: "中", missingReason: "来自 seed profile，待公告核验" })]
-    })),
+    // B-4：riskEngine.js 原本是一套没被接进主链路的死代码——真正显示的风险一直只是
+    // profile.risks 原样回显 + 一个万能占位 evidence。改用 buildRiskRadar()，它会用真实
+    // 财务阈值（负债率/FCF/毛利率）+ B-2 的多期趋势（收入/利润连续放缓或拐点）+ 行情波动 +
+    // 新闻负面信号识别风险，每条都带指向具体来源和数字的 evidence，不再是空占位符。
+    riskTriggers: buildRiskRadar(profile, { marketSnapshot, financialsData, newsSnapshot, filingsData })
+      .risks.slice(0, 3)
+      .map((r) => ({ label: r.label, evidence: r.evidence })),
     sources: [
       ...(profile.officialSources || []).slice(0, 4).map((source) => ({ label: source.label, url: source.url, type: "official", timestamp: null })),
       hasPrice ? { label: marketSnapshot.source, url: "", type: "market", timestamp: marketSnapshot.asOf || null } : null,
