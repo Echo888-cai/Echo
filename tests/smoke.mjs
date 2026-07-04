@@ -71,8 +71,12 @@ assert.equal(hasRelativeTime("今天怎么样"), true);
 assert.equal(hasRelativeTime("基本面如何"), false);
 assert.equal(anchorQueryToDate("AAPL news", "AAPL 基本面"), "AAPL news", "无相对时间不改写");
 assert.ok(anchorQueryToDate("AAPL news", "今天 AAPL 怎么样").startsWith(beijingDate()), "相对时间问题改写为绝对日期");
+// B-7 真实搜索引擎实测发现：裸日期前缀（如 "2026-07-04 XPeng"）被 Bing 当年份 token 处理，
+// 挤掉公司相关结果、返回"2026年"通用内容（世界杯赛程/政府工作报告等）。buildEvidenceQueries
+// 面向真实搜索引擎，不应再把 anchorQueryToDate 套在查询文本上（该护栏仍保留给需要绝对日期的
+// 场景，如 LLM 提示词，但不适用于关键词检索）。
 const relQueries = buildEvidenceQueries({ company: { ticker: "AAPL", nameEn: "Apple", nameZh: "苹果" }, question: "今天苹果怎么样" });
-assert.ok(relQueries.every((q) => q.startsWith(beijingDate())), "相对时间问题的所有查询都锚定日期");
+assert.ok(relQueries.every((q) => !q.startsWith(beijingDate())), "面向搜索引擎的查询不应裸日期前缀（会被当年份污染排名）");
 
 // ── FMP 多 Key fallback / 缓存 / 冷却 ──────────────────────────────
 await (async () => {

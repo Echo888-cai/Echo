@@ -17,7 +17,7 @@ import { listCompanyProfiles } from "../repositories/companyProfiles.js";
 import { macroWebEvidence, webEvidenceToPrompt } from "./webEvidenceService.js";
 import { callModel, getProviderStatus } from "./modelGateway.js";
 import { PROMPTS } from "../../prompts.js";
-import { anchorQueryToDate, beijingYear, beijingDate } from "../utils/time.js";
+import { beijingYear, beijingDate } from "../utils/time.js";
 import { withTimeout } from "../utils/async.js";
 
 // ── 筛选条件解析（纯函数） ─────────────────────────────────
@@ -347,9 +347,7 @@ export function buildMacroQueries(question = "") {
         `美股 本周 关键事件 财报 美联储 数据`,
         `S&P 500 Nasdaq outlook catalysts ${year}`
       ];
-  return base
-    .map((q) => anchorQueryToDate(q, question))
-    .filter((q, i, arr) => arr.indexOf(q) === i);
+  return base.filter((q, i, arr) => arr.indexOf(q) === i);
 }
 
 // 指数行情全部走腾讯免费源（无 Key、美/港指数都覆盖；Yahoo v8 无浏览器 UA 会 403）。
