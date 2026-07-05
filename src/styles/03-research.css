@@ -558,6 +558,8 @@
   color: var(--muted);
 }
 .pr-weight strong { color: var(--ink-2); font-weight: 600; }
+.pr-sectors { margin-top: -4px; }
+.pr-sector { opacity: 0.85; }
 .pr-checks {
   margin: 0;
   padding: 0;

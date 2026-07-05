@@ -1,16 +1,20 @@
 /**
- * portfolioReview — 组合体检（P3）：从"单笔持仓"上升到"组合"视角的确定性检查。
+ * portfolioReview — 组合体检（P3 + R5）：从"单笔持仓"上升到"组合"视角的确定性检查。
  *
- * 输入是 routes/portfolio.js enrichPosition 之后的持仓（已带现价/市值/盈亏/距离止损线），
- * 本模块是纯函数：不打网络、不读库，好测。
+ * 输入是 routes/portfolio.js enrichPosition 之后的持仓（已带现价/市值/盈亏/距离止损线/
+ * 行业/证伪规则临近距离/下一业绩日），本模块仍是纯函数：不打网络、不读库，只消费
+ * 调用方已经算好的字段，好测。
  *
  * 检查项（投资纪律视角，最严重的排最前）：
  *   1. 触线未处理：现价已破止损/达止盈
  *   2. 深回撤：相对成本 ≤ -20%
  *   3. 集中度：单一持仓权重 >45% 红 / >30% 黄（跨币种按近似汇率折算，展示级标注）
- *   4. 纪律漏洞：有成本却没设止损的持仓（点名）
- *   5. 逼近止损：距止损 <8%
- *   6. 单一市场满仓：100% 港股或 100% 美股（提示，不算错）
+ *   4. 行业集中度：单一行业权重 >55% 红 / >35% 黄（R5：研究联动，回应"扎堆同一赛道"）
+ *   5. 纪律漏洞：有成本却没设止损的持仓（点名）
+ *   6. 逼近止损：距止损 <8%
+ *   7. 证伪线临近/已越线：活跃证伪规则距现价 <8%（R5：复用 falsifyRules 的 distancePct）
+ *   8. 财报×证伪联动：T-14 内有业绩日且该票有活跃证伪规则（R5）
+ *   9. 单一市场满仓：100% 港股或 100% 美股（提示，不算错）
  *
  * 刻意不做：相关性矩阵/波动率/VaR——个人研究工具阶段，可解释性 >> 学术完备。
  */
@@ -23,7 +27,7 @@ const pct = (x) => Math.round(x * 1000) / 10; // 0.3456 → 34.6
 export function computePortfolioReview(enriched = []) {
   const positions = enriched.filter((p) => p && p.ticker);
   if (!positions.length) {
-    return { positionCount: 0, totals: [], weights: [], marketExposure: {}, checks: [], verdict: "还没有持仓记录。" };
+    return { positionCount: 0, totals: [], weights: [], marketExposure: {}, sectorWeights: [], checks: [], verdict: "还没有持仓记录。" };
   }
 
   // 分币种总额
@@ -60,6 +64,16 @@ export function computePortfolioReview(enriched = []) {
     ? { HK: pct(hkUsd / totalUsd), US: pct((totalUsd - hkUsd) / totalUsd) }
     : {};
 
+  // 行业暴露（R5）：sector 缺失（未研究过的老 ticker、companies 表未覆盖）统一归"未分类"。
+  const bySector = new Map();
+  for (const p of priced) {
+    const key = p.sector || "未分类";
+    bySector.set(key, (bySector.get(key) || 0) + usdValue(p));
+  }
+  const sectorWeights = [...bySector.entries()]
+    .map(([sector, usd]) => ({ sector, weightPct: totalUsd ? pct(usd / totalUsd) : null }))
+    .sort((a, b) => (b.weightPct || 0) - (a.weightPct || 0));
+
   // 纪律检查
   const checks = [];
   for (const p of positions) {
@@ -80,6 +94,14 @@ export function computePortfolioReview(enriched = []) {
   } else if (top?.weightPct > 30) {
     checks.push({ level: "warn", ticker: top.ticker, text: `最大持仓 ${top.name} 占组合 ≈${top.weightPct}%，注意集中度` });
   }
+  // sector 缺失是"没数据"，不是"没有集中度"——只在真正核到行业时才判定，
+  // 否则未研究过的 ticker 会被误判为"100% 集中在未分类"。
+  const topSector = sectorWeights.find((s) => s.sector !== "未分类");
+  if (topSector?.weightPct > 55) {
+    checks.push({ level: "bad", text: `组合 ≈${topSector.weightPct}% 集中在同一赛道「${topSector.sector}」——单一行业逻辑一旦被证伪，多笔持仓会一起受伤` });
+  } else if (topSector?.weightPct > 35) {
+    checks.push({ level: "warn", text: `最大行业暴露「${topSector.sector}」≈${topSector.weightPct}%，注意赛道集中度` });
+  }
   const noStop = positions.filter((p) => p.avgCost != null && p.stopLoss == null);
   if (noStop.length) {
     checks.push({ level: "warn", text: `${noStop.map((p) => p.companyName || p.ticker).join("、")} 没有设止损线——等于没有"我错了就走"的预案` });
@@ -88,6 +110,24 @@ export function computePortfolioReview(enriched = []) {
     if (typeof p.toStopPct === "number" && p.toStopPct > 0 && p.toStopPct < 0.08) {
       checks.push({ level: "warn", ticker: p.ticker, text: `${p.companyName || p.ticker} 距止损仅 ${pct(p.toStopPct)}%，提前想好触发后的动作` });
     }
+  }
+  // 证伪线临近/已越线（R5）：复用 falsifyRules 的 distancePct（正=还有空间，负=已越线）。
+  for (const p of positions) {
+    const rule = p.nearestFalsifierRule;
+    if (!rule) continue;
+    if (rule.triggered) {
+      checks.push({ level: "bad", ticker: p.ticker, text: `${p.companyName || p.ticker} 的证伪条件已越线："${rule.label}"——按纪律复核投资逻辑是否已被推翻` });
+    } else if (Math.abs(rule.distancePct) < 8) {
+      checks.push({ level: "warn", ticker: p.ticker, text: `${p.companyName || p.ticker} 距证伪线仅 ${Math.abs(rule.distancePct).toFixed(1)}%："${rule.label}"` });
+    }
+  }
+  // 财报×证伪联动（R5）：T-14 内有业绩日 + 该票有活跃证伪规则 → 提醒"这些线即将被检验"。
+  for (const p of positions) {
+    if (!p.nextEarnings || p.nextEarnings.daysToEarnings > 14 || !p.falsifierRuleCount) continue;
+    checks.push({
+      level: "info", ticker: p.ticker,
+      text: `${p.companyName || p.ticker} 财报临近（T-${p.nextEarnings.daysToEarnings}，${p.nextEarnings.date}），${p.falsifierRuleCount} 条证伪条件将被检验`
+    });
   }
   if (positions.length >= 2 && (marketExposure.HK === 100 || marketExposure.US === 100)) {
     checks.push({ level: "info", text: `组合 100% 集中在${marketExposure.HK === 100 ? "港股" : "美股"}单一市场（提示，不是错误）` });
@@ -102,5 +142,13 @@ export function computePortfolioReview(enriched = []) {
       ? `无红线，但有 ${warn.length} 项值得注意：${warn[0].text.split("——")[0]}${warn.length > 1 ? " 等" : ""}。`
       : "组合纪律检查全部通过：无触线、无深回撤、集中度可控、止损线齐备。";
 
-  return { positionCount: positions.length, totals, weights: weights.slice(0, 8), marketExposure, checks, verdict };
+  return {
+    positionCount: positions.length,
+    totals,
+    weights: weights.slice(0, 8),
+    marketExposure,
+    sectorWeights: sectorWeights.slice(0, 6),
+    checks,
+    verdict
+  };
 }

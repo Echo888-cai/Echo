@@ -155,7 +155,7 @@ async function runFalsifyWatchJob() {
         title: `${ticker} 证伪条件命中：${rule.label}`,
         body: `现价 ${price}，触发线 ${rule.threshold}（${rule.kind === "price_below" ? "跌破" : "涨破"}）。这是你研究时自己定的证伪条件——按纪律复核投资逻辑是否已被推翻。`,
         ticker,
-        payload: { ruleId: rule.id, price, threshold: rule.threshold, kind: rule.kind },
+        payload: { ruleId: rule.id, price, threshold: rule.threshold, kind: rule.kind, sessionId: rule.sessionId || null },
         dedupeKey: `falsify:${ticker}:${rule.id}`,
         dedupeWindowHours: 24
       });

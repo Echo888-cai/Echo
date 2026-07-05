@@ -158,7 +158,7 @@ check("JOBS 注册表完整（4 个内置任务）", () => {
 
 console.log("\n[5] 证伪规则解析（宁可漏，不可错）");
 const { parseFalsifierRule, parseFalsifierRules, evaluateRule } = await import("../src/server/services/falsifyRules.js");
-const { replaceFalsifierRules, listRules } = await import("../src/server/repositories/watchRules.js");
+const { replaceFalsifierRules, listRules, listAllActiveRules } = await import("../src/server/repositories/watchRules.js");
 
 check("明确的价格条件 → 解析成规则", () => {
   assert.deepEqual(parseFalsifierRule("股价跌破 90 美元"), { kind: "price_below", threshold: 90, label: "股价跌破 90 美元" });
@@ -263,6 +263,16 @@ check("watchRules 仓库：整组重建幂等", () => {
   assert.equal(rules[0].threshold, 85);
 });
 
+check("watchRules 仓库：session_id 随规则落库并原样透出（P2 通知回链依赖这条）", () => {
+  replaceFalsifierRules("TEST.SESS", [{ kind: "price_below", threshold: 42, label: "跌破 42" }], { sessionId: "sess-abc-123" });
+  const rules = listRules("TEST.SESS");
+  assert.equal(rules.length, 1);
+  assert.equal(rules[0].sessionId, "sess-abc-123");
+  const mine = listAllActiveRules().find((r) => r.ticker === "TEST.SESS");
+  assert.ok(mine, "listAllActiveRules 应包含该规则（scheduler 巡检读这张表）");
+  assert.equal(mine.sessionId, "sess-abc-123");
+});
+
 console.log("\n[6] 组合体检（P3，纯函数）");
 const { computePortfolioReview } = await import("../src/server/services/portfolioReview.js");
 
@@ -310,6 +320,61 @@ check("单市场满仓只提示不报错", () => {
     marketValue: 1000, costValue: 950, unrealizedPnl: 50, returnPct: 0.053, stopLoss: 80, toStopPct: 0.2 });
   const r = computePortfolioReview([mk("AAPL"), mk("MSFT")]);
   assert.ok(r.checks.some((c) => c.level === "info" && c.text.includes("美股")));
+});
+
+console.log("\n[7] 组合体检 R5：行业集中度 + 证伪临近 + 财报×证伪联动");
+
+check("行业集中度：3 只同赛道 >55% 触红线；sector 缺失（未分类）不误判", () => {
+  const mk = (t, sector) => ({ ticker: t, companyName: t, currency: "USD", currentPrice: 100, avgCost: 95, shares: 10,
+    marketValue: 1000, costValue: 950, unrealizedPnl: 50, returnPct: 0.053, stopLoss: 80, toStopPct: 0.2, sector });
+  const r = computePortfolioReview([mk("A", "科技"), mk("B", "科技"), mk("C", "科技"), mk("D", "医疗健康")]);
+  const text = r.checks.map((c) => c.text).join("｜");
+  assert.ok(text.includes("科技") && text.includes("赛道"), `应点名行业集中度：${text}`);
+  assert.ok(r.checks.some((c) => c.level === "bad" && c.text.includes("科技")));
+  assert.deepEqual(r.sectorWeights.map((s) => s.sector), ["科技", "医疗健康"]);
+});
+
+check("行业集中度：全部 sector 缺失时不误判为 100% 未分类", () => {
+  const mk = (t) => ({ ticker: t, companyName: t, currency: "USD", currentPrice: 100, avgCost: 95, shares: 10,
+    marketValue: 1000, costValue: 950, unrealizedPnl: 50, returnPct: 0.053, stopLoss: 80, toStopPct: 0.2 });
+  const r = computePortfolioReview([mk("A"), mk("B"), mk("C")]);
+  assert.ok(!r.checks.some((c) => c.text.includes("未分类")), "sector 未知不该产出行业集中度检查");
+});
+
+check("证伪临近：距证伪线 <8% → warn；已越线 → bad", () => {
+  const near = { ticker: "NEAR", companyName: "近线", currency: "USD", currentPrice: 100, avgCost: 100, shares: 10,
+    marketValue: 1000, costValue: 1000, unrealizedPnl: 0,
+    nearestFalsifierRule: { ruleId: 1, label: "跌破 95", kind: "price_below", threshold: 95, distancePct: 5, triggered: false } };
+  const breached = { ticker: "OVER", companyName: "已越线", currency: "USD", currentPrice: 100, avgCost: 100, shares: 10,
+    marketValue: 1000, costValue: 1000, unrealizedPnl: 0,
+    nearestFalsifierRule: { ruleId: 2, label: "跌破 110", kind: "price_below", threshold: 110, distancePct: -10, triggered: true } };
+  const r = computePortfolioReview([near, breached]);
+  const text = r.checks.map((c) => c.text).join("｜");
+  assert.ok(text.includes("距证伪线仅") && text.includes("跌破 95"), `应点名临近证伪线：${text}`);
+  assert.ok(text.includes("已越线") && text.includes("跌破 110"), `应点名已越线：${text}`);
+  assert.ok(r.checks.some((c) => c.ticker === "OVER" && c.level === "bad"));
+  assert.ok(r.checks.some((c) => c.ticker === "NEAR" && c.level === "warn"));
+});
+
+check("财报×证伪联动：T-14 内有业绩日 + 有活跃证伪规则 → 提醒条数", () => {
+  const p = { ticker: "EARN", companyName: "临财报", currency: "USD", currentPrice: 100, avgCost: 100, shares: 10,
+    marketValue: 1000, costValue: 1000, unrealizedPnl: 0,
+    falsifierRuleCount: 2, nextEarnings: { date: "2099-01-01", daysToEarnings: 5 } };
+  const r = computePortfolioReview([p]);
+  const text = r.checks.map((c) => c.text).join("｜");
+  assert.ok(text.includes("财报临近") && text.includes("T-5") && text.includes("2 条证伪条件将被检验"), `应联动财报与证伪：${text}`);
+  assert.ok(r.checks.some((c) => c.ticker === "EARN" && c.level === "info"));
+});
+
+check("财报×证伪联动：超出 T-14 或没有证伪规则时不提醒", () => {
+  const far = { ticker: "FAR", companyName: "远财报", currency: "USD", currentPrice: 100, avgCost: 100, shares: 10,
+    marketValue: 1000, costValue: 1000, unrealizedPnl: 0,
+    falsifierRuleCount: 1, nextEarnings: { date: "2099-06-01", daysToEarnings: 40 } };
+  const noRules = { ticker: "NORULE", companyName: "无规则", currency: "USD", currentPrice: 100, avgCost: 100, shares: 10,
+    marketValue: 1000, costValue: 1000, unrealizedPnl: 0,
+    falsifierRuleCount: 0, nextEarnings: { date: "2099-01-01", daysToEarnings: 3 } };
+  const r = computePortfolioReview([far, noRules]);
+  assert.ok(!r.checks.some((c) => c.text.includes("财报临近")), "T-14 外或无证伪规则不该产出联动提醒");
 });
 
 console.log(`\nResults: ${pass} passed, ${fail} failed.`);

@@ -90,6 +90,9 @@ function renderPortfolioReview(review) {
   const weights = (review.weights || []).slice(0, 5).map((w) =>
     `<span class="pr-weight">${esc(w.name)} <strong>≈${w.weightPct}%</strong></span>`
   ).join("");
+  const sectorWeights = (review.sectorWeights || []).slice(0, 5).map((s) =>
+    `<span class="pr-weight pr-sector">${esc(s.sector)} <strong>≈${s.weightPct}%</strong></span>`
+  ).join("");
   const checks = (review.checks || []).map((c) => {
     const meta = LEVEL[c.level] || LEVEL.info;
     return `<li class="${meta.cls}"><span>${meta.icon}</span>${esc(c.text)}</li>`;
@@ -101,6 +104,7 @@ function renderPortfolioReview(review) {
     ${totals ? `<div class="pr-totals">${totals}</div>` : ""}
     ${expBar}
     ${weights ? `<div class="pr-weights">${weights}</div>` : ""}
+    ${sectorWeights ? `<div class="pr-weights pr-sectors">${sectorWeights}</div>` : ""}
     ${checks ? `<ul class="pr-checks">${checks}</ul>` : ""}
   </div>`;
 }
