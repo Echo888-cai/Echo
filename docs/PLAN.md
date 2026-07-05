@@ -183,6 +183,7 @@ Echo 已经是一个能自圆其说的单机研究终端：统一入口 `/api/as
 | D1…D3 | 全量 JSDoc/checkJs 0 error（抓到 `hasPrice` 除数 bug）、`user_version` 迁移器 + 001_init.sql、chat 编排内化 `chatOrchestrator.js` | 2026-07-04 ~ 05 |
 | C1（部分） | 375px 整页横向溢出阻断 bug 修复（`.sidebar`/`.desk` 补 `min-width:0`） | 2026-07-05 |
 | E5 + G-1 | typecheck 进 CI；`npm run canary`（真实数据 canary：行情/财报/新闻/公告/网页证据/港股一手 filing/估值链路，落 `canary_runs`）；`npm run hk-coverage`（654 支港股增量覆盖率扫描，留痕 `hk_filing_ingest_log`）；doctor 补 python3/pdfminer 检查；设置页数据健康面板（每源最近成功/失败原因 + HK filing 覆盖率与失败清单） | 2026-07-05 |
+| G-1.5 | HKEX filings 抓取改用真实端点：`filingData.js` 的 HK 公告列表此前打的是一个 JS 渲染的页面壳（`titlesearch.xhtml`，正文里没有数据）+ Bing 兜底，两条路永远拿不到数据；改为复用 `hkFilingsPipeline.js` 已验证有效的 `titleSearchServlet` 端点（新增 `searchHkexAllAnnouncements`/`parseGeneralAnnouncements`，不限"业绩"标题、不限 PDF）。0700/9988/9868/1299（AIA）/0005（HSBC）真实验证均返回真实公告；canary 的 `filings` 探测项从 △ 转 ✓ | 2026-07-05 |
 
 ### 待办（本计划，待对齐）
 
@@ -193,7 +194,6 @@ Echo 已经是一个能自圆其说的单机研究终端：统一入口 `/api/as
 | — | 第二程：R5 组合联动 / R3 数字级护栏 / E4 llm_audit / P2 通知回链 | ⬜ | G 轨完成后再对齐取舍 |
 | — | P3 级：研究历史 FTS 检索 / C1 余项+C2 PWA / E6 缓存统一 / E7 名单可配置 | ⬜ | 记录在案，等时机 |
 | — | P4 级：onboarding；远期：R6 指引结构化 / EA-6 / P8 | ⬜ | 明确缓做，条件见 §3 |
-| — | HK filings 抓取用了错的 HKEX 端点（filingData.js 的公告列表，非估值用的一手 filing 管道），已拆分成独立任务跟进 | ⬜ | G-1 canary 实测发现：`titlesearch.xhtml` 是纯前端渲染壳，正文里没有 `<tr class="row">`；`hkFilingsPipeline.js` 的 `searchHkexResultsAnnouncements` 走的是真正的数据接口，可复用 |
 
 ---
 
@@ -203,7 +203,7 @@ Echo 已经是一个能自圆其说的单机研究终端：统一入口 `/api/as
 npm install                 # 只有 better-sqlite3 一个原生依赖
 npm run seed                # 建/重置本地 SQLite 种子库
 npm run dev                 # http://127.0.0.1:4173
-npm test                    # 410 用例，必须全绿（EXIT=0）再提交
+npm test                    # 415 用例，必须全绿（EXIT=0）再提交
 npm run lint                # eslint（correctness 级）
 npm run typecheck           # tsc 全量 0 error（D1 成果，现已进 CI，勿回潮）
 npm run doctor              # 能力体检；--live 才发网络探活

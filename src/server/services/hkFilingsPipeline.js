@@ -48,7 +48,11 @@ async function fetchText(url, timeoutMs = 10000) {
   }
 }
 
-async function lookupStockId(ticker) {
+/**
+ * ticker → HKEX 内部 stockId（G-1.5：导出供 filingData.js 的通用公告列表复用，
+ * 不再各自维护一套 stockId 查找逻辑）。
+ */
+export async function lookupStockId(ticker) {
   const code = normalizeTicker(ticker).replace(".HK", "");
   if (stockIdCache.has(code)) return stockIdCache.get(code);
   const text = await fetchText(
@@ -109,6 +113,49 @@ export function parseHkexSearchResult(raw) {
     .filter((r) => r.url && /PDF/i.test(r.fileType))
     .filter((r) => /業績|业绩|RESULTS ANNOUNCEMENT/i.test(r.title) && !NOISE_TITLE.test(r.title))
     .sort((a, b) => (b.publishedAt || "").localeCompare(a.publishedAt || ""));
+}
+
+/**
+ * titleSearchServlet 响应 → 全类型公告清单（纯函数，G-1.5）。
+ * 与 parseHkexSearchResult 的区别：不限 PDF 文件类型、不限"业绩"标题——这是给
+ * filingData.js 的通用"公告数据"模块用的，需要看到全部披露（翌日披露表/股权变动/
+ * 公告通函等），而不只是业绩公告。只要求有可点击的 URL。
+ */
+export function parseGeneralAnnouncements(raw) {
+  let rows = [];
+  if (typeof raw?.result === "string") {
+    try { rows = JSON.parse(raw.result); } catch { rows = []; }
+  } else if (Array.isArray(raw?.result)) {
+    rows = raw.result;
+  }
+  return rows
+    .map((r) => ({
+      title: decodeHtmlEntities(r.TITLE || ""),
+      filingType: decodeHtmlEntities(r.LONG_TEXT || r.SHORT_TEXT || ""),
+      publishedAt: parseHkexDateTime(r.DATE_TIME),
+      url: r.FILE_LINK ? (r.FILE_LINK.startsWith("http") ? r.FILE_LINK : `${HKEX_BASE}${r.FILE_LINK}`) : ""
+    }))
+    .filter((r) => r.url)
+    .sort((a, b) => (b.publishedAt || "").localeCompare(a.publishedAt || ""));
+}
+
+/**
+ * 最近一年全类型公告（新→旧），供 filingData.js 的 getRecentFilings 使用（G-1.5）。
+ * 复用与 searchHkexResultsAnnouncements 相同的真实 titleSearchServlet 端点——此前
+ * filingData.js 自己另开了一条路（HTML 抓取一个 JS 渲染的页面壳 + Bing 兜底），
+ * 那条路永远拿不到数据，属于"看起来有降级路径、实际上永久 missing"的隐藏 bug。
+ */
+export async function searchHkexAllAnnouncements(ticker, { rowRange = 30, yearsBack = 1 } = {}) {
+  const stockId = await lookupStockId(ticker);
+  const now = new Date();
+  const to = now.toISOString().slice(0, 10).replace(/-/g, "");
+  const from = `${now.getFullYear() - yearsBack}0101`;
+  const url =
+    `${HKEX_BASE}/search/titleSearchServlet.do?sortDir=0&sortByOptions=DateTime&category=0&market=SEHK` +
+    `&stockId=${stockId}&documentType=-1&fromDate=${from}&toDate=${to}` +
+    `&title=&searchType=1&t1code=-2&t2Gcode=-2&t2code=-2&rowRange=${rowRange}&lang=zh`;
+  const raw = JSON.parse(await fetchText(url, 12000));
+  return parseGeneralAnnouncements(raw);
 }
 
 /** 最近两年的业绩公告列表（新→旧）。 */
