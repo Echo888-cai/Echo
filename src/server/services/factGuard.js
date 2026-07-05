@@ -228,8 +228,18 @@ function extractNumbers(text) {
   const claim = (start, end) => consumed.push([start, end]);
   const candidates = [];
 
-  for (const m of text.matchAll(/([-+]?\d+(?:\.\d+)?)\s*%/g)) {
-    candidates.push({ dimension: "percent", value: Number(m[1]), raw: m[0], index: m.index });
+  // 负号前用 (?<![\d.]) 卡住："220-250 美元"这类区间写法里的连字符不是负号——不加这个
+  // 判断会把 "-250" 当成负数抓出来，跟正数事实符号相反直接误判 hard（真实实测抓到过）。
+  for (const m of text.matchAll(/(?<![\d.])([-+]?\d+(?:\.\d+)?)\s*%/g)) {
+    let value = Number(m[1]);
+    // 中文财经写作常用"下滑/下降 10.9%"表达降幅，不写负号（真实实测抓到：小米"收入同比
+    // 下滑10.9%"被当成正数跟事实里的 -10.9 符号相反误判 hard）。数字本身没带正负号时，
+    // 看紧邻前面的词是不是"降/减/跌/滑/收窄/放缓"这类，是就按语义当负数处理。
+    if (!/^[-+]/.test(m[1])) {
+      const before = text.slice(Math.max(0, m.index - 6), m.index);
+      if (/(下滑|下降|下跌|减少|降低|收窄|走低|回落|放缓|亏损扩大|转负|缩水|萎缩)$/.test(before)) value = -Math.abs(value);
+    }
+    candidates.push({ dimension: "percent", value, raw: m[0], index: m.index });
     claim(m.index, m.index + m[0].length);
   }
   for (const m of text.matchAll(/(\d+(?:\.\d+)?)\s*[xX倍]/g)) {
@@ -252,7 +262,7 @@ function extractNumbers(text) {
     candidates.push({ dimension: "date", year: Number(m[1]), quarter, precision: "quarter", raw: m[0], index: m.index });
     claim(m.index, m.index + m[0].length);
   }
-  for (const m of text.matchAll(/(-?\d+(?:\.\d+)?)\s*(万亿|亿|万)(港元|美元|人民币|HKD|USD|CNY|元)?/g)) {
+  for (const m of text.matchAll(/(?<![\d.])(-?\d+(?:\.\d+)?)\s*(万亿|亿|万)(港元|美元|人民币|HKD|USD|CNY|元)?/g)) {
     if (!isFree(m.index, m.index + m[0].length)) continue;
     // "3451万股"是股数不是金额——真实回答实测抓到过（腾讯回购新闻"连续32日回购，累计
     // 回购3451.51万股"），不排除会把股数当成金额去跟估值/收入比对，数量级差几十万倍
@@ -265,7 +275,7 @@ function extractNumbers(text) {
   }
   // 裸数字（无单位）：必须有相邻货币标签或财务关键词窗口命中才算候选，否则大量误报
   // （"3 家同业""T-5""第 1 条"这类非财务数字）。
-  for (const m of text.matchAll(/(-?\d+(?:\.\d+)?)/g)) {
+  for (const m of text.matchAll(/(?<![\d.])(-?\d+(?:\.\d+)?)/g)) {
     if (!isFree(m.index, m.index + m[0].length)) continue;
     const before = text.slice(Math.max(0, m.index - 10), m.index);
     const after = text.slice(m.index + m[0].length, m.index + m[0].length + 6);
