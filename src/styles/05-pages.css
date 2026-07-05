@@ -382,6 +382,17 @@
   font-weight: 600;
 }
 
+/* G-1：数据源健康面板——canary/覆盖率行的语气色，不新增布局，只叠一层颜色 */
+.setting-row.is-degraded strong { color: var(--amber); }
+.setting-row.is-down strong { color: var(--danger); }
+
+.setting-sub {
+  padding: 0 0 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 .doc-link {
   display: inline-flex;
   margin-top: 14px;

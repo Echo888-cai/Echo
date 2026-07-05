@@ -18,7 +18,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeTicker } from "../../data.js";
 import { isUS } from "../../market.js";
-import { upsertHkFinancials, hasHkFinancialsForUrl } from "../repositories/hkFinancialsRepository.js";
+import { upsertHkFinancials, hasHkFinancialsForUrl, upsertHkFilingIngestLog } from "../repositories/hkFinancialsRepository.js";
 import { addDocument } from "../repositories/documentRepository.js";
 
 const execFileAsync = promisify(execFile);
@@ -501,7 +501,13 @@ async function extractPdfText(pdfPath) {
 export async function ingestHkFinancials(ticker, { limit = 3, force = false } = {}) {
   const t = normalizeTicker(ticker);
   if (isUS(t)) throw new Error(`${t} 是美股，港股管道不适用`);
-  const announcements = await searchHkexResultsAnnouncements(t);
+  let announcements;
+  try {
+    announcements = await searchHkexResultsAnnouncements(t);
+  } catch (error) {
+    logIngestOutcome({ ticker: t, status: "search_failed", detail: error.message || String(error) });
+    throw error;
+  }
   const result = { ticker: t, ingested: [], skipped: [], errors: [] };
 
   for (const item of announcements.slice(0, limit)) {
@@ -573,7 +579,29 @@ export async function ingestHkFinancials(ticker, { limit = 3, force = false } = 
       result.errors.push(`${item.title}: ${error.message}`);
     }
   }
+  logIngestOutcome({
+    ticker: t,
+    status: classifyIngestStatus(announcements, result),
+    detail: result.errors[0] || (announcements.length === 0 ? "HKEX 未搜到业绩公告（可能新上市/停牌/退市/代码库有误）" : null),
+    announcementsFound: announcements.length,
+    ingestedCount: result.ingested.length
+  });
   return result;
+}
+
+/**
+ * 摄取结果 → 覆盖率面板用的粗粒度状态（纯函数，供单测覆盖）。
+ * ok：本次或此前已有至少一条一手数据；no_announcements：HKEX 侧真没有公告；
+ * parse_failed：搜到公告但一条都没抽出来（下载/PDF 解析/护栏拒收）。
+ */
+export function classifyIngestStatus(announcements, result) {
+  if (result.ingested.length > 0 || result.skipped.length > 0) return "ok";
+  if (announcements.length === 0) return "no_announcements";
+  return "parse_failed";
+}
+
+function logIngestOutcome(entry) {
+  try { upsertHkFilingIngestLog(entry); } catch { /* 留痕失败不影响摄取结果本身 */ }
 }
 
 // ─── hk_financials 行 → financialsData 形状（纯函数） ────────────────
