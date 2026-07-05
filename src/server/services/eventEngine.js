@@ -22,10 +22,11 @@
 
 import { getNewsSnapshot } from "../../newsData.js";
 import { getMarketSnapshot } from "../../marketData.js";
-import { fmpGet, FMP_TTL } from "../../fmpClient.js";
-import { fmpSymbol, detectMarket, bareSymbol } from "../../market.js";
+import { detectMarket, bareSymbol } from "../../market.js";
 import { beijingDate } from "../utils/time.js";
 import { getPosition } from "../repositories/portfolio.js";
+import { getNextEarnings } from "./earningsCalendar.js";
+import { listRules } from "../repositories/watchRules.js";
 
 // 1. 律所/股东诉讼广告反模板 → 强制丢弃（PR wire 噪音，不是公司事件）。
 const LEGAL_AD_PATTERNS = [
@@ -103,34 +104,37 @@ const DEFAULT_PREFS = {
 };
 
 /**
- * 拉取单个 ticker 的财报临近事件。
- * @returns {Promise<{ event: object|null, status: "ok"|"empty"|"error", reason?: string }>}
+ * 拉取单个 ticker 的"下一业绩日"（Finnhub，港股经 ADR 映射），并在临近 T-14 内
+ * 产出提醒事件；临近且该 ticker 有活跃证伪规则时，标注"N 条证伪条件将被检验"。
+ * @returns {Promise<{ event: object|null, status: "ok"|"empty"|"error", reason?: string, earnings: object|null }>}
  */
 async function fetchEarningsEvent(company) {
-  const symbol = fmpSymbol(company.ticker);
-  let rows;
+  let info;
   try {
-    rows = await fmpGet("/stable/earnings", { symbol, limit: 8 }, { ttl: FMP_TTL.estimates, timeoutMs: 5000 });
+    info = await getNextEarnings(company.ticker);
   } catch (error) {
-    return { event: null, status: "error", reason: error.message || "财报日历请求失败" };
+    return { event: null, status: "error", reason: error.message || "财报日历请求失败", earnings: null };
   }
+  if (info.providerStatus === "error") return { event: null, status: "error", reason: info.detail, earnings: null };
+  if (info.providerStatus !== "ok" || !info.nextDate) return { event: null, status: "empty", earnings: info };
+
   const today = beijingDate();
-  const upcoming = (Array.isArray(rows) ? rows : [])
-    .map((r) => r.date || r.fiscalDateEnding || "")
-    .filter((d) => d && d >= today)
-    .sort()[0];
-  if (!upcoming) return { event: null, status: "empty" };
-  const days = Math.round((new Date(upcoming).getTime() - new Date(today).getTime()) / 86400000);
-  if (days > 14) return { event: null, status: "empty" }; // 只在 T-14 内提醒
+  if (info.nextDate < today) return { event: null, status: "empty", earnings: info };
+  const days = Math.round((new Date(info.nextDate).getTime() - new Date(today).getTime()) / 86400000);
+  if (days > 14) return { event: null, status: "empty", earnings: info }; // 事件流只在 T-14 内提醒，earnings 字段本身不受此限制
+
+  const activeRules = listRules(company.ticker).length;
+  const rulesNote = activeRules ? `，${activeRules} 条证伪条件将被检验` : "";
   return {
     status: "ok",
+    earnings: info,
     event: {
       kind: "earnings",
       ticker: company.ticker,
       companyName: company.nameZh || company.ticker,
       severity: days <= 3 ? "high" : "medium",
-      title: `${company.nameZh || company.ticker} 财报临近：${upcoming}（T-${days}）`,
-      date: upcoming,
+      title: `${company.nameZh || company.ticker} 财报临近：${info.nextDate}（T-${days}）${rulesNote}`,
+      date: info.nextDate,
       url: ""
     }
   };
@@ -219,7 +223,7 @@ function eventKey(e) {
 
 /**
  * 为单家公司收集事件，并返回明确状态（错误不再被静默吞掉）。
- * @returns {Promise<{ ticker: string, companyName: string, market: string, status: "ok"|"empty"|"error", reasons: string[], events: object[] }>}
+ * @returns {Promise<{ ticker: string, companyName: string, market: string, status: "ok"|"empty"|"error", reasons: string[], events: object[], earnings: object|null }>}
  */
 async function collectCompanyEvents(company, cfg) {
   const ticker = company.ticker;
@@ -240,8 +244,8 @@ async function collectCompanyEvents(company, cfg) {
 
   let errored = false;
   if (earnings.status === "error") { errored = true; reasons.push(`财报日历抓取失败：${earnings.reason}`); }
-  else if (earnings.status === "empty" && market === "HK") {
-    reasons.push("港股财报日历暂缺（FMP 免费档不覆盖），本轮只盯新闻与持仓纪律");
+  else if (earnings.earnings?.providerStatus === "missing" && market === "HK") {
+    reasons.push(earnings.earnings.detail || "港股财报日历暂缺，本轮只盯新闻与持仓纪律");
   }
   if (news.status === "error") { errored = true; reasons.push(`新闻抓取失败：${news.reason}`); }
 
@@ -264,7 +268,7 @@ async function collectCompanyEvents(company, cfg) {
   else if (!kept.length) status = "empty";
   else status = "ok";
 
-  return { ticker, companyName, market, status, reasons, events: kept };
+  return { ticker, companyName, market, status, reasons, events: kept, earnings: earnings.earnings || null };
 }
 
 /**

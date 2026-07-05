@@ -21,6 +21,8 @@ const { getRecentFilings } = await import("../src/filingData.js");
 const { researchWebEvidence } = await import("../src/server/services/webEvidenceService.js");
 const { computeValuation } = await import("../src/server/services/valuationEngine.js");
 const { ingestHkFinancials } = await import("../src/server/services/hkFilingsPipeline.js");
+const { getNextEarnings } = await import("../src/server/services/earningsCalendar.js");
+const { getComparableCompanies } = await import("../src/server/services/compPeers.js");
 const { getCompanyByTicker } = await import("../src/db/index.js");
 const { isUS } = await import("../src/market.js");
 const { insertCanaryResult } = await import("../src/server/repositories/canaryRepository.js");
@@ -84,6 +86,22 @@ async function probeHkFiling(ticker) {
   return { status: "missing", detail: result.errors[0] || "HKEX 未搜到业绩公告" };
 }
 
+async function probeEarnings(ticker) {
+  const result = await getNextEarnings(ticker);
+  if (result.providerStatus === "error") return { status: "error", detail: result.detail };
+  if (result.providerStatus === "missing") return { status: "missing", detail: result.detail || "无未来财报日" };
+  return { status: "ok", detail: `${result.source}：下一业绩日 ${result.nextDate}${result.stale ? "（缓存）" : ""}` };
+}
+
+async function probeCompPeers(ticker) {
+  const result = await getComparableCompanies(ticker);
+  if (result.providerStatus === "error") return { status: "error", detail: result.detail };
+  if (result.providerStatus === "missing") return { status: "missing", detail: result.detail || "未核到同业" };
+  const partialTag = result.partial ? "（部分 peer 超时/不可用）" : "";
+  const anchorTag = result.anchor ? `锚点 ${result.anchor.multipleType} ${result.anchor.n} 家` : "无锚点（同业不足 2 家）";
+  return { status: result.partial ? "partial" : "ok", detail: `${result.peers.length} 家同业，${anchorTag}${partialTag}` };
+}
+
 async function probeValuation(ticker, market, financials) {
   const company = companyFor(ticker);
   const val = computeValuation(company, market, financials);
@@ -99,6 +117,8 @@ for (const ticker of TICKERS) {
   const financials = await probe("financials", ticker, () => probeFinancials(ticker));
   const news = await probe("news", ticker, () => probeNews(ticker));
   const filings = await probe("filings", ticker, () => probeFilings(ticker));
+  const earnings = await probe("earnings", ticker, () => probeEarnings(ticker));
+  const compPeers = await probe("comp_peers", ticker, () => probeCompPeers(ticker));
   const webEvidence = await probe("web_evidence", ticker, () => probeWebEvidence(ticker));
   const valuation = await probe("valuation", ticker, async () => {
     // 复用上面已经拉到的真实 snapshot，不重复请求；估值链路本身是本地计算，
@@ -107,13 +127,13 @@ for (const ticker of TICKERS) {
     const fin = await getFinancials(ticker);
     return probeValuation(ticker, marketSnap, fin);
   });
-  const results = [market, financials, news, filings, webEvidence, valuation];
+  const results = [market, financials, news, filings, earnings, compPeers, webEvidence, valuation];
   if (!isUS(ticker)) results.push(await probe("hk_filing", ticker, () => probeHkFiling(ticker)));
   rows.push(...results);
 
   console.log(`${ticker}`);
   for (const r of results) {
-    const mark = r.status === "ok" ? "✓" : r.status === "missing" ? "△" : "✗";
+    const mark = r.status === "ok" ? "✓" : r.status === "partial" ? "◐" : r.status === "missing" ? "△" : "✗";
     console.log(`  ${mark} ${r.source.padEnd(12)} ${r.detail}`);
   }
 }

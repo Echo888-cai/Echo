@@ -3,23 +3,84 @@
 // compareCompanies 直接复用这里的 buildCompareSummary，不再反向依赖路由层。
 import { sendJson, withTimeout } from "../utils/async.js";
 import { runAgent } from "./agentService.js";
-import { getProviderStatus } from "./modelGateway.js";
+import { getProviderStatus, callModel } from "./modelGateway.js";
+import { buildFactsRegistry, verifyAnswerNumbers, buildSoftNote, summarizeVerdict, renderHardFailIssues } from "./factGuard.js";
 import { companyByTicker } from "../../data.js";
 import { saveResearchSession } from "../repositories/researchSessions.js";
 import { classifyResearchIntent } from "./intentClassifier.js";
 import { researchWebEvidence } from "./webEvidenceService.js";
 import { researchReplyFromPanel, normalizeResearchAnswer, mergeEvidenceIntoPanel } from "./answerComposer.js";
 import { displayValuation } from "./valuationEngine.js";
+import { getComparableCompanies } from "./compPeers.js";
+import { getNextEarnings } from "./earningsCalendar.js";
 import { computeFinancialQuality } from "./financialQuality.js";
 import { PROMPTS } from "../../prompts.js";
 import { loadPortraitContext, updatePortraitFromPanel } from "./companyPortrait.js";
 import { addToWatch, getHiddenTickers, listWatchAdds } from "../repositories/watchlist.js";
 import { runTwoStageChat, runTwoStageChatStream } from "./twoStageChat.js";
-import { upsertPosition } from "../repositories/portfolio.js";
+import { upsertPosition, getPosition } from "../repositories/portfolio.js";
 import { extractOtherHoldings } from "./entityExtractor.js";
 import { getMarketSnapshot, getRangeReturns } from "../../marketData.js";
 import { getFinancials, getAnalystEstimates } from "../../financialData.js";
 import { getNewsSnapshot } from "../../newsData.js";
+
+// R3：数字级防幻觉护栏的开关，三档递进上线，默认最保守（shadow：只打日志，不改变任何
+// 用户可见输出）。方案定的节奏是先用真实问题跑 shadow 调阈值，再开 soft（低调提示，不拦截），
+// 最后才开 full（hard-fail 触发一次定向重答，仍不过就确定性降级）——不是一次性开关。
+const FACT_GUARD_MODE = (process.env.FACT_GUARD_MODE || "shadow").toLowerCase();
+
+/** hard-fail 触发的一次定向重答：只允许模型改数字，不允许改结论方向或新增内容。 */
+async function repairHardFails({ content, verdict }) {
+  const issues = renderHardFailIssues(verdict);
+  if (!issues) return null;
+  const system = "你是 Echo Research 的事实核对助手。只做一件事：修正下面指出的错误数字，不改变其它任何内容、不改变结论方向、不新增数字。找不到正确数字就把该处改写成“未核到”。直接输出修正后的完整正文，不要解释、不要加前后缀。";
+  const user = `原始回答：\n${content}\n\n以下数字与已核实数据不一致，需要修正：\n${issues}\n\n请输出修正后的完整正文。`;
+  try {
+    const result = await withTimeout(callModel({ system, user }), 8000, null);
+    const text = result?.content ? String(result.content).trim() : "";
+    return text || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * R3 主入口：建事实登记表 → 校验正文数字 → 按 FACT_GUARD_MODE 决定动作。
+ * shadow 只记录；soft/full 都会在有 soft/hard 命中时追加低调提示；full 额外对 hard-fail
+ * 做一次定向重答，重答后仍不过就确定性降级为 fallback（面板生成的确定性文案）。
+ */
+async function applyFactGuard({ content, sources, fallback }) {
+  if (FACT_GUARD_MODE === "off") return { content, verdict: null, repaired: false, degraded: false };
+
+  const registry = buildFactsRegistry(sources);
+  let verdict = verifyAnswerNumbers(content, registry);
+  // 影子模式的价值就在这行日志——不进 DB，本机/scheduler 跑真实问题时人工看。
+  console.log(`[factGuard:${FACT_GUARD_MODE}] ${sources.ticker || "?"}`, JSON.stringify(summarizeVerdict(verdict)));
+  if (FACT_GUARD_MODE === "shadow") return { content, verdict, repaired: false, degraded: false };
+
+  let finalContent = content;
+  let repaired = false;
+  let degraded = false;
+
+  if (FACT_GUARD_MODE === "full" && verdict.hasHardFail) {
+    const repairedText = await repairHardFails({ content, verdict });
+    const reVerdict = repairedText ? verifyAnswerNumbers(repairedText, registry) : null;
+    if (repairedText && !reVerdict.hasHardFail) {
+      finalContent = repairedText;
+      verdict = reVerdict;
+      repaired = true;
+    } else {
+      // 重答仍失败或没拿到重答：确定性降级，绝不放行 hard-fail 数字。
+      finalContent = fallback;
+      verdict = verifyAnswerNumbers(finalContent, registry);
+      repaired = true;
+      degraded = true;
+    }
+  }
+
+  if (verdict.softCount || verdict.hardCount) finalContent += buildSoftNote(verdict);
+  return { content: finalContent, verdict, repaired, degraded };
+}
 
 // 对话内对比：只拉"对比对象"做并排比较真正需要的几项（行情/区间回报/财报/评级），
 // 不跑 news/filings/segments——精简后更快，避免和主公司的全量管道并发争抢时超时拿不到数据
@@ -34,16 +95,18 @@ export async function buildCompareSummary(compareWith) {
   const t = company.ticker;
   // A-P1.2：对比对象也并发拉新闻（带超时护栏）。A-P0.1 修完后新闻管线不会再崩，可安全补——
   // 之前为避超时故意没拉，导致对比回答只有行情/财报、缺一手事件。整块仍在外层 12s 预算内。
-  const [ms, ranges, fin, est, news] = await Promise.all([
+  const [ms, ranges, fin, est, news, compPeers] = await Promise.all([
     withTimeout(getMarketSnapshot(t), 6000, null),
     withTimeout(getRangeReturns(t), 6000, { providerStatus: "missing" }),
     withTimeout(getFinancials(t), 8000, { providerStatus: "missing" }),
     withTimeout(getAnalystEstimates(t), 6000, { providerStatus: "missing" }),
-    withTimeout(getNewsSnapshot({ ticker: t, nameZh: company.nameZh, nameEn: company.nameEn }), 6000, { providerStatus: "missing", articles: [] })
+    withTimeout(getNewsSnapshot({ ticker: t, nameZh: company.nameZh, nameEn: company.nameEn }), 6000, { providerStatus: "missing", articles: [] }),
+    // G-3：同业锚点是加分项，不是必需项——超时/失败就 null，displayValuation 照样能出结果，不阻塞对比回答。
+    withTimeout(getComparableCompanies(t), 6000, null)
   ]);
   if (!ms || ms.providerStatus !== "ok") return null; // 连行情都没有就别给半截对比
   if (ranges?.providerStatus === "ok") ms.ranges = ranges;
-  const valuation = displayValuation(companyByTicker(t) || company, ms, fin, est);
+  const valuation = displayValuation(companyByTicker(t) || company, ms, fin, est, compPeers);
   const analyst = buildAnalystSummary(est, ms.price);
   return {
     ticker: t,
@@ -251,7 +314,7 @@ export async function runChat(payload, res) {
 
     // Single pipeline: data + deterministic local panel (no model, no persist here) runs in
     // parallel with web-evidence retrieval. The model is only called once, for the prose below.
-    const [result, webEvidence, compareData, otherHoldings, hkSnapshot] = await Promise.all([
+    const [result, webEvidence, compareData, otherHoldings, hkSnapshot, compPeers, earnings] = await Promise.all([
       runAgent(payload, { persist: false, useModelPanel: false }),
       withTimeout(
         researchWebEvidence({ company: companyForEvidence, question, intent }),
@@ -261,13 +324,19 @@ export async function runChat(payload, res) {
       compareWith ? withTimeout(buildCompareSummary(compareWith), 12000, null) : Promise.resolve(null),
       // 对话内对比模式专注两列，不再叠加多标的抽取；其余场景才跑 otherHoldings（含超时降级为 []）。
       compareWith ? Promise.resolve([]) : withTimeout(buildOtherHoldings(question, payload.company), 12000, []),
-      askedHkTicker ? withTimeout(getMarketSnapshot(askedHkTicker), 5000, null) : Promise.resolve(null)
+      askedHkTicker ? withTimeout(getMarketSnapshot(askedHkTicker), 5000, null) : Promise.resolve(null),
+      // G-3：同业锚点是估值的加分项，不是必需项——ticker 提前已知就提前拉，超时/失败降级为 null，
+      // displayValuation 照样能出结果，不阻塞主研究链路。
+      payload.company?.ticker ? withTimeout(getComparableCompanies(payload.company.ticker), 6000, null) : Promise.resolve(null),
+      // R3 前置：财报日历也接进聊天上下文（此前只有看盘台用，聊天正文完全没有），
+      // 否则正文提到"下一业绩日"时无据可查，R3 的数字校验会把它当成编造。
+      payload.company?.ticker ? withTimeout(getNextEarnings(payload.company.ticker), 4000, null) : Promise.resolve(null)
     ]);
 
     // Compute valuation before the model call so the prose and the visual bar
     // speak the same odds.
     const valuationProfile = companyByTicker(result.decisionPanel?.ticker || payload.company?.ticker) || payload.company;
-    const valuation = displayValuation(valuationProfile, result.marketSnapshot, result.financialsData, result.estimatesData);
+    const valuation = displayValuation(valuationProfile, result.marketSnapshot, result.financialsData, result.estimatesData, compPeers);
     const analyst = buildAnalystSummary(result.estimatesData, result.marketSnapshot?.price);
     // 长期画像：研究同一公司时自动带上上次沉淀的投资主线/证伪条件，保持连贯。
     const portraitTicker = result.decisionPanel?.ticker || payload.company?.ticker;
@@ -289,13 +358,17 @@ export async function runChat(payload, res) {
       // 对话内对比对象（拿到才有；buildChatPrompt 会渲染并排比较块 + 切到对比作答规则）。
       compare: compareData,
       // P0 对话内多标的：当前公司之外、问句里提到的其他持仓/标的（已解析+拉到真实数据）。
-      otherHoldings
+      otherHoldings,
+      // R3：财报日历，供正文引用"下一业绩日"，也是数字级校验的事实源之一。
+      earnings
     };
     const fallback = researchReplyFromPanel(result.decisionPanel, question, result.dataSources, context);
     const wantStream = payload.stream === true;
     const modelReady = getProviderStatus().configured && result.decisionPanel;
     let content = fallback;
     let chatModel = null;
+    // R3：本地持仓记录（不是自由文本 userContext）——数字级校验持仓盈亏时的事实源。
+    const position = payload.company?.ticker ? getPosition(payload.company.ticker) : null;
 
     // ── 流式（SSE）：阶段2 答案逐字推送，收尾再发一个 final 事件携带完整面板/估值/接地 ──
     if (wantStream) {
@@ -316,7 +389,7 @@ export async function runChat(payload, res) {
         });
         if (chatModel?.content && chatModel.content.length < 9000) content = chatModel.content;
       }
-      const finalPayload = finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData, otherHoldings, dualQuote });
+      const finalPayload = await finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData, otherHoldings, dualQuote, compPeers, earnings, position, fallback });
       send("final", finalPayload);
       try { res.write("event: done\ndata: {}\n\n"); res.end(); } catch { /* already closed */ }
       return;
@@ -333,7 +406,7 @@ export async function runChat(payload, res) {
       });
       if (chatModel?.content && chatModel.content.length < 9000) content = chatModel.content;
     }
-    sendJson(res, 200, finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData, otherHoldings, dualQuote }));
+    sendJson(res, 200, await finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData, otherHoldings, dualQuote, compPeers, earnings, position, fallback }));
   } catch (error) {
     // 流式已经开了头就不能再 sendJson —— 改发一个 error 事件收尾。
     if (res.headersSent) {
@@ -374,10 +447,25 @@ function lightHoldings(otherHoldings = []) {
 
 // 模型作答之后的统一收口：归一化 → 证据并入面板 → 估值挂载 → 自然语言记账 → 画像回写 →
 // 落库，返回前端要的完整响应对象。流式 / 非流式共用，保证两条路径产物完全一致。
-/** @returns {import("../types.js").ChatFinalResponse} */
-function finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData, otherHoldings, dualQuote }) {
+/** @returns {Promise<import("../types.js").ChatFinalResponse>} */
+async function finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData, otherHoldings, dualQuote, compPeers, earnings, position, fallback }) {
   const question = payload.question || "";
   content = normalizeResearchAnswer(content, result.decisionPanel, result.dataSources);
+
+  // R3：数字级防幻觉护栏——只在有真实模型作答时才有意义（fallback 本身就是确定性拼接的
+  // 面板文案，数字保证接地，没必要也拿去校验）。
+  let factGuardVerdict = null;
+  if (chatModel?.content) {
+    const ticker = result.decisionPanel?.ticker || payload.company?.ticker;
+    const registrySources = {
+      ticker, marketSnapshot: result.marketSnapshot, financialsData: result.financialsData,
+      valuation: valuation?.cannotValueReason ? null : valuation, compPeers, earnings, position
+    };
+    const outcome = await applyFactGuard({ content, sources: registrySources, fallback });
+    content = outcome.content;
+    factGuardVerdict = outcome.verdict ? { ...summarizeVerdict(outcome.verdict), repaired: outcome.repaired, degraded: outcome.degraded } : null;
+  }
+
   result.webEvidence = webEvidence;
   mergeEvidenceIntoPanel(result.decisionPanel, webEvidence);
   if (result.decisionPanel && !valuation.cannotValueReason) result.decisionPanel.valuation = valuation;
@@ -493,6 +581,8 @@ function finalizeChat({ payload, result, webEvidence, valuation, analyst, portra
     model: chatModel?.model || result.model,
     sessionId,
     content,
+    // R3：数字级校验摘要（shadow 模式下也会有值，供设置页/日志观察，不影响正文）。
+    factGuard: factGuardVerdict,
     decisionPanel: result.decisionPanel,
     userContext: result.userContext,
     dataSources: result.dataSources,

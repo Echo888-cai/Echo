@@ -62,3 +62,25 @@ export function twelveDataSymbol(ticker) {
 export function tencentSymbol(ticker) {
   return isUS(ticker) ? `us${bareSymbol(ticker)}` : `hk${hkCode(ticker).padStart(5, "0")}`;
 }
+
+// 港股 → 美股 ADR 映射（主流双重上市名，非穷举）。Finnhub 免费档很多端点（财报日历、
+// 同业清单）不支持直查港股，但支持查它的美股 ADR——两处消费方（G-2 财报日历、G-3 同业
+// 发现）共用这一张表，避免各自维护出现漂移。没有映射的港股：两处都诚实返回缺失，不猜。
+export const HK_ADR_MAP = {
+  "0700": "TCEHY", // 腾讯
+  "9988": "BABA",  // 阿里巴巴
+  "9868": "XPEV",  // 小鹏汽车
+  "9866": "LI",    // 理想汽车
+  "9863": "ZK",    // 极氪
+  "9999": "NTES",  // 网易
+  "9618": "JD",    // 京东
+  "9626": "BILI",  // 哔哩哔哩
+  "9961": "TCOM",  // 携程
+  "9888": "BIDU"   // 百度
+};
+
+/** 该 ticker 对应的美股 ADR symbol；美股直接返回自身 bare symbol，港股无映射返回 null。 */
+export function adrOrBareSymbol(ticker) {
+  if (isUS(ticker)) return bareSymbol(ticker);
+  return HK_ADR_MAP[hkCode(ticker)] || null;
+}

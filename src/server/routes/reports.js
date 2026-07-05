@@ -6,6 +6,7 @@ import { classifyResearchIntent } from "../services/intentClassifier.js";
 import { researchWebEvidence } from "../services/webEvidenceService.js";
 import { buildReportPrompt, mergeEvidenceIntoPanel } from "../services/answerComposer.js";
 import { displayValuation } from "../services/valuationEngine.js";
+import { getComparableCompanies } from "../services/compPeers.js";
 import { composeReport, reportPreview } from "../services/reportComposer.js";
 import { saveResearchSession } from "../repositories/researchSessions.js";
 
@@ -21,19 +22,21 @@ export async function handleReportGenerateApi(req, res) {
 
     // Data + deterministic local panel (no model panel, no persist here) and web
     // evidence run in parallel — same single-pass pipeline as the chat route.
-    const [result, webEvidence] = await Promise.all([
+    const [result, webEvidence, compPeers] = await Promise.all([
       runAgent(payload, { persist: false, useModelPanel: false }),
       withTimeout(
         researchWebEvidence({ company: companyForEvidence, question, intent }),
         9000,
         { intent, queries: [], evidence: [], gaps: [], provider: "timeout", searchedAt: new Date().toISOString() }
-      )
+      ),
+      // G-3：同业锚点是加分项，超时/失败降级为 null，不阻塞报告生成。
+      payload.company?.ticker ? withTimeout(getComparableCompanies(payload.company.ticker), 6000, null) : Promise.resolve(null)
     ]);
 
     /** @type {(Object & {valuation?: import("../types.js").Valuation})|null|undefined} */
     const panel = result.decisionPanel;
     const valuationProfile = companyByTicker(panel?.ticker || payload.company?.ticker) || payload.company;
-    const valuation = displayValuation(valuationProfile, result.marketSnapshot, result.financialsData);
+    const valuation = displayValuation(valuationProfile, result.marketSnapshot, result.financialsData, null, compPeers);
     if (panel && !valuation.cannotValueReason) panel.valuation = valuation;
     const context = {
       newsSnapshot: result.newsSnapshot,

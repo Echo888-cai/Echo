@@ -70,6 +70,15 @@
 .wd-status.wd-risk { color: #b26a00; background: rgba(217, 154, 43, 0.14); }
 .wd-status.wd-falsified { color: var(--danger); background: rgba(255, 59, 48, 0.1); }
 
+/* 下一业绩日标签（G-2）：低调的信息标注，不参与紧急度排序，不抢 wd-status 的视觉重音。 */
+.wl-earnings {
+  font-size: 11.5px;
+  color: var(--muted-2);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.stock-earnings { display: block; margin-top: 6px; font-size: 12.5px; }
+
 /* 状态圆点：语义色（列表左沿 + 圆点表达状态，替代整条状态标签，克制）。 */
 .wd-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .wd-dot.sev-high, .wd-dot.st-falsified { background: var(--danger); }

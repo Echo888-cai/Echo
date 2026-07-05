@@ -105,8 +105,10 @@ export async function buildWatchDesk(companies = [], { slot = "premarket", event
     // spark 跟事件走慢阶段（fast 模式先给价格与状态）；序列有 30 分钟进程缓存，
     // 首轮未命中缓存的部分公司拿不到也无妨——sparkline 缺省不该拖垮整张卡。
     const [snap, spark] = await Promise.all([snapshotFor(ticker), withEvents ? sparkFor(ticker) : null]);
-    const events = groupByTicker.get(ticker)?.events || [];
+    const group = groupByTicker.get(ticker);
+    const events = group?.events || [];
     const topEvent = events[0] || null;
+    const earnings = group?.earnings || null;
     const topNewsHigh = events.find((e) => e.kind === "news" && e.severity === "high")?.title || "";
 
     const price = snap.priceStatus === "ok" ? snap.price : null;
@@ -129,6 +131,10 @@ export async function buildWatchDesk(companies = [], { slot = "premarket", event
         ? { severity: topEvent.severity, kind: topEvent.kind, title: topEvent.title, date: topEvent.date, url: topEvent.url || "" }
         : null,
       eventCount: events.length,
+      // 下一业绩日（G-2）：独立于 events 之外常驻展示，不受 T-14 提醒窗口限制。
+      earnings: earnings && earnings.providerStatus === "ok"
+        ? { nextDate: earnings.nextDate, source: earnings.source }
+        : null,
       // 看盘台个股页要展开"近期事件"时间线，所以把前几条也带上（卡片墙忽略它）。
       events: events.slice(0, 6).map((e) => ({ severity: e.severity, kind: e.kind, title: e.title, date: e.date, url: e.url || "" })),
       priceStatus: snap.priceStatus,
@@ -190,7 +196,7 @@ export async function buildStockView(ticker) {
   ]);
   const card = desk.cards[0] || {
     ticker, companyName: c?.nameZh || ticker, market: detectMarket(ticker),
-    status: "intact", statusReason: "", topEvent: null, eventCount: 0, events: [],
+    status: "intact", statusReason: "", topEvent: null, eventCount: 0, events: [], earnings: null,
     priceStatus: "unavailable", price: null, currency: "", changePct: null, held: false, returnPct: null
   };
   const p = getCompanyProfile(ticker);

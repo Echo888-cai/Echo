@@ -11,7 +11,8 @@ const webSearchKey = () => process.env.TAVILY_API_KEY || process.env.SERPAPI_API
 /** canary_runs 里的 source id → 面板展示名，和静态 `sources` 列表对齐方便对照。 */
 const CANARY_SOURCE_LABELS = {
   market: "港美股行情", financials: "财务数据", news: "新闻舆情",
-  filings: "公告数据", web_evidence: "网页证据层", hk_filing: "港股一手 filing", valuation: "估值链路"
+  filings: "公告数据", web_evidence: "网页证据层", hk_filing: "港股一手 filing", valuation: "估值链路",
+  earnings: "财报日历", comp_peers: "同业可比"
 };
 
 export function handleStatusApi(req, res) {
@@ -48,7 +49,9 @@ export function handleStatusApi(req, res) {
       { id: "financials", name: "财务数据", status: hasFmp ? "ok" : "limited", detail: hasFmp ? "FMP 已配置（注意：免费档不含港股，港股财报仍走腾讯/Yahoo 基础数据；港股完整三表需 FMP 付费档或其它港股数据源）" : "腾讯财经基础数据（PE/PB/市值）；港股完整三表需付费数据源" },
       { id: "news", name: "新闻舆情", status: hasNews ? "ok" : "limited", detail: hasNews ? "Yahoo RSS + Bing + 东方财富" : "Yahoo RSS + Bing + 东方财富（国内可用）" },
       { id: "web_evidence", name: "网页证据层", status: hasWebSearch ? "ok" : "limited", detail: hasWebSearch ? "Tavily / SerpAPI 已配置，证据带正文抓取、来源校验与可信度评分，缓存到 SQLite" : "公开兜底：DuckDuckGo + Yahoo + Bing，已做 404 校验与去垃圾；配 TAVILY_API_KEY（免费 1000/月）可解锁稳定全覆盖" },
-      { id: "filings", name: "公告数据", status: "ok", detail: "HKEX 披露易 titleSearchServlet 真实端点（港股）；SEC EDGAR（美股）" }
+      { id: "filings", name: "公告数据", status: "ok", detail: "HKEX 披露易 titleSearchServlet 真实端点（港股）；SEC EDGAR（美股）" },
+      { id: "earnings", name: "财报日历", status: hasNews ? "ok" : "limited", detail: hasNews ? "Finnhub /calendar/earnings；港股经 ADR 映射核到，无映射时诚实标缺" : "需配置 FINNHUB_API_KEY" },
+      { id: "comp_peers", name: "同业可比", status: hasNews ? "ok" : "limited", detail: hasNews ? "Finnhub /stock/peers 自动匹配；港股经 ADR 映射，无映射/同业不足 2 家时诚实标缺" : "需配置 FINNHUB_API_KEY" }
     ],
     evidenceBacklog: [
       { id: "financial_snapshots", label: "财报三表与估值倍数", priority: "P0", providers: ["FMP", "EODHD", "Finnhub"] },

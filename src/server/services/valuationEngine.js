@@ -41,25 +41,28 @@ import { compactNumberServer } from "../utils/format.js";
  * @param {import("../types.js").MarketSnapshot} marketSnapshot
  * @param {import("../types.js").FinancialsData} financialsData
  * @param {import("../types.js").EstimatesData|null} [estimates]
+ * @param {Object|null} [compPeers] G-3 同业可比清单（compPeers.js 的 getComparableCompanies 结果）
  * @returns {import("../types.js").Valuation}
  */
-export function displayValuation(company, marketSnapshot, financialsData, estimates = null) {
-  const v = computeValuation(company, marketSnapshot, financialsData);
+export function displayValuation(company, marketSnapshot, financialsData, estimates = null, compPeers = null) {
+  const v = computeValuation(company, marketSnapshot, financialsData, compPeers);
   const price = parseFloat(v.currentPrice);
   // Analyst consensus is attached as an independent anchor whenever available —
   // it enriches even a coherent fundamental band (US gets real targets via FMP).
   const analyst = analystAnchor(estimates, price);
+  // G-3：不管最终走哪条分支产出估值带，都把同业原始清单带上（含未计入锚点的 peer 及原因）——
+  // 前端"为什么选这些同业"面板和 keyAssumptions 的可追溯性共用这一份数据，不用每条分支各自接线。
+  const withExtras = (result) => (analyst || compPeers ? { ...result, analyst, compPeers: compPeers || null } : result);
   // Stage-aware 数据存疑：EV/Sales 被可信度护栏判为脏（与市场定价/现价严重脱节，多半新上市数据缺口）→
   // 只允许回退到「可信的分析师目标价带」；没有就诚实地不给估值。绝不掉进下方"以现价为中心的 PE 带"——
   // 那对亏损股会拿负 PE 硬凑，又是"中性=现价"的自循环根因。
   if (v.stageAware && v.dataSuspect) {
     const band = buildAnalystBand(marketSnapshot, company, estimates);
-    if (band) return analyst ? { ...band, analyst } : band;
-    return analyst ? { ...v, analyst } : v;
+    return withExtras(band || v);
   }
   // Stage-aware（EV/Sales 情景）刻意允许整条带在现价上方或下方（这正是"高估/低估"的诚实结论）：
   // 不套"必须 bear<price<bull"的 PE 带自洽检查，也绝不回退到以现价为中心的 PE 带（那是自循环根因）。
-  if (v.stageAware && !v.cannotValueReason) return analyst ? { ...v, analyst } : v;
+  if (v.stageAware && !v.cannotValueReason) return withExtras(v);
   const bear = parseFloat(v.bear);
   const bull = parseFloat(v.bull);
   const coherent =
@@ -68,10 +71,10 @@ export function displayValuation(company, marketSnapshot, financialsData, estima
     bear > 0 &&
     bear < price &&
     price < bull;
-  if (coherent) return analyst ? { ...v, analyst } : v;
+  if (coherent) return withExtras(v);
 
   const band = buildAnalystBand(marketSnapshot, company, estimates);
-  if (band) return analyst ? { ...band, analyst } : band;
+  if (band) return withExtras(band);
 
   // Price-centered PE band from a quoted or EPS-derived PE — always coherent. This is
   // the guaranteed fallback so a bar renders whenever we have a price + real EPS, even
@@ -81,7 +84,7 @@ export function displayValuation(company, marketSnapshot, financialsData, estima
   if (!pe && financialsData?.eps && p) pe = p / financialsData.eps;
   // pe 必须 > 0：亏损股的负 PE 不能拿来硬凑一条以现价为中心的带子（那是误导）。
   if (p && pe && pe > 0) {
-    return {
+    return withExtras({
       method: "PE 区间",
       bear: (p * 0.78).toFixed(2),
       base: p.toFixed(2),
@@ -91,14 +94,14 @@ export function displayValuation(company, marketSnapshot, financialsData, estima
       methodDetail: [{ name: "PE 区间", bear: p * 0.78, base: p, bull: p * 1.28 }],
       keyAssumptions: [`基于现价与 PE ${Number(pe).toFixed(1)}x 的估值带（约 ±25%，反映 PE 收缩/扩张）`],
       sensitivity: [],
-      analyst,
       cannotValueReason: null
-    };
+    });
   }
-  return { ...v, analyst, cannotValueReason: v.cannotValueReason || "缺少自洽的估值口径。" };
+  return withExtras({ ...v, cannotValueReason: v.cannotValueReason || "缺少自洽的估值口径。" });
 }
 
 function numOrNull(value) {
+  if (value === null || value === undefined) return null; // Number(null) === 0（有限），会把"缺失"误判成"零"
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 }
@@ -148,7 +151,7 @@ function clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }
 // 资产阶段分类（spec §三，先实现关键分支）：亏损股 EPS<0、PE 不适用，必须换估值口径，
 // 否则会掉到 displayValuation 里"以现价为中心 ±25% PE 带"的自循环（中性=现价、赔率~1.3:1）。
 //   loss_growth=亏损高成长、loss=亏损（低/无增长）、profitable=盈利（走传统 PE/FCF/DCF）。
-function classifyAssetStage(f) {
+export function classifyAssetStage(f) {
   if (!f || f.providerStatus !== "ok") return "unknown";
   const eps = numOrNull(f.eps);
   const netMargin = numOrNull(f.netMargin);
@@ -167,9 +170,11 @@ function classifyAssetStage(f) {
 
 // 亏损股的 EV/Sales 情景估值：Bear/Base/Bull 各设目标 EV/Sales 倍数 × 前瞻收入 → 隐含 EV
 // → 加净现金（现金−负债）→ ÷ 稀释股本 → 价格区间。赔率由 bull/bear vs 现价推出（非自循环），
-// 并反推"当前价隐含的 EV/Sales"（市场在押注什么）。倍数用按增速分档的行业规则默认值，每条情景
-// 显式列假设。缺收入/股本返回 null（落回传统逻辑，多半给 cannotValue）。
-function computeEvSalesValuation({ stage, price, marketCap, revenue, revenueGrowth, grossMargin, sharesOutstanding, cashAndEquivalents, totalDebt, netCash: explicitNetCash }) {
+// 并反推"当前价隐含的 EV/Sales"（市场在押注什么）。
+// G-3：有 ≥2 家同阶段可比公司时，倍数改用同业 EV/Sales 的 p25/median/p75（真实市场定价，
+// 不是拍脑袋）；同业数据不足时保留原来按增速分档的行业规则默认值兜底，keyAssumptions 里
+// 明确标注用的是哪一种，不混淆"同业锚定"和"规则兜底"。缺收入/股本返回 null（落回传统逻辑）。
+function computeEvSalesValuation({ stage, price, marketCap, revenue, revenueGrowth, grossMargin, sharesOutstanding, cashAndEquivalents, totalDebt, netCash: explicitNetCash, peerAnchor = null }) {
   const rev = numOrNull(revenue);
   const shares = numOrNull(sharesOutstanding);
   const p = numOrNull(price);
@@ -181,10 +186,15 @@ function computeEvSalesValuation({ stage, price, marketCap, revenue, revenueGrow
   const growth = growthRaw === null ? 0 : clamp(growthRaw / 100, -0.5, 1.5);
   // 前瞻 1 年收入（高成长股用前瞻更贴市场口径）；增速缺失则退回 TTM。
   const fwdRevenue = rev * (1 + growth);
-  // 规则默认 EV/Sales 倍数，按增速分档：成长越高，市场给的倍数越高。
-  const t = growth >= 0.4 ? { bear: 5, base: 10, bull: 16 }
-          : growth >= 0.2 ? { bear: 3, base: 6, bull: 10 }
-          : { bear: 1, base: 2.5, bull: 4 };
+  // 同业锚定优先：≥2 家同阶段可比公司时用真实同业 EV/Sales 分位数；否则退回按增速分档的
+  // 行业规则默认值（此前唯一的口径，继续作为诚实兜底）。
+  const usePeerAnchor = peerAnchor?.multipleType === "EV/Sales" && peerAnchor.n >= 2 &&
+    [peerAnchor.p25, peerAnchor.median, peerAnchor.p75].every((n) => Number.isFinite(n) && n > 0);
+  const t = usePeerAnchor
+    ? { bear: peerAnchor.p25, base: peerAnchor.median, bull: peerAnchor.p75 }
+    : growth >= 0.4 ? { bear: 5, base: 10, bull: 16 }
+    : growth >= 0.2 ? { bear: 3, base: 6, bull: 10 }
+    : { bear: 1, base: 2.5, bull: 4 };
   const priceAt = (mult) => (mult * fwdRevenue + netCash) / shares;
   const bear = priceAt(t.bear);
   const base = priceAt(t.base);
@@ -224,6 +234,7 @@ function computeEvSalesValuation({ stage, price, marketCap, revenue, revenueGrow
     method: "EV/Sales 情景",
     stageAware: true,
     stage,
+    usedPeerAnchor: usePeerAnchor,
     bear: bear.toFixed(2),
     base: base.toFixed(2),
     bull: bull.toFixed(2),
@@ -235,7 +246,9 @@ function computeEvSalesValuation({ stage, price, marketCap, revenue, revenueGrow
     keyAssumptions: [
       `阶段：${stageTxt}（利润为负、PE 不适用）→ 用 EV/Sales 情景，不套 PE 带`,
       `前瞻收入 ≈ ${compactNumberServer(rev)} ×（1+${(growth * 100).toFixed(0)}%，${growthTxt}）= ${compactNumberServer(fwdRevenue)}${gmTxt}`,
-      `看空 ${t.bear}x EV/Sales → ${bear.toFixed(2)}；中性 ${t.base}x → ${base.toFixed(2)}；看多 ${t.bull}x → ${bull.toFixed(2)}（行业规则默认倍数）`,
+      usePeerAnchor
+        ? `看空 ${t.bear.toFixed(1)}x EV/Sales → ${bear.toFixed(2)}；中性 ${t.base.toFixed(1)}x → ${base.toFixed(2)}；看多 ${t.bull.toFixed(1)}x → ${bull.toFixed(2)}（同业倍数：基于 ${peerAnchor.n} 家可比 ${peerAnchor.tickers.join("、")} 的 EV/Sales p25/中位/p75）`
+        : `看空 ${t.bear}x EV/Sales → ${bear.toFixed(2)}；中性 ${t.base}x → ${base.toFixed(2)}；看多 ${t.bull}x → ${bull.toFixed(2)}（同业数据不足，使用原兜底方法：行业规则默认倍数）`,
       `净现金 ${compactNumberServer(netCash)}，稀释股本 ${compactNumberServer(shares)}`,
       impliedFwd !== null ? `当前价隐含 ≈ ${impliedFwd.toFixed(1)}x 前瞻 / ${impliedTtm.toFixed(1)}x TTM EV/Sales（市场在押注的成长定价）` : ""
     ].filter(Boolean),
@@ -247,7 +260,7 @@ function computeEvSalesValuation({ stage, price, marketCap, revenue, revenueGrow
   };
 }
 
-export function computeValuation(company, marketSnapshot, financialsData) {
+export function computeValuation(company, marketSnapshot, financialsData, compPeers = null) {
   if (!company || !marketSnapshot) {
     return {
       method: "无法估值",
@@ -290,7 +303,8 @@ export function computeValuation(company, marketSnapshot, financialsData) {
       sharesOutstanding: hasFinancialsData.sharesOutstanding,
       cashAndEquivalents: hasFinancialsData.cashAndEquivalents,
       totalDebt: hasFinancialsData.totalDebt,
-      netCash: hasFinancialsData.netCash
+      netCash: hasFinancialsData.netCash,
+      peerAnchor: compPeers?.anchor || null
     });
     if (ev) return ev;
   }
@@ -300,7 +314,10 @@ export function computeValuation(company, marketSnapshot, financialsData) {
   const sensitivity = [];
 
   // ── PE method ──────────────────────────────────────
-  if (pe && hasFinancialsData?.eps) {
+  // pe 和 eps 都必须 > 0：亏损股（负 EPS）碰上负 PE 会"负负得正"拼出一条看似正常、实则
+  // 毫无意义的正价格带（真实抓到：9868.HK 无 revenue 数据时 EV/Sales 情景提前退出，落到
+  // 这里用 eps=-38.71 × pe=-78.52 拼出 2000+ 的假估值带）。两者任一 ≤0 就跳过这个方法。
+  if (pe > 0 && hasFinancialsData?.eps > 0) {
     const eps = hasFinancialsData.eps;
     // Sector-based PE band references
     const peBear = pe * 0.7;
@@ -320,8 +337,24 @@ export function computeValuation(company, marketSnapshot, financialsData) {
     }
   }
 
+  // ── G-3 同业倍数 PE method：用同业 PE 的 p25/median/p75 × 自身 EPS，替代"只拿自己历史
+  //    PE ±30%"的自参照——现价不再是唯一锚，多了一个真实市场同业观察到的锚。同阶段可比
+  //    < 2 家时 compPeers.anchor 本身就是 null（compPeers.js 已把守），这里不会硬凑。
+  if (compPeers?.anchor?.multipleType === "PE" && hasFinancialsData?.eps > 0) {
+    const { p25, median, p75, n, tickers } = compPeers.anchor;
+    if ([p25, median, p75].every((x) => Number.isFinite(x) && x > 0)) {
+      const eps = hasFinancialsData.eps;
+      methods.push({ name: "同业倍数 PE", bear: eps * p25, base: eps * median, bull: eps * p75, weight: 1 });
+      assumptions.push(
+        `同业倍数 PE：基于 ${n} 家同阶段可比（${tickers.join("、")}）的 PE p25 ${p25.toFixed(1)}x / 中位 ${median.toFixed(1)}x / p75 ${p75.toFixed(1)}x × 自身 EPS ${eps}`
+      );
+    }
+  } else if (compPeers && compPeers.providerStatus === "ok" && !compPeers.anchor) {
+    assumptions.push("同业数据不足，使用原兜底方法（未生成同业倍数锚点，见同业面板）");
+  }
+
   // ── Forward PE method ─────────────────────────────
-  if (hasFinancialsData?.forwardPE && hasFinancialsData?.eps) {
+  if (hasFinancialsData?.forwardPE > 0 && hasFinancialsData?.eps > 0) {
     const fwdPE = hasFinancialsData.forwardPE;
     const eps = hasFinancialsData.eps;
     const bear = eps * (fwdPE * 0.7);
