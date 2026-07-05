@@ -85,3 +85,37 @@ export function hasHkFinancialsForUrl(sourceUrl) {
   const db = getDb();
   return !!db.prepare("SELECT 1 FROM hk_financials WHERE source_url = ?").get(sourceUrl);
 }
+
+// ─── 摄取留痕（G-1/E3）：把 ingestHkFinancials 的结果留痕，替代此前后台任务
+// 静默失败——覆盖率面板靠这张表回答"654 支港股哪些有一手数据、哪些失败、为什么"。
+
+export function upsertHkFilingIngestLog({ ticker, status, detail, announcementsFound = 0, ingestedCount = 0 }) {
+  const db = getDb();
+  db.prepare(`
+    INSERT INTO hk_filing_ingest_log (ticker, status, detail, announcements_found, ingested_count, checked_at)
+    VALUES (@ticker, @status, @detail, @announcementsFound, @ingestedCount, datetime('now'))
+    ON CONFLICT(ticker) DO UPDATE SET
+      status = excluded.status,
+      detail = excluded.detail,
+      announcements_found = excluded.announcements_found,
+      ingested_count = excluded.ingested_count,
+      checked_at = excluded.checked_at
+  `).run({ ticker, status, detail: detail ?? null, announcementsFound, ingestedCount });
+}
+
+/** 港股一手财报覆盖率：654 支里多少有数据、多少检查过、失败清单（最近 50 条）。 */
+export function getHkFilingCoverage() {
+  const db = getDb();
+  const totalHk = db.prepare(`SELECT COUNT(*) as n FROM companies WHERE ticker LIKE '%.HK'`).get().n;
+  const withFirstParty = db.prepare(`SELECT COUNT(DISTINCT ticker) as n FROM hk_financials`).get().n;
+  const checked = db.prepare(`SELECT COUNT(*) as n FROM hk_filing_ingest_log`).get().n;
+  const failed = db.prepare(`
+    SELECT l.ticker, c.name_zh as company_name, l.status, l.detail, l.checked_at
+    FROM hk_filing_ingest_log l
+    LEFT JOIN companies c ON c.ticker = l.ticker
+    WHERE l.status != 'ok'
+    ORDER BY l.checked_at DESC
+    LIMIT 50
+  `).all();
+  return { totalHk, withFirstParty, checked, uncheckedCount: Math.max(0, totalHk - checked), failed };
+}

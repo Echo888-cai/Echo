@@ -25,6 +25,49 @@ export async function loadSchedulerStatus() {
   if (currentRoute() === "/settings") render();
 }
 
+// G-1：canary 状态字（source health）→ 面板展示的 mark + 语气类名。
+function canaryMark(status) {
+  if (status === "ok") return { mark: "✓", tone: "" };
+  if (status === "missing" || status === "limited") return { mark: "△", tone: " is-degraded" };
+  return { mark: "✗", tone: " is-down" };
+}
+
+function renderCanaryCard() {
+  const canary = S.apiStatus?.canary;
+  const rows = canary?.sources || [];
+  if (!canary?.batchId) {
+    return `<article class="settings-card"><h2>数据源健康（canary）</h2>
+      <p>还没跑过 <code>npm run canary</code>——本机执行一次即可看到每个数据源的真实探测状态（不是配置态）。</p>
+    </article>`;
+  }
+  return `<article class="settings-card"><h2>数据源健康（canary）</h2>
+    <p>最近一批探测：${notifWhen(rows[0]?.latestCheckedAt || "")}。状态来自真实数据调用，不是配置检查。</p>
+    ${rows.map((r) => {
+      const { mark, tone } = canaryMark(r.latestStatus);
+      const failure = r.latestStatus !== "ok" && r.lastFailureDetail ? `<div class="setting-sub">最近失败：${esc(r.lastFailureDetail)}（${notifWhen(r.lastFailureAt || "")}）</div>` : "";
+      return `<div class="setting-row${tone}" title="${esc(r.latestDetail || "")}">
+        <span>${mark} ${esc(r.label)}</span>
+        <strong>${r.lastSuccessAt ? `最近成功 ${notifWhen(r.lastSuccessAt)}` : "从未成功"}</strong>
+      </div>${failure}`;
+    }).join("")}
+  </article>`;
+}
+
+function renderHkCoverageCard() {
+  const cov = S.apiStatus?.hkFilingCoverage;
+  if (!cov) return "";
+  const pct = cov.totalHk ? Math.round((cov.withFirstParty / cov.totalHk) * 100) : 0;
+  return `<article class="settings-card"><h2>港股一手 filing 覆盖率</h2>
+    <p>${cov.withFirstParty}/${cov.totalHk} 支港股有 HKEX 一手三表数据（约 ${pct}%），已检查 ${cov.checked} 支，${cov.uncheckedCount} 支尚未检查。</p>
+    <p>本机跑 <code>npm run hk-coverage -- --limit=20</code> 增量扩大覆盖（速率友好，可反复跑）。</p>
+    ${cov.failed?.length ? `<div class="setting-sub">最近失败（最多显示 5 条）：</div>
+      ${cov.failed.slice(0, 5).map((f) => `<div class="setting-row is-degraded" title="${esc(f.detail || "")}">
+        <span>${esc(f.ticker)} ${esc(f.company_name || "")}</span>
+        <strong>${esc(f.status)}</strong>
+      </div>`).join("")}` : ""}
+  </article>`;
+}
+
 export function renderSettings() {
   const sources = S.apiStatus?.sources || [];
   const providers = S.apiStatus?.ai?.providers || [];
@@ -38,6 +81,8 @@ export function renderSettings() {
       <article class="settings-card"><h2>数据源</h2>
         ${sources.map((s) => `<div class="setting-row"><span>${esc(s.name)}</span><strong>${esc(s.status)}</strong></div>`).join("")}
       </article>
+      ${renderCanaryCard()}
+      ${renderHkCoverageCard()}
       <article class="settings-card"><h2>前台策略</h2>
         <p>研究 / 看盘 / 设置三个分区各司其职：落地即研究（连续对话，产品灵魂）；看盘是精简关注列表，点进公司页看真价格曲线（美股日线收盘价）、研究状况、基本面、证伪条件与事件。港股曲线预留付费源，暂标"待接入"。</p>
       </article>

@@ -11,7 +11,11 @@
  * 退出码恒为 0：doctor 是体检报告，不是门禁。
  */
 import { fileURLToPath } from "node:url";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { loadEnvFile } from "../src/server/utils/env.js";
+
+const execFileAsync = promisify(execFile);
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 loadEnvFile(root);
@@ -114,6 +118,25 @@ const CHECKS = [
     }
   },
   {
+    name: "港股一手 PDF 抽取（python3/pdfminer）",
+    // 本地子进程检查，不是网络探活，所以放进 check() 常跑（不需要 --live）：
+    // refreshHkFinancialsInBackground 是 fire-and-forget，机器没装 python3/pdfminer 时
+    // 港股一手数据会永久静默缺失，doctor 之前完全没有这一项检查（E2）。
+    async check() {
+      try {
+        await execFileAsync("python3", ["--version"]);
+      } catch {
+        return { mark: MISSING, detail: "未找到 python3 → scripts/extract_pdf_text.py 无法执行，港股一手财报（HKEX PDF）会静默永远缺失，估值退化成机械 PE 带" };
+      }
+      try {
+        await execFileAsync("python3", ["-c", "import pdfminer"]);
+      } catch {
+        return { mark: MISSING, detail: "python3 已装但缺 pdfminer.six（pip install pdfminer.six）→ 港股一手财报静默永远缺失" };
+      }
+      return { mark: OK, detail: "python3 + pdfminer.six 就绪，HKEX 一手财报抽取管道可用" };
+    }
+  },
+  {
     name: "SEC 一手文件",
     check() {
       if (has("SEC_USER_AGENT")) return { mark: OK, detail: `UA 已配置（SEC 要求带联系方式的 UA）` };
@@ -142,7 +165,7 @@ console.log(`\nLuvio doctor — 环境自检${LIVE ? "（含连通性探活）" 
 
 let degraded = 0;
 for (const item of CHECKS) {
-  const { mark, detail } = item.check();
+  const { mark, detail } = await item.check();
   if (mark !== OK) degraded += 1;
   console.log(`  ${mark} ${item.name}`);
   console.log(`     ${detail}`);

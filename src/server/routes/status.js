@@ -1,16 +1,46 @@
 import { sendJson } from "../utils/async.js";
 import { getProviderStatus } from "../services/modelGateway.js";
+import { getSourceHealthSummary, getLatestBatchId } from "../repositories/canaryRepository.js";
+import { getHkFilingCoverage } from "../repositories/hkFinancialsRepository.js";
 
 const fmpKey = () => process.env.FMP_API_KEY;
 const finnhubKey = () => process.env.FINNHUB_API_KEY;
 const newsApiKey = () => process.env.ALPHAVANTAGE_API_KEY || process.env.TWELVEDATA_API_KEY;
 const webSearchKey = () => process.env.TAVILY_API_KEY || process.env.SERPAPI_API_KEY;
 
+/** canary_runs 里的 source id → 面板展示名，和静态 `sources` 列表对齐方便对照。 */
+const CANARY_SOURCE_LABELS = {
+  market: "港美股行情", financials: "财务数据", news: "新闻舆情",
+  filings: "公告数据", web_evidence: "网页证据层", hk_filing: "港股一手 filing", valuation: "估值链路"
+};
+
 export function handleStatusApi(req, res) {
   const hasFmp = fmpKey();
   const hasNews = finnhubKey() || newsApiKey();
   const hasWebSearch = webSearchKey();
   const aiStatus = getProviderStatus();
+
+  // G-1：真实数据 canary（`npm run canary`）落库的每源健康——不是配置态，是真实探测态。
+  // 没跑过 canary 时这些都是空数组，面板会诚实显示"未探测过"而不是假装 ok。
+  let canaryHealth = [];
+  let canaryBatchId = null;
+  let hkFilingCoverage = null;
+  try {
+    canaryHealth = getSourceHealthSummary().map((row) => ({
+      source: row.source,
+      label: CANARY_SOURCE_LABELS[row.source] || row.source,
+      latestStatus: row.latest_status,
+      latestDetail: row.latest_detail,
+      latestCheckedAt: row.latest_checked_at,
+      lastSuccessAt: row.last_success_at,
+      lastFailureDetail: row.last_failure_detail,
+      lastFailureAt: row.last_failure_at
+    }));
+    canaryBatchId = getLatestBatchId();
+  } catch { /* canary 表若尚未迁移到（不应发生，但面板不能因此整体挂掉） */ }
+  try {
+    hkFilingCoverage = getHkFilingCoverage();
+  } catch { /* 同上 */ }
 
   sendJson(res, 200, {
     sources: [
@@ -28,6 +58,8 @@ export function handleStatusApi(req, res) {
     ],
     ai: aiStatus,
     db: { companies: "654+" },
+    canary: { batchId: canaryBatchId, sources: canaryHealth },
+    hkFilingCoverage,
     updatedAt: new Date().toISOString()
   });
 }

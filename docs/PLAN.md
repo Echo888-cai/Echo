@@ -3,7 +3,7 @@
 > **这是什么**：Echo Research 的**唯一权威计划文档**（v2）。取代 v1（EA/B/D 主计划，其全文与状态表见 git history 中的本文件）。v1 规划的三条主线——EA-0…EA-5 统一 Agent、B-1…B-7 研究质量深化、D1…D3 架构加固——已全部完成并验收；C1 的移动端阻断 bug 已顺手修复（C1/C2 余项保持 🟡 顺手策略）。
 > **怎么来的**：用户明确要求在进入任何新功能（含 P8 商业化、EA-6 自定义 skill）之前，先做一次系统性 Gap Audit——从①专业投资研究员、②产品体验、③工程与数据三个视角全面审视产品还缺什么，先对齐方向再开工。本文档就是这次审计的产出：证据基础（§1）→ 逐条 gap（§2）→ 建议路线（§3）。
 > **给谁看**：任何接手的人（人类或新 AI 会话）。自包含，不需要先读其他文档。
-> **状态**：§2/§3 是**建议**，尚未与用户对齐开工。对齐后把选中的阶段填进 §5 状态表再动手。
+> **状态**：§2/§3 是**建议**。用户已对齐 G 轨方向，**G-1（数据可信度底座）已完成并验收**（见 §5）；G-2/G-3 待对齐后再开工。
 
 ---
 
@@ -182,18 +182,18 @@ Echo 已经是一个能自圆其说的单机研究终端：统一入口 `/api/as
 | B-1…B-7 | 置信度事实锚定、多期财报趋势、对比胜负手、风险雷达去占位、港股一手估值口径、HKEX PDF 复杂版式、web 证据真实实测（抓到搜索污染 bug） | 2026-07-04 |
 | D1…D3 | 全量 JSDoc/checkJs 0 error（抓到 `hasPrice` 除数 bug）、`user_version` 迁移器 + 001_init.sql、chat 编排内化 `chatOrchestrator.js` | 2026-07-04 ~ 05 |
 | C1（部分） | 375px 整页横向溢出阻断 bug 修复（`.sidebar`/`.desk` 补 `min-width:0`） | 2026-07-05 |
+| E5 + G-1 | typecheck 进 CI；`npm run canary`（真实数据 canary：行情/财报/新闻/公告/网页证据/港股一手 filing/估值链路，落 `canary_runs`）；`npm run hk-coverage`（654 支港股增量覆盖率扫描，留痕 `hk_filing_ingest_log`）；doctor 补 python3/pdfminer 检查；设置页数据健康面板（每源最近成功/失败原因 + HK filing 覆盖率与失败清单） | 2026-07-05 |
 
 ### 待办（本计划，待对齐）
 
 | 阶段 | 名称 | 状态 | 备注 |
 |------|------|:---:|------|
-| G-1 | 数据质量面板 + 真实数据 canary（E1+E2+E3+P1） | ⬜ | 建议下一程第一步；产出健康面板 + 覆盖率度量 |
 | G-2 | 财报日历与业绩事件锚（R1） | ⬜ | Finnhub 免费档需实测；港股缺日历时 fail-safe |
 | G-3 | 估值同业锚 + 自动可比公司（R2+R4） | ⬜ | 历史分位免费档拿不到，先同业、诚实标缺 |
-| E5 | typecheck 进 CI | ⬜ | 10 分钟顺手项，可随任意 PR |
 | — | 第二程：R5 组合联动 / R3 数字级护栏 / E4 llm_audit / P2 通知回链 | ⬜ | G 轨完成后再对齐取舍 |
 | — | P3 级：研究历史 FTS 检索 / C1 余项+C2 PWA / E6 缓存统一 / E7 名单可配置 | ⬜ | 记录在案，等时机 |
 | — | P4 级：onboarding；远期：R6 指引结构化 / EA-6 / P8 | ⬜ | 明确缓做，条件见 §3 |
+| — | HK filings 抓取用了错的 HKEX 端点（filingData.js 的公告列表，非估值用的一手 filing 管道），已拆分成独立任务跟进 | ⬜ | G-1 canary 实测发现：`titlesearch.xhtml` 是纯前端渲染壳，正文里没有 `<tr class="row">`；`hkFilingsPipeline.js` 的 `searchHkexResultsAnnouncements` 走的是真正的数据接口，可复用 |
 
 ---
 
@@ -203,13 +203,17 @@ Echo 已经是一个能自圆其说的单机研究终端：统一入口 `/api/as
 npm install                 # 只有 better-sqlite3 一个原生依赖
 npm run seed                # 建/重置本地 SQLite 种子库
 npm run dev                 # http://127.0.0.1:4173
-npm test                    # 263 用例，必须全绿（EXIT=0）再提交
+npm test                    # 410 用例，必须全绿（EXIT=0）再提交
 npm run lint                # eslint（correctness 级）
-npm run typecheck           # tsc 全量 0 error（D1 成果，勿回潮）
+npm run typecheck           # tsc 全量 0 error（D1 成果，现已进 CI，勿回潮）
 npm run doctor              # 能力体检；--live 才发网络探活
+npm run canary              # G-1：真实数据 canary（0700/9988/9868.HK + AAPL/NVDA 全管道探测，落库供设置页健康面板读）
+npm run hk-coverage -- --limit=20   # G-1：港股一手 filing 覆盖率增量扫描（654 支，可反复跑；--rescan 重查失败原因）
 # 后端无热重载！改 src/server/** 或 src/*.js 后要重启 node
 # 隔离测试：LUVIO_DB_PATH=$TMPDIR/x.db PORT=4199 node server.js
 ```
+
+**canary 不进 CI**：`npm run canary` / `npm run hk-coverage` 都是本机/scheduler 职责，会真实调用外部数据源、消耗配额、且需要 `.env` 里的 key——CI 环境没有这些，也不该有。
 
 **一次改动的"完成"= 代码 + 对应测试（进 `tests/`，接入 `npm test`）+ §5 状态表标 ✅ + 一条中文 commit。** 浏览器可见的改动必须实跑验证；涉及外部数据源的改动必须真实调用验证（B-7 教训）。代码改动走 branch + PR 进 main；纯文档改动可直接 commit main。
 

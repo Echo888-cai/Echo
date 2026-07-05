@@ -16,5 +16,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      - run: npm run typecheck
       # 测试不需要任何 API key：模型层与数据层都有本地兜底
       - run: npm test

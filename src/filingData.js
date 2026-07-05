@@ -63,7 +63,7 @@ async function fetchHkexNewsFilings(ticker) {
   const rowPattern = /<tr[^>]*class="row"[^>]*>[\s\S]*?<\/tr>/gi;
   const rows = [...html.matchAll(rowPattern)];
 
-  for (const [, row] of rows.slice(0, 15)) {
+  for (const [row] of rows.slice(0, 15)) {
     try {
       const titleMatch = row.match(/<td[^>]*class="title"[^>]*>[\s\S]*?<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/i)
         || row.match(/<a[^>]*href="([^"]*)"[^>]*class="news-url"[^>]*>([\s\S]*?)<\/a>/i);
@@ -132,7 +132,7 @@ async function fetchFilingsViaSearch(ticker) {
   const filings = [];
   const blocks = [...html.matchAll(/<li class="b_algo"[\s\S]*?(?=<li class="b_algo"|<\/ol>|$)/gi)].slice(0, 10);
 
-  for (const [, block] of blocks) {
+  for (const [block] of blocks) {
     const heading = block.match(/<h2[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/h2>/i);
     if (!heading) continue;
     const link = decodeHtmlEntities(heading[1]);
