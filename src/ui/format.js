@@ -14,7 +14,7 @@ export function uid(prefix = "id") {
 }
 
 export function toast(message) {
-  const toastNode = document.querySelector("#toast");
+  const toastNode = /** @type {(Element & {timer?: ReturnType<typeof setTimeout>})|null} */ (document.querySelector("#toast"));
   if (!toastNode) return;
   toastNode.textContent = message;
   toastNode.classList.add("is-visible");

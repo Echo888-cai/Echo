@@ -55,6 +55,7 @@ export function mergeHkFinancialGaps(target, hkFinancials) {
   target.firstPartySupplement = true;
 }
 
+/** @returns {import("../types.js").MarketSnapshot} */
 export function fallbackMarketSnapshot(ticker, reason = "timeout") {
   return {
     source: "未接入",
@@ -79,6 +80,7 @@ export function fallbackMarketSnapshot(ticker, reason = "timeout") {
   };
 }
 
+/** @returns {import("../types.js").NewsSnapshot} */
 export function fallbackNewsSnapshot(company, reason = "timeout") {
   return {
     source: "未接入",
@@ -93,6 +95,10 @@ export function fallbackNewsSnapshot(company, reason = "timeout") {
   };
 }
 
+/**
+ * @param {{company: {ticker: string, nameZh?: string}, suppliedMarketSnapshot?: import("../types.js").MarketSnapshot|null}} args
+ * @returns {Promise<import("../types.js").DataSources>}
+ */
 export async function collectDataSources({ company, suppliedMarketSnapshot = null }) {
   if (!company?.ticker) throw new Error("缺少公司上下文");
   const errors = [];

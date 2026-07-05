@@ -18,9 +18,9 @@ import { fmtPercent, compactNumberServer } from "../utils/format.js";
 /**
  * Compute financial quality scores and metrics from raw financial data.
  *
- * @param {object} data - the output of getFinancials()
- * @param {object} opts
- * @returns {{ metrics: object[], quality: object, missing: string[] }}
+ * @param {import("../types.js").FinancialsData} financialsData - the output of getFinancials()
+ * @param {{marketCap?: number, pe?: number}} [opts]
+ * @returns {{ metrics: object[], quality: object, missing: string[], summary?: string }}
  */
 export function computeFinancialQuality(financialsData, { marketCap, pe } = {}) {
   if (!financialsData || financialsData.providerStatus !== "ok") {

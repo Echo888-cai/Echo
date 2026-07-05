@@ -30,6 +30,7 @@ export async function handleReportGenerateApi(req, res) {
       )
     ]);
 
+    /** @type {(Object & {valuation?: import("../types.js").Valuation})|null|undefined} */
     const panel = result.decisionPanel;
     const valuationProfile = companyByTicker(panel?.ticker || payload.company?.ticker) || payload.company;
     const valuation = displayValuation(valuationProfile, result.marketSnapshot, result.financialsData);

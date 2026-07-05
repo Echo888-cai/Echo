@@ -29,8 +29,8 @@ function ensureCompanyRow(db, ticker, name) {
 }
 
 /**
- * Persist one research session. Accepts a payload shaped like:
- *   { id?, ticker, question, status?, decisionPanel, fullResearch, dataSources, reportMarkdown?, rating?, confidence? }
+ * @param {import("../types.js").ResearchSession & {sessionId?: string, sessionTitle?: string, turnCount?: number}} payload
+ * @returns {{id: string}}
  */
 export function saveResearchSession(payload) {
   if (!payload?.ticker) throw new Error("research_sessions 需要 ticker");
@@ -85,6 +85,7 @@ export function saveResearchSession(payload) {
   return { id };
 }
 
+/** @returns {import("../types.js").ResearchSession|null} */
 export function getResearchSession(id) {
   const db = getDb();
   const row = db.prepare("SELECT * FROM research_sessions WHERE id = ?").get(id);
@@ -109,6 +110,7 @@ export function getResearchSession(id) {
   };
 }
 
+/** @param {{limit?: number, ticker?: string}} [opts] */
 export function listResearchSessions({ limit = 20, ticker } = {}) {
   const db = getDb();
   const rows = ticker

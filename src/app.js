@@ -19,7 +19,7 @@ import { showPortfolio, deletePortfolioPosition } from "./ui/portfolio.js";
 function render() {
   // 后台会话完成会触发 render() 重建视图——若用户正在 composer 里打字，full innerHTML 会清掉
   // 输入。渲染前抓住 textarea 内容/光标，渲染后还原，避免并行场景下"打字打一半被清空"。
-  const ta = document.querySelector(".composer textarea");
+  const ta = /** @type {HTMLTextAreaElement|null} */ (document.querySelector(".composer textarea"));
   const preserved = ta ? { value: ta.value, start: ta.selectionStart, end: ta.selectionEnd, focused: document.activeElement === ta } : null;
   const route = currentRoute();
   if (route === "/settings") {
@@ -29,7 +29,7 @@ function render() {
   else if (route === "/watch" || route.startsWith("/watch/")) renderWatchPage();
   else renderResearch(); // "/" 与 "/research" 都落到研究页（灵魂入口）
   if (preserved && preserved.value) {
-    const next = document.querySelector(".composer textarea");
+    const next = /** @type {HTMLTextAreaElement|null} */ (document.querySelector(".composer textarea"));
     if (next) {
       next.value = preserved.value;
       if (preserved.focused) {
@@ -42,10 +42,10 @@ function render() {
 setRenderFn(render); // 各模块通过 state.render() 触发重渲染
 
 document.addEventListener("submit", async (event) => {
-  const form = event.target.closest("[data-form='chat']");
+  const form = /** @type {HTMLFormElement|null} */ (/** @type {Element} */ (event.target).closest("[data-form='chat']"));
   if (!form) return;
   event.preventDefault();
-  const input = form.elements.query;
+  const input = /** @type {HTMLInputElement} */ (/** @type {any} */ (form.elements).query);
   const question = input.value.trim();
   // 只挡"当前会话正忙"——别的会话在后台跑不影响在这条/新建里发问（并行）。
   if (!question || isViewBusy()) return;
@@ -63,19 +63,19 @@ document.addEventListener("submit", async (event) => {
 });
 
 document.addEventListener("submit", (event) => {
-  const form = event.target.closest("[data-form='watch-add']");
+  const form = /** @type {HTMLFormElement|null} */ (/** @type {Element} */ (event.target).closest("[data-form='watch-add']"));
   if (!form) return;
   event.preventDefault();
-  void addWatch(form.elements.q.value.trim());
+  void addWatch(/** @type {HTMLInputElement} */ (/** @type {any} */ (form.elements).q).value.trim());
 });
 
 document.addEventListener("click", async (event) => {
   // 通知面板：点面板外任意处收起（含点别的按钮——先收起再继续处理该按钮）。
-  if (S.notifOpen && !event.target.closest(".notif-wrap")) {
+  if (S.notifOpen && !(/** @type {Element} */ (event.target).closest(".notif-wrap"))) {
     S.notifOpen = false;
     render();
   }
-  const target = event.target.closest("[data-action]");
+  const target = /** @type {HTMLElement|null} */ (/** @type {Element} */ (event.target).closest("[data-action]"));
   if (!target) return;
   const action = target.dataset.action;
   if (action === "toggle-notifs") { void toggleNotifPanel(); return; }
@@ -95,7 +95,7 @@ document.addEventListener("click", async (event) => {
   if (action === "chart-range") { S.chartRange = target.dataset.range || "3m"; render(); return; }
   if (action === "stock-tab") { S.stockTab = target.dataset.tab || "overview"; render(); return; }
   if (action === "export-portrait") { exportPortrait(); return; }
-  if (action === "watch-add-open") { S.watchAddOpen = true; S.watchAddError = ""; render(); setTimeout(() => document.querySelector(".wl-add input")?.focus(), 0); return; }
+  if (action === "watch-add-open") { S.watchAddOpen = true; S.watchAddError = ""; render(); setTimeout(() => /** @type {HTMLElement|null} */ (document.querySelector(".wl-add input"))?.focus(), 0); return; }
   if (action === "watch-add-close") { S.watchAddOpen = false; S.watchAddError = ""; render(); return; }
   if (action === "untrack-stock") { void removeWatch(target.dataset.ticker); return; }
   // 持仓管理沉在研究对话里（复用现成的自然语言记账 + 面板），从任意页点入都先切到研究页。
@@ -118,7 +118,7 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "settings") location.hash = "#/settings";
   if (action === "quick") {
-    const input = document.querySelector(".composer textarea");
+    const input = /** @type {HTMLTextAreaElement|null} */ (document.querySelector(".composer textarea"));
     if (input) {
       input.value = target.dataset.query || "";
       input.focus();
@@ -126,7 +126,7 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "example") {
     if (isViewBusy()) return;
-    const input = document.querySelector(".composer textarea");
+    const input = /** @type {HTMLTextAreaElement|null} */ (document.querySelector(".composer textarea"));
     if (input) {
       input.value = target.dataset.query || "";
       input.focus();
@@ -137,7 +137,7 @@ document.addEventListener("click", async (event) => {
   if (action === "report") await generateDeepResearch();
   if (action === "delete-position") await deletePortfolioPosition(target.dataset.ticker);
   if (action === "portfolio-add") {
-    const input = document.querySelector(".composer textarea");
+    const input = /** @type {HTMLTextAreaElement|null} */ (document.querySelector(".composer textarea"));
     if (input) {
       input.value = "<公司名或代码> 成本 <价> 持有 <股数> 股 止损 <价> 止盈 <价>";
       input.focus();
@@ -147,12 +147,12 @@ document.addEventListener("click", async (event) => {
 });
 
 document.addEventListener("change", (event) => {
-  const input = event.target.closest("input[type='file'][name='documents']");
+  const input = /** @type {HTMLInputElement|null} */ (/** @type {Element} */ (event.target).closest("input[type='file'][name='documents']"));
   if (input) void parseFiles(input);
 });
 
 document.addEventListener("keydown", (event) => {
-  const input = event.target.closest(".composer textarea");
+  const input = /** @type {HTMLTextAreaElement|null} */ (/** @type {Element} */ (event.target).closest(".composer textarea"));
   if (!input) return;
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();

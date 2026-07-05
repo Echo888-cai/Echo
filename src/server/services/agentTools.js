@@ -22,6 +22,7 @@ export const agentTools = {
     name: "resolveCompany",
     description: "把自由文本/代码解析成已知公司档案（ticker/名称/板块）。先查本地已研究库（零延迟），未命中再走 alias/FMP/Finnhub/LLM 四级解析（与【新建研究】入口一致）。",
     inputSchema: { query: "string" },
+    /** @param {{query?: string}} [args] */
     run: ({ query } = {}) =>
       safeRun(async () => {
         const local = companyByTicker(query) || findCompany(query);
@@ -35,6 +36,7 @@ export const agentTools = {
     name: "researchCompany",
     description: "对指定公司跑完整研究管道（数据聚合 + 本地/模型决策面板）。",
     inputSchema: { question: "string", company: "object", options: "object?" },
+    /** @param {{question?: string, company?: Object, options?: Object}} [args] */
     run: ({ question, company, options = {} } = {}) =>
       safeRun(() => runAgent({ question, company }, { persist: false, useModelPanel: false, ...options }))
   },
@@ -42,12 +44,14 @@ export const agentTools = {
     name: "screenStocks",
     description: "按自然语言筛选条件（市场/赛道/PE 等）跑选股，返回候选名单。",
     inputSchema: { question: "string" },
+    /** @param {{question?: string}} [args] */
     run: ({ question } = {}) => safeRun(() => runScreener(question))
   },
   compareCompanies: {
     name: "compareCompanies",
     description: "拉取一只标的的轻量行情/财报/估值快照，用于对话内并排对比。",
     inputSchema: { ticker: "string", nameZh: "string?" },
+    /** @param {{ticker?: string, nameZh?: string}} [args] */
     run: ({ ticker, nameZh } = {}) =>
       safeRun(async () => {
         const summary = await buildCompareSummary({ ticker, nameZh });
@@ -59,12 +63,14 @@ export const agentTools = {
     name: "macroRead",
     description: "回答宏观/大盘问题：指数行情 + 网页证据 + 框架化短评。",
     inputSchema: { question: "string" },
+    /** @param {{question?: string}} [args] */
     run: ({ question } = {}) => safeRun(() => runMacro(question))
   },
   webEvidence: {
     name: "webEvidence",
     description: "按研究意图检索网页证据（一手来源优先）。",
     inputSchema: { company: "object", question: "string", intent: "string?" },
+    /** @param {{company?: Object, question?: string, intent?: string}} [args] */
     run: ({ company, question, intent } = {}) => safeRun(() => researchWebEvidence({ company, question, intent }))
   }
 };

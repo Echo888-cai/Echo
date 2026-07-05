@@ -87,8 +87,9 @@ function evaluatedRules(ticker, price) {
 
 /**
  * 为一组公司构建盯盘台。
- * @param {Array} companies [{ ticker, nameZh }]
- * @returns { generatedAt, slot, cards, counts, failures }
+ * @param {Array<{ticker: string, nameZh?: string}>} companies
+ * @param {{slot?: string, events?: boolean}} [opts]
+ * @returns {Promise<{generatedAt: string, slot: string, cards: Array<Object>, counts: Object, failures: Array<Object>}>}
  */
 export async function buildWatchDesk(companies = [], { slot = "premarket", events: withEvents = true } = {}) {
   const universe = companies.slice(0, 30);
@@ -146,7 +147,7 @@ export async function buildWatchDesk(companies = [], { slot = "premarket", event
   // 最紧急的浮到最上：已触发 → 有风险 → 逻辑还在；同档内高severity事件优先、事件多优先、名字稳定。
   cards.sort((a, b) =>
     (STATUS_RANK[b.status] - STATUS_RANK[a.status]) ||
-    ((b.topEvent?.severity === "high") - (a.topEvent?.severity === "high")) ||
+    (Number(b.topEvent?.severity === "high") - Number(a.topEvent?.severity === "high")) ||
     (b.eventCount - a.eventCount) ||
     String(a.companyName).localeCompare(String(b.companyName))
   );

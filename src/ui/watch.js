@@ -304,7 +304,7 @@ export async function addWatch(q) {
     S.watchAddError = "添加失败，请重试";
   }
   S.watchAddBusy = false; render();
-  if (S.watchAddOpen) document.querySelector(".wl-add input")?.focus();
+  if (S.watchAddOpen) /** @type {HTMLElement|null} */ (document.querySelector(".wl-add input"))?.focus();
 }
 
 // 移出关注：乐观先本地摘掉这行立即重渲染（别等慢吞吞的整盘刷新），再后台 untrack + 对账。

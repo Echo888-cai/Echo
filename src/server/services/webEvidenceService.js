@@ -125,6 +125,10 @@ function credibilityFor(item = {}) {
   return Math.max(0.05, Math.min(1, score));
 }
 
+/**
+ * @param {{title?: string, snippet?: string, source?: string}} [item]
+ * @param {{company?: {ticker?: string, nameZh?: string, nameEn?: string, aliases?: string[]}, question?: string, intent?: string}} [ctx]
+ */
 function relevanceFor(item = {}, { company = {}, question = "", intent = "" } = {}) {
   const haystack = `${item.title || ""} ${item.snippet || ""} ${item.source || ""}`.toLowerCase();
   const tokens = [
@@ -460,6 +464,9 @@ async function enrichWithExcerpts(items = [], { limit = 3, timeoutMs = 4000 } = 
   return items;
 }
 
+/**
+ * @param {{company?: {ticker?: string, nameZh?: string, nameEn?: string, aliases?: string[]}, question?: string, intent?: string, maxAgeHours?: number, forceRefresh?: boolean}} [args]
+ */
 export async function researchWebEvidence({ company, question = "", intent = classifyResearchIntent(question), maxAgeHours = 24, forceRefresh = false } = {}) {
   if (!company?.ticker) {
     return { intent, queries: [], evidence: [], gaps: ["缺少公司上下文，无法检索公开证据。"], provider: "none", searchedAt: nowIso() };

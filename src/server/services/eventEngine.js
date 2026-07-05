@@ -104,7 +104,7 @@ const DEFAULT_PREFS = {
 
 /**
  * 拉取单个 ticker 的财报临近事件。
- * @returns {{ event: object|null, status: "ok"|"empty"|"error", reason?: string }}
+ * @returns {Promise<{ event: object|null, status: "ok"|"empty"|"error", reason?: string }>}
  */
 async function fetchEarningsEvent(company) {
   const symbol = fmpSymbol(company.ticker);
@@ -120,7 +120,7 @@ async function fetchEarningsEvent(company) {
     .filter((d) => d && d >= today)
     .sort()[0];
   if (!upcoming) return { event: null, status: "empty" };
-  const days = Math.round((new Date(upcoming) - new Date(today)) / 86400000);
+  const days = Math.round((new Date(upcoming).getTime() - new Date(today).getTime()) / 86400000);
   if (days > 14) return { event: null, status: "empty" }; // 只在 T-14 内提醒
   return {
     status: "ok",
@@ -138,7 +138,7 @@ async function fetchEarningsEvent(company) {
 
 /**
  * 拉取单个 ticker 的重大新闻事件（复用 newsData，确定性分级）。
- * @returns {{ events: object[], status: "ok"|"empty"|"error", reason?: string }}
+ * @returns {Promise<{ events: object[], status: "ok"|"empty"|"error", reason?: string }>}
  */
 async function fetchNewsEvents(company) {
   let snapshot;
@@ -219,7 +219,7 @@ function eventKey(e) {
 
 /**
  * 为单家公司收集事件，并返回明确状态（错误不再被静默吞掉）。
- * @returns {{ ticker, companyName, market, status, reasons: string[], events: object[] }}
+ * @returns {Promise<{ ticker: string, companyName: string, market: string, status: "ok"|"empty"|"error", reasons: string[], events: object[] }>}
  */
 async function collectCompanyEvents(company, cfg) {
   const ticker = company.ticker;
@@ -258,6 +258,7 @@ async function collectCompanyEvents(company, cfg) {
     return true;
   });
 
+  /** @type {"ok"|"empty"|"error"} */
   let status;
   if (errored && !kept.length) status = "error";
   else if (!kept.length) status = "empty";
@@ -268,9 +269,10 @@ async function collectCompanyEvents(company, cfg) {
 
 /**
  * 为一组公司构建 digest。
- * @param {Array} companies [{ ticker, nameZh }]
- * @param {object} prefs    { blockedKinds, highDailyCap, lowPerCompany }
- * @returns { generatedAt, slot, counts, events, groups, failures, summary }
+ * @param {Array<{ticker: string, nameZh?: string}>} companies
+ * @param {{blockedKinds?: string[], highDailyCap?: number, lowPerCompany?: number}} [prefs]
+ * @param {{slot?: string}} [opts]
+ * @returns {Promise<{generatedAt: string, slot: string, counts: Object, events: object[], groups: object[], failures: object[], summary: string, severityLabel: Object}>}
  */
 export async function buildDigest(companies = [], prefs = {}, { slot = "premarket" } = {}) {
   const cfg = { ...DEFAULT_PREFS, ...prefs };
@@ -294,7 +296,7 @@ export async function buildDigest(companies = [], prefs = {}, { slot = "premarke
   // groups 排序：有事件的优先，再按 high 数量、再按公司名稳定。
   const highCount = (g) => g.events.filter((e) => e.severity === "high").length;
   groups.sort((a, b) =>
-    (b.events.length > 0) - (a.events.length > 0) ||
+    Number(b.events.length > 0) - Number(a.events.length > 0) ||
     highCount(b) - highCount(a) ||
     String(a.companyName).localeCompare(String(b.companyName))
   );

@@ -161,6 +161,7 @@ function ruleSignature(rules) {
  * - 已有画像且判断变化 → 改正文 + 追加一条变更事件（带理由与证据链接，未来复盘用）。
  * - 证伪价格线（量化规则）变化 → 追加一条"证伪线演进"事件。
  * - 已有画像但判断未变 → 只 bump turn_count，不写流水账。
+ * @param {{ticker?: string, panel?: Object, valuation?: import("../types.js").Valuation|null, question?: string, answerContent?: string, sessionId?: string|null}} [args]
  */
 export function updatePortraitFromPanel({ ticker, panel, valuation = null, question = "", answerContent = "", sessionId = null } = {}) {
   if (!ticker || !panel) return { created: false, changed: false, profile: null };
