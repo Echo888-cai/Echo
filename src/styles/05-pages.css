@@ -433,10 +433,12 @@
     border-right: 0;
     border-bottom: 1px solid var(--hairline);
     order: 2;
+    min-width: 0;
   }
 
   .desk {
     order: 1;
+    min-width: 0;
   }
 
   .settings-grid {
