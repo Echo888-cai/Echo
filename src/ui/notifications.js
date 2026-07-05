@@ -2,6 +2,7 @@
 import { S, render } from "./state.js";
 import { api } from "./api.js";
 import { esc, toast, notifWhen } from "./format.js";
+import { loadSession } from "./research.js";
 
 export async function refreshNotifUnread() {
   try {
@@ -44,15 +45,20 @@ export async function toggleNotifPanel() {
   render();
 }
 
-export async function markNotifRead(id, ticker) {
+export async function markNotifRead(id, ticker, sessionId) {
   try {
     const data = await api("/api/notifications/read", { method: "POST", body: JSON.stringify({ id }) });
     S.notifUnread = Number(data.unread) || 0;
     const item = S.notifItems.find((n) => n.id === Number(id));
     if (item) item.readAt = item.readAt || new Date().toISOString();
   } catch { /* 已读失败不阻断跳转 */ }
-  if (ticker) {
-    S.notifOpen = false;
+  S.notifOpen = false;
+  // 证伪命中回链（P2）：优先跳回当时定下这条证伪条件的研究会话，解释"为什么设了这条线"；
+  // 没有 sessionId（旧通知/手动规则）时兜底跳 ticker 看盘页，loadSession 找不到会话时
+  // 自己会 toast 提示，不会让用户卡在空白页。
+  if (sessionId) {
+    await loadSession(sessionId);
+  } else if (ticker) {
     location.hash = `#/watch/${encodeURIComponent(ticker)}`;
   }
   render();
@@ -96,11 +102,13 @@ export function renderNotifPanel() {
   } else {
     body = S.notifItems.map((n) => {
       const meta = NOTIF_KIND_META[n.kind] || NOTIF_KIND_META.system;
-      return `<button type="button" class="notif-item ${n.readAt ? "" : "is-unread"}" data-action="notif-open" data-id="${n.id}" data-ticker="${esc(n.ticker || "")}">
+      const sessionId = n.kind === "falsify_alert" ? (n.payload?.sessionId || "") : "";
+      return `<button type="button" class="notif-item ${n.readAt ? "" : "is-unread"}" data-action="notif-open" data-id="${n.id}" data-ticker="${esc(n.ticker || "")}" data-session="${esc(sessionId)}">
         <span class="notif-kind ${meta.cls}">${meta.label}</span>
         <span class="notif-main">
           <span class="notif-title">${esc(n.title)}</span>
           ${n.body ? `<span class="notif-body">${esc(n.body)}</span>` : ""}
+          ${sessionId ? `<span class="notif-link">↳ 点击回到当时定这条证伪线的研究会话</span>` : ""}
         </span>
         <span class="notif-when">${notifWhen(n.createdAt)}</span>
       </button>`;

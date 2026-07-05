@@ -80,7 +80,7 @@ document.addEventListener("click", async (event) => {
   const action = target.dataset.action;
   if (action === "toggle-notifs") { void toggleNotifPanel(); return; }
   if (action === "notif-read-all") { void markAllNotifsRead(); return; }
-  if (action === "notif-open") { void markNotifRead(target.dataset.id, target.dataset.ticker); return; }
+  if (action === "notif-open") { void markNotifRead(target.dataset.id, target.dataset.ticker, target.dataset.session); return; }
   if (action === "notif-test") { void sendTestNotification(); return; }
   if (action === "new") clearResearch();
   if (action === "toggle-theme") { toggleTheme(); return; }

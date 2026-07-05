@@ -267,4 +267,8 @@
   color: var(--muted-2);
   margin-top: 2px;
 }
+.notif-link {
+  font-size: 11px;
+  color: var(--blue-ink);
+}
 
