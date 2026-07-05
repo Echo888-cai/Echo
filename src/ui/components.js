@@ -243,6 +243,45 @@ export function renderValuation(valuation, opts = {}) {
   </div>`;
 }
 
+// G-3 同业对照：Finnhub /stock/peers 自动匹配的可比公司 + 各自倍数 + 是否计入锚点。
+// 明确挂一句"来源=Finnhub/GICS 自动匹配，非人工精选、非模型判断"，避免 AAPL 命中
+// DELL/WDC/HPE（存储/服务器细分行业，非直觉里的"大科技"）这类结果被误解成精选失误。
+const PEER_STAGE_LABEL = { profitable: "盈利", loss: "亏损", loss_growth: "亏损高成长" };
+
+export function renderCompAnchor(compPeers) {
+  if (!compPeers) return "";
+  const peers = Array.isArray(compPeers.peers) ? compPeers.peers : [];
+  if (compPeers.providerStatus !== "ok" || !peers.length) {
+    if (!compPeers.detail) return "";
+    return `<div class="comp-anchor comp-anchor-empty">
+      <div class="comp-anchor-head"><span>同业对照</span><em>未生成</em></div>
+      <p class="comp-anchor-note">${esc(compPeers.detail)}</p>
+    </div>`;
+  }
+  const anchor = compPeers.anchor;
+  const chips = peers.map((p) => {
+    const label = p.multiple != null ? `${esc(p.ticker)} ${esc(p.multipleType)} ${Number(p.multiple).toFixed(1)}x` : esc(p.ticker);
+    const cls = p.matched ? "ca-chip ca-matched" : "ca-chip ca-skipped";
+    const title = p.matched
+      ? `已计入锚点（${esc(PEER_STAGE_LABEL[p.stage] || p.stage || "")}）`
+      : esc(p.reason || "未计入锚点");
+    return `<span class="${cls}" title="${title}">${label}</span>`;
+  }).join("");
+  const anchorLine = anchor
+    ? `<p class="comp-anchor-summary">同业锚点：${esc(anchor.multipleType)} p25 ${anchor.p25.toFixed(1)}x / 中位 ${anchor.median.toFixed(1)}x / p75 ${anchor.p75.toFixed(1)}x（${anchor.n} 家计入，见下方"估值依据"）</p>`
+    : `<p class="comp-anchor-summary">${esc(compPeers.detail || "同业数据不足，未生成锚点，沿用原估值方法")}</p>`;
+  const flags = [
+    compPeers.partial ? `<span class="ca-flag">部分同业数据超时/不可用</span>` : "",
+    compPeers.stale ? `<span class="ca-flag">同业数据来自缓存</span>` : ""
+  ].filter(Boolean).join("");
+  return `<div class="comp-anchor">
+    <div class="comp-anchor-head"><span>同业对照</span><em>Finnhub 同业库 · GICS 自动匹配，非人工精选/非模型判断</em></div>
+    <div class="comp-anchor-chips">${chips}</div>
+    ${anchorLine}
+    ${flags ? `<div class="comp-anchor-flags">${flags}</div>` : ""}
+  </div>`;
+}
+
 // 分析师一致预期：买卖分布条 + 共识方向 + 一致目标价/上行空间。数据由后端
 // buildAnalystSummary 收口（Finnhub recommendation 给分布、Yahoo 兜底给目标价）。
 // 估值条里不再单独重复目标价——这里是唯一、更完整的"分析师锚"。
@@ -469,6 +508,7 @@ export function renderMessage(message) {
         ${isPortfolio ? renderPortfolioPanel(meta.positions, meta.review) : renderRichAnswer(message.content)}
         ${renderValuation(meta.valuation, { name: meta.otherHoldings && meta.otherHoldings.length ? meta.valuationName : null })}
         ${meta.valuation ? "" : renderValuationNote(meta.valuationNote)}
+        ${renderCompAnchor(meta.valuation?.compPeers)}
         ${renderAnalystConsensus(meta.analyst)}
         ${renderEvidenceBlock(meta.evidence)}
         ${isPortfolio ? "" : renderAnswerMeta(meta)}

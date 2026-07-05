@@ -76,6 +76,7 @@ function renderWatchRow(c) {
   // 一句摘要：优先我的投资主线（中文、干净）；主线是失败占位就退回今日事件（去掉" - 来源"后缀）。
   let sec = c.thesis && !WL_BAD_THESIS.test(c.thesis) ? c.thesis : "";
   if (!sec && c.topEvent?.title) sec = c.topEvent.title.replace(/\s+[-–—]\s+[^-–—]*$/, "").trim();
+  const earningsBadge = c.earnings?.nextDate ? `<span class="wl-earnings" title="下一业绩日">财报 ${esc(c.earnings.nextDate)}</span>` : "";
 
   let price = `<span class="wl-price is-none">—</span>`;
   let chg = `<span class="wd-chg is-flat"></span>`;
@@ -100,6 +101,7 @@ function renderWatchRow(c) {
         <span class="wd-ticker">${esc(c.ticker)}</span>
         ${mkt}
         ${statusPill}
+        ${earningsBadge}
       </span>
       ${sparkSvg(c.spark)}
       ${price}
@@ -431,6 +433,10 @@ function renderStockDetail(stock) {
       </div>`
     : `<div class="stock-price-row"><span class="wd-noquote">现价暂不可用</span></div>`;
 
+  const earningsLine = stock.earnings?.nextDate
+    ? `<div class="wl-earnings stock-earnings">下一业绩日 · ${esc(stock.earnings.nextDate)}</div>`
+    : "";
+
   const note = stock.status === "falsified" && stock.statusReason
     ? `<div class="wd-note stock-note">${esc(stock.statusReason)}</div>`
     : "";
@@ -514,6 +520,7 @@ function renderStockDetail(stock) {
           <span class="wd-status ${st.cls}">${st.label}</span>
         </div>
         ${priceBlock}
+        ${earningsLine}
       </div>
       <button class="primary" type="button" data-action="return-company" data-ticker="${esc(stock.ticker)}" data-name="${esc(stock.companyName)}">深入研究</button>
     </div>

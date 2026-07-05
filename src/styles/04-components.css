@@ -619,6 +619,87 @@
   line-height: 1.6;
 }
 
+/* G-3 同业对照：Finnhub 自动匹配的可比公司 + 各自倍数 + 是否计入锚点 */
+.comp-anchor {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  background: var(--panel-glass-strong);
+}
+
+.comp-anchor-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.comp-anchor-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.comp-anchor-head em {
+  color: var(--muted-2);
+  font-size: 11px;
+  font-style: normal;
+  text-align: right;
+}
+
+.comp-anchor-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.ca-chip {
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.ca-chip.ca-matched { border-color: var(--blue-ink); color: var(--blue-ink); }
+.ca-chip.ca-skipped { opacity: 0.55; }
+
+.comp-anchor-summary {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.comp-anchor-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.ca-flag {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(217, 154, 43, 0.14);
+  color: #b26a00;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.comp-anchor-empty .comp-anchor-note {
+  margin: 0;
+  color: var(--muted-2);
+  font-size: 11.5px;
+}
+
 /* Analyst consensus — buy/hold/sell distribution + target anchor */
 .analyst-block {
   margin-top: 18px;

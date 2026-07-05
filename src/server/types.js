@@ -207,6 +207,7 @@
  * @property {string} [model]
  * @property {string|null} sessionId
  * @property {string} content
+ * @property {Object|null} [factGuard] R3：数字级校验摘要（{total,pass,soft,hard,hardDetails,repaired,degraded}），shadow 模式下也有值
  * @property {Object|null} decisionPanel
  * @property {Object} [userContext]
  * @property {DataSources} [dataSources]
