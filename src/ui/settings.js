@@ -53,6 +53,28 @@ function renderCanaryCard() {
   </article>`;
 }
 
+// E4：模型网关调用留痕面板——谁在接、各自延迟/失败率、最近失败原因，取代此前纯 console 的运维盲区。
+function renderLlmAuditCard() {
+  const rows = S.apiStatus?.llmAudit || [];
+  if (!rows.length) {
+    return `<article class="settings-card"><h2>模型调用（近 7 天）</h2>
+      <p>还没有调用留痕——发起一轮研究后，每次 provider 尝试（含 failover）都会记一行。</p>
+    </article>`;
+  }
+  return `<article class="settings-card"><h2>模型调用（近 7 天）</h2>
+    ${rows.map((r) => {
+      const total = r.attempts || 0;
+      const failRate = total ? Math.round((r.failures / total) * 100) : 0;
+      const tone = r.failures > 0 && r.failures === total ? " is-down" : failRate >= 30 ? " is-degraded" : "";
+      const failure = r.failures > 0 && r.lastFailureDetail ? `<div class="setting-sub">最近失败：${esc(r.lastFailureDetail)}（${notifWhen(r.lastFailureAt || "")}）</div>` : "";
+      return `<div class="setting-row${tone}">
+        <span>${esc(r.provider)} · ${total} 次调用（${r.failures} 次失败）</span>
+        <strong>${r.avgLatencyMs != null ? `均延迟 ${r.avgLatencyMs}ms` : "无成功记录"}</strong>
+      </div>${failure}`;
+    }).join("")}
+  </article>`;
+}
+
 function renderHkCoverageCard() {
   const cov = S.apiStatus?.hkFilingCoverage;
   if (!cov) return "";
@@ -82,6 +104,7 @@ export function renderSettings() {
         ${sources.map((s) => `<div class="setting-row"><span>${esc(s.name)}</span><strong>${esc(s.status)}</strong></div>`).join("")}
       </article>
       ${renderCanaryCard()}
+      ${renderLlmAuditCard()}
       ${renderHkCoverageCard()}
       <article class="settings-card"><h2>前台策略</h2>
         <p>研究 / 看盘 / 设置三个分区各司其职：落地即研究（连续对话，产品灵魂）；看盘是精简关注列表，点进公司页看真价格曲线（美股日线收盘价）、研究状况、基本面、证伪条件与事件。港股曲线预留付费源，暂标"待接入"。</p>

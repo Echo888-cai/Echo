@@ -9,7 +9,11 @@
  * All providers use OpenAI-compatible chat completions format.
  * Each call has a timeout. On failure, the next provider in the chain is tried.
  * Returns `{ provider, model, content, latencyMs }` or `null` if all fail.
+ *
+ * E4：每次 provider 尝试（成功或失败，含 failover 链路里被跳过前的那几跳）都落一行
+ * 到 llm_audit（`insertLlmAudit`，失败不抛错），取代此前纯 console 的运维盲区。
  */
+import { insertLlmAudit } from "../repositories/llmAuditRepository.js";
 
 const PROVIDER_TIMEOUT_MS = 45000;
 
@@ -152,12 +156,15 @@ export async function callModel({ system, user }) {
 
   const errors = [];
   for (const provider of providers) {
+    const attemptStart = Date.now();
     try {
       const result = await tryProvider(provider);
+      insertLlmAudit({ provider: provider.id, model: result.model, kind: "chat", status: "ok", latencyMs: result.latencyMs });
       // Clean up
       for (const p of providers) delete p.cachedMessages;
       return result;
     } catch (err) {
+      insertLlmAudit({ provider: provider.id, model: process.env[provider.envModel] || provider.defaultModel, kind: "chat", status: "error", latencyMs: Date.now() - attemptStart, errorDetail: err.message });
       errors.push(`${provider.label}: ${err.message}`);
     }
   }
@@ -188,9 +195,13 @@ export async function callModelStream({ system, user, onToken, onReasoning }) {
   ];
   const errors = [];
   for (const provider of providers) {
+    const attemptStart = Date.now();
     try {
-      return await streamProvider(provider, messages, onToken, onReasoning);
+      const result = await streamProvider(provider, messages, onToken, onReasoning);
+      insertLlmAudit({ provider: provider.id, model: result.model, kind: "stream", status: "ok", latencyMs: result.latencyMs });
+      return result;
     } catch (err) {
+      insertLlmAudit({ provider: provider.id, model: process.env[provider.envModel] || provider.defaultModel, kind: "stream", status: "error", latencyMs: Date.now() - attemptStart, errorDetail: err.message });
       errors.push(`${provider.label}: ${err.message}`);
     }
   }

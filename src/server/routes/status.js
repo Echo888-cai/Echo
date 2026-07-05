@@ -2,6 +2,7 @@ import { sendJson } from "../utils/async.js";
 import { getProviderStatus } from "../services/modelGateway.js";
 import { getSourceHealthSummary, getLatestBatchId } from "../repositories/canaryRepository.js";
 import { getHkFilingCoverage } from "../repositories/hkFinancialsRepository.js";
+import { getProviderCallStats } from "../repositories/llmAuditRepository.js";
 
 const fmpKey = () => process.env.FMP_API_KEY;
 const finnhubKey = () => process.env.FINNHUB_API_KEY;
@@ -43,6 +44,21 @@ export function handleStatusApi(req, res) {
     hkFilingCoverage = getHkFilingCoverage();
   } catch { /* 同上 */ }
 
+  // E4：模型网关调用留痕汇总——谁在接、各自延迟/失败率、最近一次失败原因。
+  let llmAudit = [];
+  try {
+    llmAudit = getProviderCallStats({ days: 7 }).map((row) => ({
+      provider: row.provider,
+      attempts: row.attempts,
+      successes: row.successes,
+      failures: row.failures,
+      avgLatencyMs: row.avgLatencyMs,
+      lastSuccessAt: row.lastSuccessAt,
+      lastFailureDetail: row.lastFailureDetail,
+      lastFailureAt: row.lastFailureAt
+    }));
+  } catch { /* llm_audit 表若尚未迁移到（不应发生，但面板不能因此整体挂掉） */ }
+
   sendJson(res, 200, {
     sources: [
       { id: "market", name: "港美股行情", status: "ok", detail: "港股 Tencent Finance；美股 Finnhub / Alpha Vantage / Yahoo" },
@@ -63,6 +79,7 @@ export function handleStatusApi(req, res) {
     db: { companies: "654+" },
     canary: { batchId: canaryBatchId, sources: canaryHealth },
     hkFilingCoverage,
+    llmAudit,
     updatedAt: new Date().toISOString()
   });
 }
