@@ -5,7 +5,7 @@ import "./setupTestDb.mjs";
 import { getDb } from "../src/db/index.js";
 import { insertCanaryResult, getSourceHealthSummary, getLatestBatchId, getLatestBatchResults } from "../src/server/repositories/canaryRepository.js";
 import { upsertHkFilingIngestLog, getHkFilingCoverage } from "../src/server/repositories/hkFinancialsRepository.js";
-import { classifyIngestStatus } from "../src/server/services/hkFilingsPipeline.js";
+import { classifyIngestStatus, parseGeneralAnnouncements } from "../src/server/services/hkFilingsPipeline.js";
 import { handleStatusApi } from "../src/server/routes/status.js";
 
 let passed = 0;
@@ -74,7 +74,26 @@ console.log("[3] hk_filing_ingest_log：upsert 幂等 + 覆盖率统计");
   check("failed 的 detail 是最新一次 upsert 的内容", cov.failed[0].detail === "解析不到收入行（复查仍失败）");
 }
 
-console.log("[4] /api/status：canary + hkFilingCoverage 字段存在，不因空数据抛错");
+console.log("[4] parseGeneralAnnouncements（G-1.5）：真实 titleSearchServlet 响应形状 → 全类型公告，不限 PDF/不限业绩标题");
+{
+  // 取自真实 HKEX 响应（0700.HK）——翌日披露报表是 PDF 之外还会混着非 PDF 附件的
+  // 典型全类型公告，parseHkexSearchResult（业绩专用）会把它们全部过滤掉。
+  const raw = {
+    result: JSON.stringify([
+      { TITLE: "翌日披露報表", LONG_TEXT: "翌日披露報表 - [股份購回]", FILE_TYPE: "PDF", DATE_TIME: "03/07/2026 17:49", FILE_LINK: "/listedco/listconews/sehk/2026/0703/x.pdf" },
+      { TITLE: "股東週年大會通告", LONG_TEXT: "股東週年大會通告", FILE_TYPE: "PDF", DATE_TIME: "01/06/2026 09:00", FILE_LINK: "/listedco/listconews/sehk/2026/0601/y.pdf" },
+      { TITLE: "无链接的脏行", LONG_TEXT: "", FILE_TYPE: "PDF", DATE_TIME: "01/01/2026 00:00", FILE_LINK: "" }
+    ])
+  };
+  const rows = parseGeneralAnnouncements(raw);
+  check("不限业绩标题也能解析出来（翌日披露报表不含'業績'）", rows.some((r) => r.title === "翌日披露報表"));
+  check("通函类公告也保留（不像 parseHkexSearchResult 那样按 NOISE_TITLE 排除）", rows.some((r) => r.title === "股東週年大會通告"));
+  check("没有 FILE_LINK 的脏行被丢弃", !rows.some((r) => r.title === "无链接的脏行"));
+  check("按时间倒序排列", rows[0].title === "翌日披露報表");
+  check("URL 补全成绝对地址", rows[0].url.startsWith("https://www1.hkexnews.hk/"));
+}
+
+console.log("[5] /api/status：canary + hkFilingCoverage 字段存在，不因空数据抛错");
 {
   let body = null;
   const res = { writeHead() {}, end(payload) { body = JSON.parse(payload); } };
