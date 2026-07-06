@@ -89,6 +89,26 @@ function renderLlmAuditCard() {
   </article>`;
 }
 
+// F-1：factGuard 命中留痕面板——真实误报率是 shadow→soft→full 升档的唯一依据（不再靠翻 console）。
+function renderFactGuardCard() {
+  const fg = S.apiStatus?.factGuard;
+  if (!fg) return "";
+  const modeLabel = { off: "关闭", shadow: "shadow（观察，用户不可见）", soft: "soft（低调提示）", full: "full（拦截+定向重答）" }[fg.mode] || fg.mode;
+  if (!fg.totalChecks) {
+    return `<article class="settings-card"><h2>防幻觉护栏（factGuard）</h2>
+      <p>当前模式：${esc(modeLabel)}。近 14 天还没有校验记录——发起一轮研究后就会开始累积。</p>
+    </article>`;
+  }
+  const tone = fg.hardRate >= 5 ? " is-degraded" : "";
+  return `<article class="settings-card"><h2>防幻觉护栏（factGuard）</h2>
+    <p>当前模式：${esc(modeLabel)}。近 14 天 ${fg.runs} 次回答、${fg.totalChecks} 处数字校验（${notifWhen(fg.firstAt || "")} 起）。</p>
+    <div class="setting-row${tone}"><span>hard 命中率</span><strong>${fg.hardRate}%</strong></div>
+    <div class="setting-row"><span>soft 命中率</span><strong>${fg.softRate}%</strong></div>
+    <div class="setting-row"><span>含 hard 命中的回答</span><strong>${fg.runsWithHard} / ${fg.runs}</strong></div>
+    <p class="setting-sub">升档判断以这里的真实命中率为依据，不凭印象拍板（PLAN v3 红线 10）。</p>
+  </article>`;
+}
+
 // R7：全局研究记分卡——历史判断快照 vs 现价，样本不足时诚实说明，不硬凑百分比。
 function renderScorecardCard() {
   const sc = S.researchScorecard?.global;
@@ -143,6 +163,7 @@ export function renderSettings() {
       </article>
       ${renderCanaryCard()}
       ${renderLlmAuditCard()}
+      ${renderFactGuardCard()}
       ${renderScorecardCard()}
       ${renderHkCoverageCard()}
       <article class="settings-card"><h2>前台策略</h2>

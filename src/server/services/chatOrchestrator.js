@@ -5,6 +5,7 @@ import { sendJson, withTimeout } from "../utils/async.js";
 import { runAgent } from "./agentService.js";
 import { getProviderStatus, callModel } from "./modelGateway.js";
 import { buildFactsRegistry, verifyAnswerNumbers, buildSoftNote, summarizeVerdict, renderHardFailIssues } from "./factGuard.js";
+import { insertFactGuardAudit } from "../repositories/factGuardRepository.js";
 import { companyByTicker } from "../../data.js";
 import { saveResearchSession } from "../repositories/researchSessions.js";
 import { classifyResearchIntent } from "./intentClassifier.js";
@@ -48,14 +49,19 @@ async function repairHardFails({ content, verdict }) {
  * R3 主入口：建事实登记表 → 校验正文数字 → 按 FACT_GUARD_MODE 决定动作。
  * shadow 只记录；soft/full 都会在有 soft/hard 命中时追加低调提示；full 额外对 hard-fail
  * 做一次定向重答，重答后仍不过就确定性降级为 fallback（面板生成的确定性文案）。
+ *
+ * F-1（PLAN v3）：每次校验都落一行 `fact_guard_audit`（不只是 console.log），这样
+ * shadow→soft→full 的升档才有真实误报率可依据，而不是靠人工翻 console 历史（红线 10）。
  */
-async function applyFactGuard({ content, sources, fallback }) {
+export async function applyFactGuard({ content, sources, fallback }) {
   if (FACT_GUARD_MODE === "off") return { content, verdict: null, repaired: false, degraded: false };
 
   const registry = buildFactsRegistry(sources);
   let verdict = verifyAnswerNumbers(content, registry);
-  // 影子模式的价值就在这行日志——不进 DB，本机/scheduler 跑真实问题时人工看。
-  console.log(`[factGuard:${FACT_GUARD_MODE}] ${sources.ticker || "?"}`, JSON.stringify(summarizeVerdict(verdict)));
+  const summary = summarizeVerdict(verdict);
+  // 影子模式的可读性入口仍保留（本机/scheduler 跑真实问题时人工看）；真正的升档依据是下面的落库。
+  console.log(`[factGuard:${FACT_GUARD_MODE}] ${sources.ticker || "?"}`, JSON.stringify(summary));
+  insertFactGuardAudit({ ticker: sources.ticker, mode: FACT_GUARD_MODE, summary });
   if (FACT_GUARD_MODE === "shadow") return { content, verdict, repaired: false, degraded: false };
 
   let finalContent = content;

@@ -3,6 +3,7 @@ import { getProviderStatus } from "../services/modelGateway.js";
 import { getSourceHealthSummary, getLatestBatchId } from "../repositories/canaryRepository.js";
 import { getHkFilingCoverage } from "../repositories/hkFinancialsRepository.js";
 import { getProviderCallStats } from "../repositories/llmAuditRepository.js";
+import { getFactGuardStats } from "../repositories/factGuardRepository.js";
 
 const fmpKey = () => process.env.FMP_API_KEY;
 const finnhubKey = () => process.env.FINNHUB_API_KEY;
@@ -59,6 +60,12 @@ export function handleStatusApi(req, res) {
     }));
   } catch { /* llm_audit 表若尚未迁移到（不应发生，但面板不能因此整体挂掉） */ }
 
+  // F-1：factGuard 命中留痕汇总——升档 shadow→soft→full 的真实依据（不再靠人工翻 console）。
+  let factGuard = null;
+  try {
+    factGuard = { mode: (process.env.FACT_GUARD_MODE || "shadow").toLowerCase(), ...getFactGuardStats({ days: 14 }) };
+  } catch { /* fact_guard_audit 表若尚未迁移到（不应发生，但面板不能因此整体挂掉） */ }
+
   sendJson(res, 200, {
     sources: [
       { id: "market", name: "港美股行情", status: "ok", detail: "港股 Tencent Finance；美股 Finnhub / Alpha Vantage / Yahoo" },
@@ -80,6 +87,7 @@ export function handleStatusApi(req, res) {
     canary: { batchId: canaryBatchId, sources: canaryHealth },
     hkFilingCoverage,
     llmAudit,
+    factGuard,
     updatedAt: new Date().toISOString()
   });
 }

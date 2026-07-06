@@ -3,6 +3,7 @@
 node_modules/
 luvio.db
 luvio.db-*
+backups/
 *.log
 .cache/
 dist/
