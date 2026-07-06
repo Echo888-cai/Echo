@@ -122,7 +122,32 @@ Each researched company accretes a **portrait document**: a Markdown master file
 
 ### Local research memory
 
-Sessions persist in SQLite (thread, company, decision panel, valuation, sources, generated content) — an iterative research notebook, not a disposable chat. Each turn's answer keeps its own meta (valuation bar, evidence cards, confidence chip), so reopening a past session **renders exactly like the live answer**.
+Sessions persist in SQLite (thread, company, decision panel, valuation, sources, generated content) — an iterative research notebook, not a disposable chat. Each turn's answer keeps its own meta (valuation bar, evidence cards, confidence chip), so reopening a past session **renders exactly like the live answer**. A full-text search box over the whole history (SQLite FTS5, trigram-tokenized so Chinese substrings work without word segmentation) answers "which of my past research touched liquid cooling?" directly from the sidebar — kept in sync automatically via DB triggers, no separate indexing step. The whole database is snapshotted daily with an integrity check on the backup itself, not just on write.
+
+### Anti-hallucination guard (factGuard)
+
+Every number the model writes in an answer is checked against a **facts registry** built from the same grounded data that fed the prompt (price, financials, valuation, comp peers, earnings calendar, position) — amounts, percentages, multiples and dates each get their own tolerance band. A mismatch is classified **pass / soft (unverified, not blocked) / hard** (wrong sign, an order of magnitude off, a date that doesn't exist, a currency mismatch after conversion); the rule is deliberately biased toward **under-reporting rather than over-reporting** false positives. Every verification run — not just the misses — is logged (`fact_guard_audit`), aggregated into a rolling hard/soft hit-rate on the settings page, and used as the real evidence gate before the guard is ever promoted from `shadow` (log-only) toward `soft` (visible caveat) or `full` (blocking).
+
+### Earnings closed loop
+
+The earnings calendar doesn't just tell you when the next print lands — after it lands, a scheduler task pulls the actual EPS, compares it to the pre-print consensus, and writes the beat/miss straight into the company portrait timeline and the research scorecard (see below). HK names route through their US ADR for the actual (`0700.HK` → `TCEHY`) when a mapping exists; when the data genuinely isn't available (e.g. free-tier revenue actuals) it says so instead of estimating.
+
+### Structured falsification conditions
+
+Beyond the price-based stop/target lines, the model is asked to output **machine-checkable fundamental falsifiers** at the end of its own reasoning (e.g. "revenue growth below X%", "gross margin below Y%") from a whitelist of six independently-verifiable metrics. These are parsed, validated, stripped from the visible answer (so the raw directive never leaks into the chat bubble), and stored alongside the price watch rules. When the next earnings print lands, the same closed-loop task checks them against real financials and fires a notification if one triggers — turning "what would prove me wrong" from a sentence that's forgotten into a condition that's actually checked.
+
+### Research scorecard & review
+
+Every completed research answer leaves a snapshot (ticker, verdict, valuation band, falsification lines). A scorecard aggregates these into a beat-rate and a "did the thesis hold" review per ticker and globally, with an honest sample-size floor — a scorecard with two data points says "not enough samples yet," it doesn't fake a percentage. Visible on the company portrait page and the settings page.
+
+### Shareholder-return signals
+
+- **US** — SEC Form 4 filings are parsed directly (not the pretty rendered view SEC also serves at a similar-looking URL — the two are easy to confuse and only one is machine-readable) for the last 180 days of real open-market insider buying/selling, excluding option exercises, tax withholding and equity grants, so a routine RSU vest is never counted as an "insider buy".
+- **HK** — HKEX's daily "next-day disclosure return" buyback filings are parsed for real on-exchange repurchases (shares, price range, total consideration) plus the issued-share count reported in the same filing, giving a rough share-count trend (explicitly labelled as lagging — cancellation isn't instant, so this is a coarse trend, not a live net-buyback counter).
+
+### Historical valuation percentile
+
+Where the current multiple sits against the company's **own trailing history** (not just against peers) — using each fiscal year-end's trailing PE as the sample set, labelled as an approximate methodology (annual snapshots, not a daily distribution) since that distinction matters for how much weight to put on the number. Insufficient history (under five fiscal years) degrades honestly to "not enough data" rather than forcing a percentile out of two data points.
 
 ### Model safety
 
@@ -149,20 +174,29 @@ Echo Research
 │   ├── data.js marketData.js financialData.js newsData.js filingData.js
 │   ├── fmpClient.js secFilings.js documentParser.js prompts.js
 │   ├── server/
-│   │   ├── routes/                # chat · discover · companies · research · reports ·
-│   │   │                          #   documents · events · portfolio · portraits ·
-│   │   │                          #   watch · notifications · hkFinancials · status
+│   │   ├── routes/                # chat · discover · companies · research (incl. FTS
+│   │   │                          #   search) · reports · documents · events · portfolio ·
+│   │   │                          #   portraits · watch · notifications · hkFinancials · status
 │   │   ├── services/              # agentService · answerComposer · valuationEngine ·
 │   │   │                          #   financialQuality · webEvidenceService · eventEngine ·
 │   │   │                          #   companyPortrait · discovery · intentClassifier ·
 │   │   │                          #   twoStageChat · scheduler · notifier · riskEngine ·
-│   │   │                          #   hkFilingsPipeline · modelGateway · decisionPanel · …
-│   │   ├── repositories/          # SQLite access (sessions, profiles, portfolio, watch, …)
+│   │   │                          #   hkFilingsPipeline · modelGateway · decisionPanel ·
+│   │   │                          #   factGuard · earningsCalendar · falsifyRules ·
+│   │   │                          #   insiderActivity · historicalValuation · researchReview ·
+│   │   │                          #   dbBackup · …
+│   │   ├── repositories/          # SQLite access (sessions, profiles, portfolio, watch,
+│   │   │                          #   insiderActivity, hkBuyback, historicalValuation,
+│   │   │                          #   factGuardAudit, researchSnapshots, …)
 │   │   ├── schemas/               # structured-output validation
 │   │   └── utils/                 # time anchoring, async, env
-│   └── data/                      # HK stock seed data
-├── scripts/                       # seed-db, doctor, one-off migrations
-├── tests/                         # smoke · reliability · phase3/4/6/7 · notifications
+│   ├── data/                      # HK stock seed data
+│   └── db/
+│       ├── migrations/            # numbered, additive SQL migrations (see docs/DATABASE.md)
+│       └── migrate.js             # `PRAGMA user_version`-based migrator, runs on boot
+├── scripts/                       # seed-db, doctor, canary, hk-coverage, one-off migrations
+├── tests/                         # smoke · reliability · phase3/4/6/7 · notifications ·
+│                                  # phase-b/d/ea/g/r/f/p7 (one file per shipped phase)
 └── docs/                          # product, architecture, data-source & plan notes
 ```
 
@@ -224,9 +258,9 @@ SERPAPI_API_KEY=
 
 ## Status
 
-**Working:** HK + US research conversation · dual-listing routing (HK ↔ US ADR) · discovery layer (screener + macro) · market-aware quotes & fundamentals · US real profit-quality scores · intent routing (incl. financial-quality & falsification) · evidence provenance with URL validation · data-grounding bar + completeness % · data-dimension confidence scoring · analyst consensus (distribution + target anchor) · valuation range + odds + cross-validated methods · structured section answers · real-time SSE streaming · company-grouped event digest with severity + relevance gate · proactive scheduler + notification centre · portfolio panel with live P&L · company portrait documents · HK first-party filing ingestion · Markdown export · SQLite history · light & dark UI.
+**Working:** HK + US research conversation · dual-listing routing (HK ↔ US ADR) · discovery layer (screener + macro) · market-aware quotes & fundamentals · US real profit-quality scores · intent routing (incl. financial-quality & falsification) · evidence provenance with URL validation · data-grounding bar + completeness % · data-dimension confidence scoring · analyst consensus (distribution + target anchor) · valuation range + odds + cross-validated methods · historical valuation percentile (own trailing history) · structured section answers · real-time SSE streaming · company-grouped event digest with severity + relevance gate · proactive scheduler + notification centre · earnings closed loop (actual vs. estimate, beat/miss) · structured, auto-checked fundamental falsification conditions · number-level anti-hallucination guard (factGuard, shadow mode) · research scorecard & review · shareholder-return signals (US Form 4 insider activity, HK exchange buybacks) · portfolio panel with live P&L · company portrait documents · HK first-party filing ingestion · full-text search over research history (SQLite FTS5) · daily verified DB backups · Markdown export · SQLite history · light & dark UI.
 
-**Next:** stable web coverage (`TAVILY_API_KEY` + non-sandbox verification) · deeper agentic reasoning across stocks · mobile (responsive + PWA) · deploy-ready auth & multi-user. See the plan docs below.
+**Next:** stable web coverage (`TAVILY_API_KEY` + non-sandbox verification) · promoting factGuard from `shadow` to `soft` once the logged hit-rate supports it · deeper agentic reasoning across stocks · mobile (responsive + PWA) · deploy-ready auth & multi-user. See the plan docs below.
 
 ---
 
