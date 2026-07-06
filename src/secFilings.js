@@ -47,7 +47,7 @@ export function buildTickerCikMap(raw) {
   return map;
 }
 
-async function tickerToCik(ticker) {
+export async function tickerToCik(ticker) {
   const symbol = bareSymbol(ticker).toUpperCase();
   const fresh = tickerMapCache && Date.now() - tickerMapFetchedAt < TICKER_MAP_TTL_MS;
   if (!fresh) {
@@ -232,4 +232,130 @@ export async function enrich8K(filingsData, { limit = 2 } = {}) {
 export function _resetSecCache() {
   tickerMapCache = null;
   tickerMapFetchedAt = 0;
+}
+
+// ─── F-4a：内部人交易（SEC Form 4，美股先行） ────────────────────
+//
+// 真实调用验证过一个关键假设错误：Form 4 在 submissions.json 里指向的
+// `xslF345X06/form4.xml` 路径返回的是 SEC 生成的可读 HTML（给人看的渲染版），
+// 不是机器可读的原始 XML——真正的结构化数据在同一目录下不带 xsl 前缀的
+// `form4.xml`。两者 URL 只差一段路径，容易踩坑，故记录在案。
+//
+// 只统计真实公开市场买卖（transactionCode P=买入、S=卖出），跳过期权行权（M）、
+// 税务代扣（F）、授予/归属（A）、赠与（G）等薪酬性质变动——那些不是内部人对
+// 公司价值的真实判断信号，混进"净买卖"会把每次 RSU 归属都算成"增持"，误导用户。
+
+const MEANINGFUL_TRANSACTION_CODES = new Set(["P", "S"]);
+const INSIDER_LOOKBACK_DAYS = 180;
+const MAX_FORM4_FILINGS = 10; // 有界：避免单次研究触发过多顺序请求拖慢整体响应
+
+/** 从一段 XML 块里取字段值——SEC Form 4 schema 里同名字段有的包一层 <value>，有的不包，两种都试。 */
+function xmlField(block, tag) {
+  const wrapped = block.match(new RegExp(`<${tag}>\\s*<value>([^<]*)</value>`, "i"));
+  if (wrapped) return wrapped[1].trim();
+  const direct = block.match(new RegExp(`<${tag}>([^<]*)</${tag}>`, "i"));
+  return direct ? direct[1].trim() : "";
+}
+
+/**
+ * 解析单份 Form 4 原始 XML（纯函数，不发网络请求）。只看非衍生品交易表
+ * （nonDerivativeTable）——衍生品表是期权/RSU，不是真实股票买卖。
+ * @returns {{ownerName: string, isOfficer: boolean, isDirector: boolean, transactions: Array<{date: string, code: string, shares: number|null, pricePerShare: number|null, acquiredDisposed: "A"|"D"|""}>}}
+ */
+export function parseForm4Xml(xml = "") {
+  const text = String(xml || "");
+  const ownerName = (text.match(/<rptOwnerName>([^<]*)<\/rptOwnerName>/i) || [])[1]?.trim() || "";
+  const isOfficer = /<isOfficer>\s*(?:<value>)?\s*1|true/i.test(text.match(/<isOfficer>[\s\S]*?<\/isOfficer>/i)?.[0] || "");
+  const isDirector = /<isDirector>\s*(?:<value>)?\s*1|true/i.test(text.match(/<isDirector>[\s\S]*?<\/isDirector>/i)?.[0] || "");
+
+  const blocks = [...text.matchAll(/<nonDerivativeTransaction>([\s\S]*?)<\/nonDerivativeTransaction>/gi)].map((m) => m[1]);
+  const transactions = blocks.map((block) => {
+    const shares = xmlField(block, "transactionShares");
+    const price = xmlField(block, "transactionPricePerShare");
+    return {
+      date: xmlField(block, "transactionDate"),
+      code: xmlField(block, "transactionCode"),
+      shares: shares ? Number(shares) : null,
+      pricePerShare: price && Number.isFinite(Number(price)) ? Number(price) : null,
+      acquiredDisposed: xmlField(block, "transactionAcquiredDisposedCode")
+    };
+  }).filter((t) => Number.isFinite(t.shares) && t.shares > 0);
+
+  return { ownerName, isOfficer, isDirector, transactions };
+}
+
+/**
+ * 聚合多份已解析的 Form 4 文件（纯函数）：只统计 P/S 两种有真实信号的交易码。
+ * @param {Array<{ownerName: string, transactions: Array}>} filings
+ */
+export function aggregateInsiderTransactions(filings = []) {
+  let netShares = 0;
+  let netValueUsd = 0;
+  let buyCount = 0;
+  let sellCount = 0;
+  let lastTransactionAt = null;
+  const insiders = new Set();
+  const rows = [];
+
+  for (const filing of filings) {
+    for (const t of filing.transactions || []) {
+      if (!MEANINGFUL_TRANSACTION_CODES.has(t.code)) continue;
+      const sign = t.acquiredDisposed === "A" ? 1 : t.acquiredDisposed === "D" ? -1 : 0;
+      if (sign === 0) continue;
+      netShares += sign * t.shares;
+      if (t.pricePerShare != null) netValueUsd += sign * t.shares * t.pricePerShare;
+      if (sign > 0) buyCount += 1; else sellCount += 1;
+      insiders.add(filing.ownerName);
+      if (!lastTransactionAt || t.date > lastTransactionAt) lastTransactionAt = t.date;
+      rows.push({ ownerName: filing.ownerName, date: t.date, code: t.code, shares: t.shares, pricePerShare: t.pricePerShare, acquiredDisposed: t.acquiredDisposed });
+    }
+  }
+  rows.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  return {
+    netShares,
+    netValueUsd: Math.round(netValueUsd),
+    buyCount,
+    sellCount,
+    distinctInsiders: insiders.size,
+    lastTransactionAt,
+    transactions: rows.slice(0, 10)
+  };
+}
+
+/**
+ * 真实抓取：该 ticker 近 180 天内最多 10 份 Form 4，解析后聚合净买卖。
+ * 顺序请求（不是并发）——SEC 建议的 fair-use 速率友好写法；一份 Form 4 失败
+ * 不影响其它份的解析。
+ * @returns {Promise<{providerStatus: "ok"|"missing", netShares, netValueUsd, buyCount, sellCount, distinctInsiders, lastTransactionAt, transactions, detail: string|null}>}
+ */
+export async function fetchInsiderActivity(ticker) {
+  const cik = await tickerToCik(ticker);
+  const cikNum = String(cik).replace(/^0+/, "");
+  const json = await fetchJson(`https://data.sec.gov/submissions/CIK${cik}.json`, 9000);
+  const recent = json?.filings?.recent;
+  if (!recent || !Array.isArray(recent.form)) throw new Error("SEC EDGAR 没有返回 filings.recent");
+
+  const cutoff = new Date(Date.now() - INSIDER_LOOKBACK_DAYS * 86400000).toISOString().slice(0, 10);
+  const candidates = [];
+  for (let i = 0; i < recent.form.length && candidates.length < MAX_FORM4_FILINGS; i++) {
+    if (recent.form[i] !== "4") continue;
+    const filingDate = recent.filingDate?.[i] || "";
+    if (filingDate < cutoff) continue;
+    const accession = (recent.accessionNumber?.[i] || "").replace(/-/g, "");
+    if (!accession) continue;
+    candidates.push(`https://www.sec.gov/Archives/edgar/data/${cikNum}/${accession}/form4.xml`);
+  }
+  if (!candidates.length) {
+    return { providerStatus: "missing", netShares: 0, netValueUsd: 0, buyCount: 0, sellCount: 0, distinctInsiders: 0, lastTransactionAt: null, transactions: [], detail: `近 ${INSIDER_LOOKBACK_DAYS} 天没有 Form 4 备案` };
+  }
+
+  const filings = [];
+  for (const url of candidates) {
+    try {
+      const xml = await fetchTextSec(url, 8000);
+      filings.push(parseForm4Xml(xml));
+    } catch { /* 单份失败不影响其它份 */ }
+  }
+  const summary = aggregateInsiderTransactions(filings);
+  return { providerStatus: "ok", ...summary, detail: null };
 }
