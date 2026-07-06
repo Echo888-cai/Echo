@@ -13,6 +13,7 @@ import { listCompanyProfiles, getCompanyProfile, deleteCompanyProfile, renderPro
 import { listSnapshots, listSnapshotTickers } from "../repositories/researchSnapshotsRepository.js";
 import { computeTickerScorecard, computeGlobalScorecard } from "../services/researchReview.js";
 import { getMarketSnapshot } from "../../marketData.js";
+import { getEarningsCalendarRow } from "../repositories/earningsCalendarRepository.js";
 
 export async function handleProfileList(req, res) {
   try {
@@ -67,7 +68,9 @@ export async function handleProfileReview(req, res) {
     } catch {
       // 行情源不可用时复盘仍可算（只是 priceNow 相关字段为 null），不阻断
     }
-    const scorecard = computeTickerScorecard(snapshots, current);
+    let earningsRow = null;
+    try { earningsRow = getEarningsCalendarRow(String(ticker).toUpperCase()); } catch { /* F-2 数据缺失不影响复盘主体 */ }
+    const scorecard = computeTickerScorecard(snapshots, current, undefined, earningsRow);
     sendOk(res, { ticker: String(ticker).toUpperCase(), scorecard });
   } catch (error) {
     sendError(res, 500, error.message || "获取研究复盘失败");
@@ -86,7 +89,9 @@ export async function handleResearchScorecard(req, res) {
           const snap = await getMarketSnapshot(ticker);
           if (snap?.providerStatus === "ok" && snap.price != null) current = { price: snap.price };
         } catch { /* 单只票行情失败不影响其它票的汇总 */ }
-        return { ticker, scorecard: computeTickerScorecard(snapshots, current) };
+        let earningsRow = null;
+        try { earningsRow = getEarningsCalendarRow(String(ticker).toUpperCase()); } catch { /* F-2 数据缺失不影响该票汇总 */ }
+        return { ticker, scorecard: computeTickerScorecard(snapshots, current, undefined, earningsRow) };
       })
     );
     const global = computeGlobalScorecard(perTicker);

@@ -193,6 +193,7 @@ export const PROFILE_EVENT_KIND_LABEL = {
   created: "建档",
   thesis_change: "判断变化",
   falsifier_change: "证伪线更新",
+  earnings_report: "财报公布", // F-2：业绩后自动核对（实际值 vs 预期），非模型推断
   note: "记录"
 };
 

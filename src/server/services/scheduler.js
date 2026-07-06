@@ -20,7 +20,7 @@ import { getDb } from "../../db/index.js";
 import { beijingDate, beijingMinute } from "../utils/time.js";
 import { notify } from "./notifier.js";
 import { buildDigest, buildPositionAlerts } from "./eventEngine.js";
-import { listCompanyProfiles, getCompanyProfile } from "../repositories/companyProfiles.js";
+import { listCompanyProfiles, getCompanyProfile, appendProfileEvent } from "../repositories/companyProfiles.js";
 import { listPositions } from "../repositories/portfolio.js";
 import { listWatchAdds, getHiddenTickers } from "../repositories/watchlist.js";
 import { listAllActiveRules, markTriggered } from "../repositories/watchRules.js";
@@ -28,6 +28,9 @@ import { evaluateRule } from "./falsifyRules.js";
 import { getMarketSnapshot } from "../../marketData.js";
 import { listSnapshotTickers } from "../repositories/researchSnapshotsRepository.js";
 import { runBackup } from "./dbBackup.js";
+import { getNextEarnings } from "./earningsCalendar.js";
+import { listWithLastReported } from "../repositories/earningsCalendarRepository.js";
+import { compactNumberServer } from "../utils/format.js";
 
 // ── 时间判定（纯函数，可测） ──────────────────────────────────
 
@@ -201,6 +204,66 @@ async function runDbBackupJob() {
   return runBackup({ retain: 14 });
 }
 
+function surpriseLabel(pct) {
+  if (pct == null) return "无法算惊喜幅度（预期缺失）";
+  return `${pct >= 0 ? "+" : ""}${pct}%`;
+}
+
+/**
+ * 业绩后复核：先刷新每只覆盖标的的财报日历（尊重 24h TTL，只有过期的才真正发请求），
+ * 再看谁已核到"最近一期实际数字"——不按日期窗口筛选新旧（`last_date` 是财季结束日，
+ * 不是公告日，免费档拿不到公告日，见 earningsCalendar.js 顶部说明），而是每次都尝试
+ * 通知，靠 dedupeKey 按 ticker+year+quarter 去重——同一期报告只会真正提醒一次，
+ * 不管 scheduler 哪天检测到它。画像时间线同理，靠事件内容自然幂等（重复运行不会
+ * 让通知重复出现，只会让 appendProfileEvent 多写一行相同事件——可接受，时间线本来就
+ * 允许同一天出现多条记录，前端渲染上不会造成误导）。
+ */
+async function runEarningsReviewJob() {
+  const tickers = listSnapshotTickers();
+  if (!tickers.length) return "无研究快照，跳过";
+  for (const t of tickers) {
+    try { await getNextEarnings(t.ticker); } catch { /* 单只票刷新失败不影响其它票 */ }
+  }
+  // listWithLastReported() 是全表扫描（含所有被查过财报日历的 ticker，不限于本次覆盖范围）——
+  // 必须按覆盖范围过滤，否则会把"只是随口问过一次下一财报日"的公司也拉进业绩后提醒名单，
+  // 超出这个任务本该只服务"有真实研究判断"的标的这一范围（真实跑一轮抓到：AAPL+0700.HK
+  // 都在库里时，只研究过 AAPL 的场景下 0700.HK 也被误通知了）。
+  const coveredTickers = new Set(tickers.map((t) => t.ticker));
+  const reported = listWithLastReported().filter((r) => coveredTickers.has(r.ticker));
+  if (!reported.length) return `${tickers.length} 只票检查完成，暂无已核到实际值的财报`;
+
+  let notified = 0;
+  for (const r of reported) {
+    const profile = getCompanyProfile(r.ticker);
+    const name = profile?.companyName || r.ticker;
+    const period = r.last_year && r.last_quarter ? `${r.last_year}Q${r.last_quarter}` : "最近一期";
+    const epsLine = `EPS 实际 ${r.last_eps_actual}${r.last_eps_estimate != null ? ` vs 预期 ${r.last_eps_estimate}` : ""}（${surpriseLabel(r.last_eps_surprise_pct)}）`;
+    const revLine = r.last_revenue_actual != null
+      ? `营收实际 ${compactNumberServer(r.last_revenue_actual)}${r.last_revenue_estimate != null ? ` vs 预期 ${compactNumberServer(r.last_revenue_estimate)}` : ""}（${surpriseLabel(r.last_revenue_surprise_pct)}）`
+      : "营收：免费数据源无实际值，未核到";
+    const result = await notify({
+      kind: "earnings_review",
+      title: `${name} ${period} 财报已公布`,
+      body: `${epsLine}；${revLine}。去公司页看当时的证伪线是否仍成立、判断该不该跟着更新。`,
+      ticker: r.ticker,
+      payload: { lastDate: r.last_date, epsSurprisePct: r.last_eps_surprise_pct, revenueSurprisePct: r.last_revenue_surprise_pct },
+      dedupeKey: `earnings_review:${r.ticker}:${period}`,
+      dedupeWindowHours: 24 * 100
+    });
+    if (result?.deduped) continue; // 这一期已经提醒过，不重复写画像时间线
+    if (profile) {
+      appendProfileEvent(r.ticker, {
+        date: beijingDate(),
+        kind: "earnings_report",
+        summary: `${period} 财报：${epsLine}；${revLine}`,
+        rationale: "F-2 业绩后自动核对（Finnhub 实际值 vs 预期，非模型推断）"
+      });
+    }
+    notified += 1;
+  }
+  return `${tickers.length} 只票检查完成，${notified} 条业绩后提醒已通知`;
+}
+
 /** 内置任务注册表（代码即配置，可版本管理）。 */
 export const JOBS = [
   { id: "digest_hk", label: "港股盘前速报", schedule: { kind: "daily", at: "09:00" }, run: () => runDigestJob("HK", "港股") },
@@ -208,7 +271,8 @@ export const JOBS = [
   { id: "position_lines", label: "持仓触线巡检", schedule: { kind: "interval", everyMinutes: 30, tradingHoursOnly: true }, run: runPositionLinesJob },
   { id: "falsify_watch", label: "证伪监控巡检", schedule: { kind: "interval", everyMinutes: 30, tradingHoursOnly: true }, run: runFalsifyWatchJob },
   { id: "review_reminder", label: "研究复盘提醒", schedule: { kind: "daily", at: "08:00" }, run: runReviewReminderJob },
-  { id: "db_backup", label: "研究库每日备份", schedule: { kind: "daily", at: "03:30" }, run: runDbBackupJob }
+  { id: "db_backup", label: "研究库每日备份", schedule: { kind: "daily", at: "03:30" }, run: runDbBackupJob },
+  { id: "earnings_review", label: "业绩后复核", schedule: { kind: "daily", at: "07:30" }, run: runEarningsReviewJob }
 ];
 
 // ── 引擎 ─────────────────────────────────────────────────────
