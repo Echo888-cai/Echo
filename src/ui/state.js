@@ -38,6 +38,11 @@ export const S = {
   conversationGroups: [],
   sessionsLoaded: false,
   historyOpen: true,
+  // P7：历史研究全文检索——查询串为空时侧栏显示原有分组列表，非空时显示这里的扁平搜索结果。
+  historySearchQuery: "",
+  historySearchResults: [],
+  historySearchLoading: false,
+  historySearchTooShort: false,
   // 看盘：研究过的公司 ∪ 持仓，聚合成关注列表（画像主线 + 今日最重事件 + 价格/盈亏 + 状态）。
   watchDesk: null,
   watchDeskLoaded: false,

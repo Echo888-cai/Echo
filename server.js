@@ -17,7 +17,7 @@ import { loadEnvFile } from "./src/server/utils/env.js";
 import { handleStatusApi } from "./src/server/routes/status.js";
 import { handleDocumentParseApi } from "./src/server/routes/documents.js";
 import { handleCompanySearch, handleCompanyResolve, handleCompanyVerify } from "./src/server/routes/companies.js";
-import { handleSessionList, handleConversationList, handleSessionClear, handleSessionGet, handleSessionDelete } from "./src/server/routes/research.js";
+import { handleSessionList, handleConversationList, handleSessionClear, handleSessionGet, handleSessionDelete, handleSessionSearch } from "./src/server/routes/research.js";
 import { handleChatApi } from "./src/server/routes/chat.js";
 import { handleDiscoverApi } from "./src/server/routes/discover.js";
 import { handleAskApi } from "./src/server/routes/ask.js";
@@ -114,6 +114,7 @@ const server = createServer(async (req, res) => {
   if (method === "GET" && url.startsWith("/api/research/scorecard")) return handleResearchScorecard(req, res);
 
   // ── Research sessions ──────────────────────────────────
+  if (method === "GET" && url.startsWith("/api/research/search")) return handleSessionSearch(req, res);
   if (method === "GET" && url.startsWith("/api/research/conversations")) return handleConversationList(req, res);
   if (method === "GET" && url.startsWith("/api/research/sessions") && !url.includes("/api/research/sessions/")) return handleSessionList(req, res);
   if (method === "DELETE" && url.split("?")[0] === "/api/research/sessions") return handleSessionClear(req, res);

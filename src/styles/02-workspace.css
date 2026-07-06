@@ -294,6 +294,64 @@ button:disabled {
   transition: color 0.18s var(--ease-soft);
 }
 
+/* P7：历史研究全文检索 */
+.history-search {
+  position: relative;
+  margin: 4px 6px 8px;
+}
+
+.history-search-input {
+  width: 100%;
+  padding: 8px 30px 8px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 12.5px;
+}
+
+.history-search-input:focus {
+  outline: none;
+  border-color: rgba(191, 92, 62, 0.4);
+}
+
+.history-search-clear {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 50%;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.history-search-clear:hover {
+  color: var(--danger);
+  background: rgba(255, 59, 48, 0.08);
+}
+
+.search-snippet {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  color: var(--muted-2);
+  font-size: 11.5px;
+  font-style: normal;
+  line-height: 1.4;
+}
+
+.search-snippet b {
+  color: var(--accent, #bf5c3e);
+  font-weight: 700;
+}
+
 .history-actions {
   display: flex;
   justify-content: flex-end;
