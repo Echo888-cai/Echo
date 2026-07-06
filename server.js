@@ -22,7 +22,7 @@ import { handleChatApi } from "./src/server/routes/chat.js";
 import { handleDiscoverApi } from "./src/server/routes/discover.js";
 import { handleAskApi } from "./src/server/routes/ask.js";
 import { handleReportGenerateApi } from "./src/server/routes/reports.js";
-import { handleProfileList, handleProfileGet, handleProfileDelete } from "./src/server/routes/portraits.js";
+import { handleProfileList, handleProfileGet, handleProfileDelete, handleProfileReview, handleResearchScorecard } from "./src/server/routes/portraits.js";
 import { handleEventsDigest } from "./src/server/routes/events.js";
 import { handleWatchDesk, handleWatchStock, handleWatchTrack, handleWatchUntrack } from "./src/server/routes/watch.js";
 import { handlePortfolioList, handlePortfolioUpsert, handlePortfolioDelete, handlePortfolioReview } from "./src/server/routes/portfolio.js";
@@ -106,8 +106,12 @@ const server = createServer(async (req, res) => {
 
   // ── Company portraits (long-term memory) ───────────────
   if (method === "GET" && url.startsWith("/api/company/profiles")) return handleProfileList(req, res);
+  if (method === "GET" && url.startsWith("/api/company/review")) return handleProfileReview(req, res);
   if (method === "GET" && url.startsWith("/api/company/profile")) return handleProfileGet(req, res);
   if (method === "DELETE" && url.startsWith("/api/company/profile")) return handleProfileDelete(req, res);
+
+  // ── R7 研究记分卡（全局）────────────────────────────────
+  if (method === "GET" && url.startsWith("/api/research/scorecard")) return handleResearchScorecard(req, res);
 
   // ── Research sessions ──────────────────────────────────
   if (method === "GET" && url.startsWith("/api/research/conversations")) return handleConversationList(req, res);

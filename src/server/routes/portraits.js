@@ -4,10 +4,15 @@
  * GET    /api/company/profiles        → list saved portraits (sidebar)
  * GET    /api/company/profile?ticker= → get one portrait (with markdown + events)
  * DELETE /api/company/profile?ticker= → delete one portrait
+ * GET    /api/company/review?ticker=  → R7 研究记分卡：该公司的快照复盘（Phase B）
+ * GET    /api/research/scorecard      → R7 研究记分卡：全局汇总（Phase B）
  */
 
 import { sendOk, sendError } from "../utils/async.js";
 import { listCompanyProfiles, getCompanyProfile, deleteCompanyProfile, renderProfileMarkdown } from "../repositories/companyProfiles.js";
+import { listSnapshots, listSnapshotTickers } from "../repositories/researchSnapshotsRepository.js";
+import { computeTickerScorecard, computeGlobalScorecard } from "../services/researchReview.js";
+import { getMarketSnapshot } from "../../marketData.js";
 
 export async function handleProfileList(req, res) {
   try {
@@ -45,5 +50,48 @@ export async function handleProfileDelete(req, res) {
     sendOk(res, { deleted: true, ticker });
   } catch (error) {
     sendError(res, 500, error.message || "删除画像失败");
+  }
+}
+
+/** R7 Phase B：单只票的研究复盘——历史判断快照 vs 现价。 */
+export async function handleProfileReview(req, res) {
+  try {
+    const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
+    const ticker = url.searchParams.get("ticker");
+    if (!ticker) { sendError(res, 400, "缺少 ticker"); return; }
+    const snapshots = listSnapshots(ticker);
+    let current = { price: null };
+    try {
+      const snap = await getMarketSnapshot(ticker);
+      if (snap?.providerStatus === "ok" && snap.price != null) current = { price: snap.price, asOf: snap.asOf };
+    } catch {
+      // 行情源不可用时复盘仍可算（只是 priceNow 相关字段为 null），不阻断
+    }
+    const scorecard = computeTickerScorecard(snapshots, current);
+    sendOk(res, { ticker: String(ticker).toUpperCase(), scorecard });
+  } catch (error) {
+    sendError(res, 500, error.message || "获取研究复盘失败");
+  }
+}
+
+/** R7 Phase B：全局研究记分卡——跨全部有快照的公司汇总（设置页用）。 */
+export async function handleResearchScorecard(req, res) {
+  try {
+    const tickers = listSnapshotTickers();
+    const perTicker = await Promise.all(
+      tickers.map(async ({ ticker }) => {
+        const snapshots = listSnapshots(ticker);
+        let current = { price: null };
+        try {
+          const snap = await getMarketSnapshot(ticker);
+          if (snap?.providerStatus === "ok" && snap.price != null) current = { price: snap.price };
+        } catch { /* 单只票行情失败不影响其它票的汇总 */ }
+        return { ticker, scorecard: computeTickerScorecard(snapshots, current) };
+      })
+    );
+    const global = computeGlobalScorecard(perTicker);
+    sendOk(res, { global, perTicker: perTicker.map((t) => ({ ticker: t.ticker, scorecard: t.scorecard })) });
+  } catch (error) {
+    sendError(res, 500, error.message || "获取研究记分卡失败");
   }
 }

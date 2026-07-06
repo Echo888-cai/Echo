@@ -20,12 +20,13 @@ import { getDb } from "../../db/index.js";
 import { beijingDate, beijingMinute } from "../utils/time.js";
 import { notify } from "./notifier.js";
 import { buildDigest, buildPositionAlerts } from "./eventEngine.js";
-import { listCompanyProfiles } from "../repositories/companyProfiles.js";
+import { listCompanyProfiles, getCompanyProfile } from "../repositories/companyProfiles.js";
 import { listPositions } from "../repositories/portfolio.js";
 import { listWatchAdds, getHiddenTickers } from "../repositories/watchlist.js";
 import { listAllActiveRules, markTriggered } from "../repositories/watchRules.js";
 import { evaluateRule } from "./falsifyRules.js";
 import { getMarketSnapshot } from "../../marketData.js";
+import { listSnapshotTickers } from "../repositories/researchSnapshotsRepository.js";
 
 // ── 时间判定（纯函数，可测） ──────────────────────────────────
 
@@ -164,12 +165,43 @@ async function runFalsifyWatchJob() {
   return `${rules.length} 条规则核对完成，${hits} 条命中`;
 }
 
+// R7 Phase C：判断快照超过这么多天没更新（=没重新研究过），提醒该复盘了。
+const REVIEW_REMINDER_DAYS = 30;
+
+/** 研究复盘提醒：某票最近一次判断快照超过 30 天没更新，提醒回顾当时的主线是否仍成立。 */
+async function runReviewReminderJob() {
+  const tickers = listSnapshotTickers();
+  if (!tickers.length) return "无研究快照，跳过";
+  const today = beijingDate();
+  let reminded = 0;
+  for (const t of tickers) {
+    const lastDate = String(t.lastSnapshotAt || "").slice(0, 10);
+    if (!lastDate) continue;
+    const days = Math.round((new Date(today).getTime() - new Date(lastDate).getTime()) / 86400000);
+    if (!(days >= REVIEW_REMINDER_DAYS)) continue;
+    const profile = getCompanyProfile(t.ticker);
+    const name = profile?.companyName || t.ticker;
+    await notify({
+      kind: "review_reminder",
+      title: `${name} 该复盘一下了：上次判断快照是 ${days} 天前`,
+      body: `当时的投资主线：${profile?.thesis || "（未记录）"}。回顾一下这个判断跟现在的价格/基本面对比是否还成立。`,
+      ticker: t.ticker,
+      payload: { lastSnapshotAt: t.lastSnapshotAt, daysSinceSnapshot: days },
+      dedupeKey: `review:${t.ticker}:${lastDate}`,
+      dedupeWindowHours: 24 * 29
+    });
+    reminded += 1;
+  }
+  return `${tickers.length} 只票检查完成，${reminded} 条复盘提醒已通知`;
+}
+
 /** 内置任务注册表（代码即配置，可版本管理）。 */
 export const JOBS = [
   { id: "digest_hk", label: "港股盘前速报", schedule: { kind: "daily", at: "09:00" }, run: () => runDigestJob("HK", "港股") },
   { id: "digest_us", label: "美股盘前速报", schedule: { kind: "daily", at: "21:15" }, run: () => runDigestJob("US", "美股") },
   { id: "position_lines", label: "持仓触线巡检", schedule: { kind: "interval", everyMinutes: 30, tradingHoursOnly: true }, run: runPositionLinesJob },
-  { id: "falsify_watch", label: "证伪监控巡检", schedule: { kind: "interval", everyMinutes: 30, tradingHoursOnly: true }, run: runFalsifyWatchJob }
+  { id: "falsify_watch", label: "证伪监控巡检", schedule: { kind: "interval", everyMinutes: 30, tradingHoursOnly: true }, run: runFalsifyWatchJob },
+  { id: "review_reminder", label: "研究复盘提醒", schedule: { kind: "daily", at: "08:00" }, run: runReviewReminderJob }
 ];
 
 // ── 引擎 ─────────────────────────────────────────────────────

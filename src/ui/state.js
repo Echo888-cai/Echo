@@ -49,6 +49,9 @@ export const S = {
   stockTab: "overview",
   stockPortrait: null, // { profile, markdown } 来自 /api/company/profile
   stockPortraitLoading: false,
+  // R7：该票的研究复盘（快照 vs 现价），跟画像一起加载。
+  stockReview: null, // { ticker, scorecard } 来自 /api/company/review
+  stockReviewLoading: false,
   // 公司页价格曲线的区间：1月 / 3月 / 1年。切换只在前端切片已加载的序列，不再打后端。
   chartRange: "3m",
   // 公司页加载序号：用它（而非当前路由）判定"这次加载是否已被更新的加载取代"，
@@ -77,7 +80,11 @@ export const S = {
   // 设置页的调度器/推送状态（进设置页时拉一次；loaded 标志防"失败→render→再拉"循环）。
   schedStatus: null,
   schedStatusLoading: false,
-  schedStatusLoaded: false
+  schedStatusLoaded: false,
+  // R7：设置页的全局研究记分卡（同样懒加载一次）。
+  researchScorecard: null,
+  researchScorecardLoading: false,
+  researchScorecardLoaded: false
 };
 
 // 并行会话：每个在跑的请求一条 run（key=sessionId；新研究用 new:<ticker>）。这样推理中可以
