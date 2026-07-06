@@ -23,9 +23,10 @@ import { buildDigest, buildPositionAlerts } from "./eventEngine.js";
 import { listCompanyProfiles, getCompanyProfile, appendProfileEvent } from "../repositories/companyProfiles.js";
 import { listPositions } from "../repositories/portfolio.js";
 import { listWatchAdds, getHiddenTickers } from "../repositories/watchlist.js";
-import { listAllActiveRules, markTriggered } from "../repositories/watchRules.js";
-import { evaluateRule } from "./falsifyRules.js";
+import { listAllActiveRules, listRules, markTriggered } from "../repositories/watchRules.js";
+import { evaluateRule, evaluateFundamentalRule, FUNDAMENTAL_METRIC_LABELS } from "./falsifyRules.js";
 import { getMarketSnapshot } from "../../marketData.js";
+import { getFinancials } from "../../financialData.js";
 import { listSnapshotTickers } from "../repositories/researchSnapshotsRepository.js";
 import { runBackup } from "./dbBackup.js";
 import { getNextEarnings } from "./earningsCalendar.js";
@@ -233,6 +234,7 @@ async function runEarningsReviewJob() {
   if (!reported.length) return `${tickers.length} 只票检查完成，暂无已核到实际值的财报`;
 
   let notified = 0;
+  let fundamentalHits = 0;
   for (const r of reported) {
     const profile = getCompanyProfile(r.ticker);
     const name = profile?.companyName || r.ticker;
@@ -250,18 +252,48 @@ async function runEarningsReviewJob() {
       dedupeKey: `earnings_review:${r.ticker}:${period}`,
       dedupeWindowHours: 24 * 100
     });
-    if (result?.deduped) continue; // 这一期已经提醒过，不重复写画像时间线
-    if (profile) {
-      appendProfileEvent(r.ticker, {
-        date: beijingDate(),
-        kind: "earnings_report",
-        summary: `${period} 财报：${epsLine}；${revLine}`,
-        rationale: "F-2 业绩后自动核对（Finnhub 实际值 vs 预期，非模型推断）"
-      });
+    if (!result?.deduped) {
+      if (profile) {
+        appendProfileEvent(r.ticker, {
+          date: beijingDate(),
+          kind: "earnings_report",
+          summary: `${period} 财报：${epsLine}；${revLine}`,
+          rationale: "F-2 业绩后自动核对（Finnhub 实际值 vs 预期，非模型推断）"
+        });
+      }
+      notified += 1;
     }
-    notified += 1;
+
+    // F-3：基本面证伪条件核对——只在这只票真的设了这类规则时才拉一次财务数据（免得给
+    // 没设规则的票也发一次多余请求）。跟"这期报告是否已经提醒过"无关：只要设了规则，
+    // 每天都该看一眼当前财务是否已经踩线（命中通知本身有 24h dedupe，不会重复打扰）。
+    const fundamentalRules = listRules(r.ticker).filter((rule) => rule.kind.startsWith("fundamental_"));
+    if (fundamentalRules.length) {
+      try {
+        const financials = await getFinancials(r.ticker);
+        for (const rule of fundamentalRules) {
+          const { triggered, sane, currentValue } = evaluateFundamentalRule(rule, financials);
+          if (!sane || !triggered) continue;
+          markTriggered(rule.id);
+          const metricLabel = FUNDAMENTAL_METRIC_LABELS[rule.metric] || rule.metric;
+          const isAmount = rule.metric === "freeCashFlow";
+          const valueLabel = isAmount ? compactNumberServer(currentValue) : `${currentValue}%`;
+          const thresholdLabel = isAmount ? compactNumberServer(rule.threshold) : `${rule.threshold}%`;
+          const fundamentalResult = await notify({
+            kind: "falsify_alert",
+            title: `${r.ticker} 证伪条件命中：${rule.label}`,
+            body: `${metricLabel}最新值 ${valueLabel}，触发线 ${thresholdLabel}（${rule.kind === "fundamental_below" ? "跌破" : "超过"}）。这是你研究时自己定的证伪条件——按纪律复核投资逻辑是否已被推翻。`,
+            ticker: r.ticker,
+            payload: { ruleId: rule.id, currentValue, threshold: rule.threshold, kind: rule.kind, metric: rule.metric, sessionId: rule.sessionId || null },
+            dedupeKey: `falsify:${r.ticker}:${rule.id}`,
+            dedupeWindowHours: 24
+          });
+          if (!fundamentalResult?.deduped) fundamentalHits += 1;
+        }
+      } catch { /* 单只票财务数据失败不影响其它票 */ }
+    }
   }
-  return `${tickers.length} 只票检查完成，${notified} 条业绩后提醒已通知`;
+  return `${tickers.length} 只票检查完成，${notified} 条业绩后提醒已通知` + (fundamentalHits ? `，${fundamentalHits} 条基本面证伪命中` : "");
 }
 
 /** 内置任务注册表（代码即配置，可版本管理）。 */

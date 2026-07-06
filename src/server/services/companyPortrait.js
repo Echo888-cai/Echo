@@ -9,7 +9,7 @@
  */
 
 import { getCompanyProfile, upsertCompanyProfile } from "../repositories/companyProfiles.js";
-import { replaceFalsifierRules } from "../repositories/watchRules.js";
+import { replaceFalsifierRules, listRules } from "../repositories/watchRules.js";
 import { parseFalsifierRules, parseFalsifierRule } from "./falsifyRules.js";
 import { companyByTicker } from "../../data.js";
 import { beijingDate } from "../utils/time.js";
@@ -168,10 +168,10 @@ function topEvidence(panel, limit = 3) {
     .map((s) => ({ title: s.label || s.type || "来源", url: s.url }));
 }
 
-/** 量化证伪规则的指纹：kind+threshold 集合变了才算"证伪线演进"（文本措辞变化不算）。 */
+/** 量化证伪规则的指纹：kind+metric+threshold 集合变了才算"证伪线演进"（文本措辞变化不算）。 */
 function ruleSignature(rules) {
   return (Array.isArray(rules) ? rules : [])
-    .map((r) => `${r.kind}:${r.threshold}`)
+    .map((r) => `${r.kind}:${r.metric || ""}:${r.threshold}`)
     .sort()
     .join("|");
 }
@@ -182,9 +182,9 @@ function ruleSignature(rules) {
  * - 已有画像且判断变化 → 改正文 + 追加一条变更事件（带理由与证据链接，未来复盘用）。
  * - 证伪价格线（量化规则）变化 → 追加一条"证伪线演进"事件。
  * - 已有画像但判断未变 → 只 bump turn_count，不写流水账。
- * @param {{ticker?: string, panel?: Object, valuation?: import("../types.js").Valuation|null, question?: string, answerContent?: string, sessionId?: string|null}} [args]
+ * @param {{ticker?: string, panel?: Object, valuation?: import("../types.js").Valuation|null, question?: string, answerContent?: string, sessionId?: string|null, structuredFalsifiers?: Array<{kind: string, metric: string, threshold: number, label: string}>}} [args]
  */
-export function updatePortraitFromPanel({ ticker, panel, valuation = null, question = "", answerContent = "", sessionId = null } = {}) {
+export function updatePortraitFromPanel({ ticker, panel, valuation = null, question = "", answerContent = "", sessionId = null, structuredFalsifiers = [] } = {}) {
   if (!ticker || !panel) return { created: false, changed: false, profile: null };
   const localProfile = companyByTicker(ticker) || {};
   const prev = getCompanyProfile(ticker);
@@ -227,9 +227,13 @@ export function updatePortraitFromPanel({ ticker, panel, valuation = null, quest
     events.push({ date, kind: "thesis_change", summary: `${view.thesis || "更新判断"}${detail}`, rationale, evidence, sessionId });
   }
 
-  // 证伪线演进：量化规则指纹（kind+threshold 集合）变了才记，措辞微调不记——时间线只留判断变化。
-  const nextRules = parseFalsifierRules(view.falsifiers);
-  if (prev && nextRules.length && ruleSignature(parseFalsifierRules(prev.falsifiers)) !== ruleSignature(nextRules)) {
+  // 证伪线演进：量化规则指纹（kind+metric+threshold 集合）变了才记，措辞微调不记——时间线只留判断变化。
+  // F-3：nextRules 现在是价格线（文本解析）+ 基本面线（模型结构化输出）的合集；上一轮的基本面
+  // 规则不存在文本里，只能从 watch_rules 现存的活跃规则里取（在 replaceFalsifierRules 覆盖之前）。
+  const prevFundamentalRules = ticker ? listRules(ticker).filter((r) => r.kind.startsWith("fundamental_")) : [];
+  const nextRules = [...parseFalsifierRules(view.falsifiers), ...structuredFalsifiers];
+  const prevRules = [...parseFalsifierRules(prev?.falsifiers), ...prevFundamentalRules];
+  if (prev && nextRules.length && ruleSignature(prevRules) !== ruleSignature(nextRules)) {
     events.push({
       date,
       kind: "falsifier_change",
