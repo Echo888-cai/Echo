@@ -20,6 +20,7 @@ import { normalizeTicker } from "../../data.js";
 import { isUS } from "../../market.js";
 import { upsertHkFinancials, hasHkFinancialsForUrl, upsertHkFilingIngestLog } from "../repositories/hkFinancialsRepository.js";
 import { addDocument } from "../repositories/documentRepository.js";
+import { upsertHkBuyback, hasHkBuybackForUrl } from "../repositories/hkBuybackRepository.js";
 
 const execFileAsync = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -170,6 +171,25 @@ export async function searchHkexResultsAnnouncements(ticker) {
     `&title=${encodeURIComponent("業績")}&searchType=1&t1code=-2&t2Gcode=-2&t2code=-2&rowRange=100&lang=zh`;
   const raw = JSON.parse(await fetchText(url, 12000));
   return parseHkexSearchResult(raw);
+}
+
+/**
+ * 最近 N 天的"翌日披露报表——已发行股份变动及股份购回"公告列表（新→旧），F-4b。
+ * 复用与业绩公告相同的 titleSearchServlet 通道，标题关键词"購回"——真实调用验证过
+ * （0700.HK 近一年 113 条），这类公告频率远高于业绩公告（每次实际购回后一个交易日内
+ * 就要披露），rowRange 给足余量。
+ */
+export async function searchHkexBuybackAnnouncements(ticker, { daysBack = 180, rowRange = 60 } = {}) {
+  const stockId = await lookupStockId(ticker);
+  const now = new Date();
+  const to = now.toISOString().slice(0, 10).replace(/-/g, "");
+  const from = new Date(now.getTime() - daysBack * 24 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, "");
+  const url =
+    `${HKEX_BASE}/search/titleSearchServlet.do?sortDir=0&sortByOptions=DateTime&category=0&market=SEHK` +
+    `&stockId=${stockId}&documentType=-1&fromDate=${from}&toDate=${to}` +
+    `&title=${encodeURIComponent("購回")}&searchType=1&t1code=-2&t2Gcode=-2&t2code=-2&rowRange=${rowRange}&lang=zh`;
+  const raw = JSON.parse(await fetchText(url, 12000));
+  return parseGeneralAnnouncements(raw);
 }
 
 // ─── 期间解析 ────────────────────────────────────────────────────────
@@ -651,6 +671,104 @@ function logIngestOutcome(entry) {
   try { upsertHkFilingIngestLog(entry); } catch { /* 留痕失败不影响摄取结果本身 */ }
 }
 
+// ─── F-4b：HKEX 购回报告解析 + 摄取 ───────────────────────────────────
+
+/**
+ * "翌日披露报表"（FF305 表格）抽取文本 → 购回事实（纯函数）。真实调用验证：
+ * 0700.HK 两份不同日期的公告均能稳定匹配（见 PLAN.md F-4b 记录）。
+ *
+ * 只解析第二章节"购回报告"部分（真实成交的购回股数/价格区间/总代价）——不解析
+ * 第一部分 B 段"已购回作注销但尚未注销的股份"（那是累计未注销清单，会和这里的
+ * "本次实际购回"重复计数，两者口径不同，混用会重复统计同一批股份）。
+ * 同时抽取第一部分 A 段的期末已发行股份总数，作为股本趋势的粗线数据——HKEX 规则下
+ * 购回股份注销有滞后，这个数字不等于"购回后即时股本"，只是逐次披露间的变化趋势。
+ */
+export function parseBuybackText(text = "") {
+  const shareTotalMatch = text.match(/於下列日期結束時的結存\s*\(註5及6\)\s*(\d{4})年(\d{1,2})月(\d{1,2})日\s+([\d,]+)\s+\d+\s+([\d,]+)/);
+  const periodEndDate = shareTotalMatch
+    ? `${shareTotalMatch[1]}-${shareTotalMatch[2].padStart(2, "0")}-${shareTotalMatch[3].padStart(2, "0")}`
+    : null;
+  const sharesIssuedTotal = shareTotalMatch ? Number(shareTotalMatch[5].replace(/,/g, "")) : null;
+
+  const rowRe = /\d+\)\.\s*(\d{4})年(\d{1,2})月(\d{1,2})日\s+([\d,]+)\s*於本交易所進行\s*([A-Z]{3})\s*([\d.]+)\s*[A-Z]{3}\s*([\d.]+)\s*[A-Z]{3}\s*([\d,]+)/g;
+  const rows = [];
+  let m;
+  while ((m = rowRe.exec(text))) {
+    rows.push({
+      tradeDate: `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`,
+      sharesRepurchased: Number(m[4].replace(/,/g, "")),
+      currency: m[5],
+      priceHigh: Number(m[6]),
+      priceLow: Number(m[7]),
+      totalConsideration: Number(m[8].replace(/,/g, ""))
+    });
+  }
+  return { rows, sharesIssuedTotal, periodEndDate };
+}
+
+/**
+ * 摄取一只港股最近 daysBack 天的翌日披露购回报表 → hk_buybacks。
+ * 幂等：同 source_url 已入库则跳过（unique 约束 + hasHkBuybackForUrl 双重防重复）。
+ * 单份公告解析不到购回行（如公告本身只是股份归属变动、没有真实购回）不算错误，
+ * 诚实跳过——不是每份"購回"关键词命中的公告都真的有第二章节。
+ */
+export async function ingestHkBuybacks(ticker, { daysBack = 180, limit = 30, force = false } = {}) {
+  const t = normalizeTicker(ticker);
+  if (isUS(t)) throw new Error(`${t} 是美股，港股回购管道不适用`);
+  let announcements;
+  try {
+    announcements = await searchHkexBuybackAnnouncements(t, { daysBack });
+  } catch (error) {
+    logIngestOutcome({ ticker: t, status: "search_failed", detail: error.message || String(error) });
+    throw error;
+  }
+  const result = { ticker: t, ingested: [], skipped: [], errors: [] };
+
+  for (const item of announcements.slice(0, limit)) {
+    try {
+      if (!force && hasHkBuybackForUrl(item.url)) {
+        result.skipped.push(item.title);
+        continue;
+      }
+      const pdfPath = join(CACHE_DIR, `${t.replace(/\W+/g, "_")}_buyback_${item.publishedAt.slice(0, 10)}_${item.url.split("/").pop()}`);
+      await downloadPdf(item.url, pdfPath);
+      const text = await extractPdfText(pdfPath);
+      const { rows, sharesIssuedTotal, periodEndDate } = parseBuybackText(text);
+      if (!rows.length) {
+        result.skipped.push(`${item.title}（无第二章节购回行）`);
+        continue;
+      }
+      for (const row of rows) {
+        upsertHkBuyback({
+          ticker: t,
+          tradeDate: row.tradeDate,
+          sharesRepurchased: row.sharesRepurchased,
+          priceHigh: row.priceHigh,
+          priceLow: row.priceLow,
+          totalConsideration: row.totalConsideration,
+          currency: row.currency,
+          sharesIssuedTotal,
+          periodEndDate,
+          sourceTitle: item.title,
+          sourceUrl: item.url,
+          publishedAt: item.publishedAt
+        });
+      }
+      result.ingested.push({ title: item.title, rows: rows.length, url: item.url });
+    } catch (error) {
+      result.errors.push(`${item.title}: ${error.message}`);
+    }
+  }
+  logIngestOutcome({
+    ticker: t,
+    status: result.ingested.length > 0 || result.skipped.length > 0 ? "ok" : (announcements.length === 0 ? "no_announcements" : "parse_failed"),
+    detail: result.errors[0] || (announcements.length === 0 ? "HKEX 未搜到购回公告（近期可能未回购）" : null),
+    announcementsFound: announcements.length,
+    ingestedCount: result.ingested.length
+  });
+  return result;
+}
+
 // ─── hk_financials 行 → financialsData 形状（纯函数） ────────────────
 
 /**
@@ -699,4 +817,16 @@ export function refreshHkFinancialsInBackground(ticker) {
   ingestHkFinancials(t)
     .catch(() => { /* 后台任务失败静默，下次研究再触发 */ })
     .finally(() => inflight.delete(t));
+}
+
+const buybackInflight = new Set();
+
+/** F-4b：同款"研究请求不阻塞、后台刷新"节奏，独立的 inflight 集合（不跟财报摄取抢占）。 */
+export function refreshHkBuybacksInBackground(ticker) {
+  const t = normalizeTicker(ticker);
+  if (isUS(t) || buybackInflight.has(t)) return;
+  buybackInflight.add(t);
+  ingestHkBuybacks(t)
+    .catch(() => { /* 后台任务失败静默，下次研究再触发 */ })
+    .finally(() => buybackInflight.delete(t));
 }

@@ -730,6 +730,7 @@ export function financialsToMarkdown(financials) {
     : "";
 
   const hk = hkFilingsToMarkdown(financials.hkFilings);
+  const hkBuyback = hkBuybackToMarkdown(financials.hkBuybacks);
 
   // F-4a：内部人净买卖（SEC Form 4，近 180 天）——只在真实抓到数据时才出现在事实块里，
   // 没有 insiderActivity 字段（港股/请求失败）时这段整体不出现，不写"未核到"占位行
@@ -737,6 +738,13 @@ export function financialsToMarkdown(financials) {
   const ia = financials.insiderActivity;
   const insider = ia && ia.providerStatus === "ok"
     ? `\n内部人净买卖（SEC Form 4，近 180 天，仅统计公开市场真实买卖 P/S，不含期权行权/税务代扣）：\n- 净${ia.netShares >= 0 ? "买入" : "卖出"} ${Math.abs(ia.netShares).toLocaleString("en-US")} 股${ia.netValueUsd ? `，净值约 ${compactNumber(Math.abs(ia.netValueUsd))} 美元` : ""}\n- ${ia.buyCount} 次买入、${ia.sellCount} 次卖出，涉及 ${ia.distinctInsiders} 位内部人${ia.lastTransactionAt ? `，最近一次 ${ia.lastTransactionAt}` : ""}`
+    : "";
+
+  // F-5：历史估值分位——近似口径（年度财年末 PE 快照，非逐日分布），必须显式标注，
+  // 不能让读者误以为这是精确的逐日分布分位（PLAN.md 红线11）。没有数据时整段不出现。
+  const hv = financials.historicalValuation;
+  const historicalValuationBlock = hv && hv.providerStatus === "ok"
+    ? `\n历史估值分位（近似口径：年度财年末 PE 快照分布，非逐日分布，样本 ${hv.sampleYears} 年，${hv.oldestPeriod}~${hv.newestPeriod}）：\n- 当前 PE ${hv.currentValue.toFixed(1)} 处于历史第 ${hv.percentile} 百分位（历史区间 ${hv.min.toFixed(1)}~${hv.max.toFixed(1)}，中位 ${hv.median.toFixed(1)}）`
     : "";
 
   return [
@@ -760,7 +768,7 @@ export function financialsToMarkdown(financials) {
     financials.debtToEquity ? `资产负债率：${financials.debtToEquity}` : "",
     financials.returnOnEquity ? `ROE：${fmtPercent(financials.returnOnEquity)}` : "",
     financials.returnOnAssets ? `ROA：${fmtPercent(financials.returnOnAssets)}` : ""
-  ].filter(Boolean).join("\n") + seg + hk + insider;
+  ].filter(Boolean).join("\n") + seg + hk + hkBuyback + insider + historicalValuationBlock;
 }
 
 /**
@@ -790,6 +798,26 @@ export function hkFilingsToMarkdown(rows) {
   });
   const cnyNote = rows[0]?.currency === "CNY" ? "\n注意：该公司以人民币列报，而股价为港元——跨币种换算估值时需按汇率折算。" : "";
   return `\n\n港股一手财报（HKEX 业绩公告 PDF 直接抽取，数字与第三方源冲突时以此为准）：\n${lines.join("\n")}${cnyNote}`;
+}
+
+/**
+ * 港股回购一手事实块（F-4b）：HKEX 翌日披露报表（真实购回，仅统计场内公开购回，
+ * 不含尚未真实成交的授权额度）。rows 假定新→旧排序（listRecentHkBuybacks 的返回顺序）。
+ * 股本趋势特意标注"购回股份注销有滞后"——HKEX 规则下，购回股份在正式注销完成前仍计入
+ * 已发行股份总数，这里能看到的只是"逐次披露间已发行股份数的变化"这条粗线，不是
+ * "购回后即时净股本"，禁止把这条近似趋势说成精确的即时股本变化。
+ */
+export function hkBuybackToMarkdown(rows) {
+  if (!Array.isArray(rows) || !rows.length) return "";
+  const totalShares = rows.reduce((sum, r) => sum + (r.shares_repurchased || 0), 0);
+  const totalConsideration = rows.reduce((sum, r) => sum + (r.total_consideration || 0), 0);
+  const currency = rows[0]?.currency || "HKD";
+  const latest = rows[0];
+  const oldest = rows[rows.length - 1];
+  const shareTrend = latest.shares_issued_total != null && oldest.shares_issued_total != null && latest.period_end_date !== oldest.period_end_date
+    ? `\n- 已发行股份（不含库存股，粗线趋势——购回注销有滞后，非即时净股本）：${oldest.period_end_date} ${Number(oldest.shares_issued_total).toLocaleString("en-US")} 股 → ${latest.period_end_date} ${Number(latest.shares_issued_total).toLocaleString("en-US")} 股`
+    : "";
+  return `\n\n港股回购（HKEX 翌日披露报表，近 ${rows.length} 次真实场内购回，${oldest.trade_date}~${latest.trade_date}）：\n- 累计购回 ${totalShares.toLocaleString("en-US")} 股，总代价约 ${compactNumber(totalConsideration)} ${currency}${shareTrend}`;
 }
 
 export function companyProfileToMarkdown(profile) {

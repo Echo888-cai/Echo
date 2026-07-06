@@ -16,8 +16,10 @@ import { enrich8K } from "../../secFilings.js";
 import { isUS } from "../../market.js";
 import { saveMarketSnapshot } from "../../db/index.js";
 import { getHkFinancials } from "../repositories/hkFinancialsRepository.js";
-import { hkRowToFinancials, refreshHkFinancialsInBackground } from "./hkFilingsPipeline.js";
+import { hkRowToFinancials, refreshHkFinancialsInBackground, refreshHkBuybacksInBackground } from "./hkFilingsPipeline.js";
+import { listRecentHkBuybacks, getLatestHkBuybackFetchedAt } from "../repositories/hkBuybackRepository.js";
 import { getInsiderActivity } from "./insiderActivity.js";
+import { getHistoricalValuationSeries, computeHistoricalValuationPercentile } from "./historicalValuation.js";
 
 // B-5：展示级近似汇率（人民币列报 → 港元，估值口径用；非交易口径），与 portfolioReview.js
 // 的 FX_TO_USD 同一处理原则——不接汇率 API，只求量级不失真。
@@ -147,10 +149,13 @@ export async function collectDataSources({ company, suppliedMarketSnapshot = nul
     withTimeout(getRangeReturns(company.ticker), 6500, { providerStatus: "missing" }),
     // F-4a：内部人净买卖（SEC Form 4，美股先行，24h TTL 缓存——首次未命中缓存时最多
     // 顺序拉 10 份原始 XML，9s 预算足够；命中缓存是一次本地 DB 读，几乎零延迟）。
-    withTimeout(getInsiderActivity(company.ticker), 9000, { providerStatus: "missing", detail: "内部人交易请求超时" })
+    withTimeout(getInsiderActivity(company.ticker), 9000, { providerStatus: "missing", detail: "内部人交易请求超时" }),
+    // F-5：历史估值分位序列（Finnhub 年度 PE，24h TTL 缓存，命中是本地 DB 读）。这里只拉
+    // 序列，百分位要等 marketSnapshot/financials resolve 后拿到"当前 PE"才现算（见下方）。
+    withTimeout(getHistoricalValuationSeries(company.ticker), 8000, { series: [], providerStatus: "missing", detail: "历史估值序列请求超时" })
   ]);
 
-  const [market, news, financials, filings, estimates, profileResult, segmentsResult, rangesResult, insiderResult] = tasks;
+  const [market, news, financials, filings, estimates, profileResult, segmentsResult, rangesResult, insiderResult, historicalValuationSeriesResult] = tasks;
   const marketSnapshot = market.status === "fulfilled" ? market.value : fallbackMarketSnapshot(company.ticker, market.reason?.message || "行情失败");
   // 区间回报挂到行情快照上，随 marketSnapshot 一路流到 prompt / 前端 / 决策面板。
   const ranges = rangesResult?.status === "fulfilled" ? rangesResult.value : null;
@@ -170,6 +175,16 @@ export async function collectDataSources({ company, suppliedMarketSnapshot = nul
   const insiderActivity = insiderResult?.status === "fulfilled" ? insiderResult.value : null;
   if (financialsData && insiderActivity?.providerStatus === "ok") {
     financialsData.insiderActivity = insiderActivity;
+  }
+  // F-5：历史估值分位——序列是并发拉的，百分位要等 financials/marketSnapshot 都 resolve
+  // 后才有"当前 PE"可用，这里现算（不缓存百分位本身，避免用 24h 前的当前价算出的分位）。
+  const historicalValuationSeries = historicalValuationSeriesResult?.status === "fulfilled"
+    ? historicalValuationSeriesResult.value
+    : { series: [], providerStatus: "missing", detail: "历史估值序列请求失败" };
+  const currentPeForPercentile = Number(financialsData?.pe) || Number(marketSnapshot?.pe) || null;
+  const historicalValuation = computeHistoricalValuationPercentile(historicalValuationSeries, currentPeForPercentile);
+  if (financialsData && historicalValuation.providerStatus === "ok") {
+    financialsData.historicalValuation = historicalValuation;
   }
   // P7 港股一手财报：hk_financials 已落库则同步附挂（零延迟）；第三方全挂时提升为主数据，
   // 第三方部分成功（腾讯只给行情）时按字段补空（B-5，见 mergeHkFinancialGaps）。
@@ -191,6 +206,16 @@ export async function collectDataSources({ company, suppliedMarketSnapshot = nul
         refreshHkFinancialsInBackground(company.ticker);
       }
     } catch { /* 一手财报读取失败不阻塞研究 */ }
+
+    // F-4b：港股回购（HKEX 翌日披露报表）——已落库则同步附挂（零延迟）；
+    // 无数据或最新一次摄取已超 24h（回购公告频率远高于业绩公告，24h TTL 而非 135 天）
+    // → 后台摄取，不阻塞本次研究。
+    try {
+      const buybackRows = listRecentHkBuybacks(company.ticker, 180);
+      if (buybackRows.length) financialsData.hkBuybacks = buybackRows;
+      const latestFetched = Date.parse(`${getLatestHkBuybackFetchedAt(company.ticker) || ""}Z`) || 0;
+      if (Date.now() - latestFetched > 24 * 3600 * 1000) refreshHkBuybacksInBackground(company.ticker);
+    } catch { /* 港股回购读取失败不阻塞研究 */ }
   }
   return {
     marketSnapshot, // 已含 ranges（区间回报）
