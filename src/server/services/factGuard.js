@@ -155,6 +155,26 @@ export function buildFactsRegistry(sources = {}) {
       pushDate(registry, fin.insiderActivity.lastTransactionAt, "内部人最近交易日", "financialsData.insiderActivity");
     }
 
+    // F-4b：港股回购（HKEX 翌日披露）——跟 F-4a 内部人净买卖同一条纪律：只登记总代价
+    // 金额（cur 币种）和最近购回交易日，不登记购回股数/已发行股份总数（股数量级与货币
+    // 金额不同源，混进同一个桶会重演"股数当金额"的误报模式）。
+    if (Array.isArray(fin.hkBuybacks) && fin.hkBuybacks.length) {
+      const totalConsideration = fin.hkBuybacks.reduce((sum, r) => sum + (r.total_consideration || 0), 0);
+      const buybackCurrency = fin.hkBuybacks[0]?.currency || cur;
+      pushAmount(registry, totalConsideration, buybackCurrency, "港股回购总代价", "financialsData.hkBuybacks");
+      pushDate(registry, fin.hkBuybacks[0]?.trade_date, "最近购回交易日", "financialsData.hkBuybacks");
+    }
+
+    // F-5：历史估值分位——学 F-4a 的教训，事实块一出现在正文里能引用的数字就必须提前
+    // 登记，否则百分位/历史PE区间会被判 hard（"最接近的事实"变成风马牛不相及的其它百分比/倍数）。
+    if (fin.historicalValuation?.providerStatus === "ok") {
+      const hv = fin.historicalValuation;
+      pushPercent(registry, hv.percentile, "历史估值分位", "financialsData.historicalValuation");
+      pushMultiple(registry, hv.min, "历史PE区间低值", "financialsData.historicalValuation");
+      pushMultiple(registry, hv.max, "历史PE区间高值", "financialsData.historicalValuation");
+      pushMultiple(registry, hv.median, "历史PE中位", "financialsData.historicalValuation");
+    }
+
     for (const row of Array.isArray(fin.hkFilings) ? fin.hkFilings : []) {
       const rc = row.currency || cur;
       pushAmount(registry, row.revenue, rc, "收入（一手）", "hkFilings");
