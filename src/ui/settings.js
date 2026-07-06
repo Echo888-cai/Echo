@@ -25,6 +25,20 @@ export async function loadSchedulerStatus() {
   if (currentRoute() === "/settings") render();
 }
 
+/** R7：全局研究记分卡（懒加载，进设置页时拉一次）。 */
+export async function loadResearchScorecard() {
+  if (S.researchScorecardLoading) return;
+  S.researchScorecardLoading = true;
+  try {
+    S.researchScorecard = await api("/api/research/scorecard");
+  } catch {
+    S.researchScorecard = null;
+  }
+  S.researchScorecardLoading = false;
+  S.researchScorecardLoaded = true;
+  if (currentRoute() === "/settings") render();
+}
+
 // G-1：canary 状态字（source health）→ 面板展示的 mark + 语气类名。
 function canaryMark(status) {
   if (status === "ok") return { mark: "✓", tone: "" };
@@ -75,6 +89,30 @@ function renderLlmAuditCard() {
   </article>`;
 }
 
+// R7：全局研究记分卡——历史判断快照 vs 现价，样本不足时诚实说明，不硬凑百分比。
+function renderScorecardCard() {
+  const sc = S.researchScorecard?.global;
+  if (!S.researchScorecardLoaded) {
+    return `<article class="settings-card"><h2>研究记分卡</h2><p>加载中…</p></article>`;
+  }
+  if (!sc || !sc.tickerCount) {
+    return `<article class="settings-card"><h2>研究记分卡</h2>
+      <p>还没有判断快照——下一次判断变化时会自动开始沉淀，供以后核对"当时说的对不对"。公司页"画像"Tab 有单只票的复盘详情。</p>
+    </article>`;
+  }
+  if (sc.insufficientSample) {
+    return `<article class="settings-card"><h2>研究记分卡</h2>
+      <p>${esc(sc.message)}</p>
+      <div class="setting-row"><span>已跟踪</span><strong>${sc.tickerCount} 只票</strong></div>
+    </article>`;
+  }
+  return `<article class="settings-card"><h2>研究记分卡</h2>
+    <p>跨 ${sc.tickerCount} 只票、${sc.matureSampleSize} 条满 14 天的判断快照。</p>
+    <div class="setting-row"><span>现价落在当时估值带内</span><strong>${sc.withinBandRate}%</strong></div>
+    ${sc.towardBaseRate != null ? `<div class="setting-row"><span>向估值中枢靠拢</span><strong>${sc.towardBaseRate}%</strong></div>` : ""}
+  </article>`;
+}
+
 function renderHkCoverageCard() {
   const cov = S.apiStatus?.hkFilingCoverage;
   if (!cov) return "";
@@ -105,6 +143,7 @@ export function renderSettings() {
       </article>
       ${renderCanaryCard()}
       ${renderLlmAuditCard()}
+      ${renderScorecardCard()}
       ${renderHkCoverageCard()}
       <article class="settings-card"><h2>前台策略</h2>
         <p>研究 / 看盘 / 设置三个分区各司其职：落地即研究（连续对话，产品灵魂）；看盘是精简关注列表，点进公司页看真价格曲线（美股日线收盘价）、研究状况、基本面、证伪条件与事件。港股曲线预留付费源，暂标"待接入"。</p>

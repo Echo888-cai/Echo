@@ -255,6 +255,8 @@ export async function loadWatchStock(ticker) {
   S.stockTab = "overview"; // 换公司回到总览，画像缓存作废
   S.stockPortrait = null;
   S.stockPortraitLoading = false;
+  S.stockReview = null;
+  S.stockReviewLoading = false;
   try {
     const data = await api(`/api/watch/stock?ticker=${encodeURIComponent(ticker)}`);
     if (seq === S.watchStockSeq) S.watchStock = data.stock || null;
@@ -545,6 +547,21 @@ async function loadStockPortrait(ticker) {
   }
 }
 
+// R7：研究复盘（历史判断快照 vs 现价），跟画像分开请求——复盘失败不该拖累画像主内容展示。
+async function loadStockReview(ticker) {
+  if (!ticker || S.stockReviewLoading) return;
+  S.stockReviewLoading = true;
+  try {
+    const data = await api(`/api/company/review?ticker=${encodeURIComponent(ticker)}`);
+    S.stockReview = { ticker: data.ticker, scorecard: data.scorecard || null };
+  } catch {
+    S.stockReview = { ticker, scorecard: null };
+  } finally {
+    S.stockReviewLoading = false;
+    render();
+  }
+}
+
 const PORTRAIT_KIND = {
   created: { label: "建档", cls: "pk-created" },
   thesis_change: { label: "判断变化", cls: "pk-change" },
@@ -578,6 +595,55 @@ function portraitDocHtml(markdown = "") {
   return markdownToHtml(doc);
 }
 
+const VALUATION_POSITION_LABEL = { below_base: "低于估值中枢", above_base: "高于估值中枢", at_base: "等于估值中枢" };
+
+// R7：单条快照复盘行——当时价格 vs 现价、是否落在估值带、是否朝中枢靠拢、证伪线状态。
+function renderReviewRow(r) {
+  const priceLine = r.priceThen != null && r.priceNow != null
+    ? `${fmtNum(r.priceThen)} → ${fmtNum(r.priceNow)}${r.pctChange != null ? ` <em class="${pnlDir(r.pctChange)}">${r.pctChange >= 0 ? "+" : ""}${r.pctChange}%</em>` : ""}`
+    : "价格数据不全";
+  const bandBadge = r.withinBand == null ? "" : `<span class="rv-badge ${r.withinBand ? "rv-ok" : "rv-miss"}">${r.withinBand ? "现价在估值带内" : "现价已脱离估值带"}</span>`;
+  const towardBadge = r.towardBase == null ? "" : `<span class="rv-badge ${r.towardBase ? "rv-ok" : "rv-miss"}">${r.towardBase ? "向估值中枢靠拢" : "偏离估值中枢"}</span>`;
+  const falsifierBadges = (r.falsifierStatus || [])
+    .filter((f) => f.evaluable)
+    .map((f) => `<span class="rv-badge ${f.breached ? "rv-bad" : "rv-ok"}" title="${esc(f.label)}">${f.breached ? "证伪线已越线" : "证伪线未越线"}</span>`)
+    .join("");
+  return `<li class="rv-row">
+    <div class="rv-row-head">
+      <span class="rv-date">${esc(r.snapshotDate)} · T+${r.daysElapsed ?? "?"}天</span>
+      ${r.valuationPosition ? `<span class="rv-position">${esc(VALUATION_POSITION_LABEL[r.valuationPosition] || r.valuationPosition)}</span>` : ""}
+    </div>
+    ${r.thesis ? `<p class="rv-thesis">${esc(r.thesis)}</p>` : ""}
+    <div class="rv-price">${priceLine}</div>
+    <div class="rv-badges">${bandBadge}${towardBadge}${falsifierBadges}</div>
+  </li>`;
+}
+
+// R7：研究复盘卡——历史判断快照 vs 现价，样本不足时诚实说明，不硬凑百分比。
+function renderResearchReview(ticker) {
+  if (!S.stockReview || S.stockReview.ticker !== ticker) {
+    if (!S.stockReviewLoading) void loadStockReview(ticker);
+    return `<div class="portrait-review"><h3>研究复盘</h3><p class="stock-card-body is-empty">正在读取复盘数据…</p></div>`;
+  }
+  const sc = S.stockReview.scorecard;
+  if (!sc || !sc.totalSnapshots) {
+    return `<div class="portrait-review"><h3>研究复盘</h3><p class="stock-card-body is-empty">还没有判断快照——下一次判断变化时会自动开始沉淀，供以后核对"当时说的对不对"。</p></div>`;
+  }
+  const stats = sc.insufficientSample
+    ? `<p class="rv-note">${esc(sc.message)}</p>`
+    : `<div class="rv-stats">
+        <span class="rv-stat"><strong>${sc.withinBandRate}%</strong> 现价落在当时估值带内</span>
+        ${sc.towardBaseRate != null ? `<span class="rv-stat"><strong>${sc.towardBaseRate}%</strong> 向估值中枢靠拢</span>` : ""}
+        ${sc.falsifierBreaches ? `<span class="rv-stat is-bad"><strong>${sc.falsifierBreaches}</strong> 条证伪线已越线</span>` : ""}
+      </div>`;
+  const rows = [...sc.reviews].reverse().map(renderReviewRow).join("");
+  return `<div class="portrait-review">
+    <h3>研究复盘 <span class="rv-sub">(共 ${sc.totalSnapshots} 条快照，${sc.matureSampleSize} 条满 14 天)</span></h3>
+    ${stats}
+    <ul class="rv-list">${rows}</ul>
+  </div>`;
+}
+
 function renderPortraitTab(stock) {
   if (!S.stockPortrait) {
     if (!S.stockPortraitLoading) void loadStockPortrait(stock.ticker);
@@ -597,6 +663,7 @@ function renderPortraitTab(stock) {
       <button class="wl-linkbtn" type="button" data-action="export-portrait">导出 Markdown ↓</button>
     </div>
     <div class="portrait-doc">${portraitDocHtml(S.stockPortrait.markdown)}</div>
+    ${renderResearchReview(stock.ticker)}
     <div class="portrait-timeline">
       <h3>判断变化时间线</h3>
       ${events.length

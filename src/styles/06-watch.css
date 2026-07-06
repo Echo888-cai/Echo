@@ -472,6 +472,33 @@ a.stock-event-row:hover .wd-evt-title { color: var(--blue-ink); }
 .portrait-doc ul { margin: 0 0 8px; padding-left: 18px; }
 .portrait-doc li { margin-bottom: 3px; }
 
+/* R7：研究复盘——历史判断快照 vs 现价 */
+.portrait-review {
+  padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--panel); box-shadow: var(--sh-1);
+}
+.portrait-review h3 { font-size: 14px; margin: 0 0 10px; color: var(--ink); }
+.rv-sub { font-size: 12px; font-weight: 400; color: var(--muted); }
+.rv-note { margin: 0 0 10px; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+.rv-stats { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-bottom: 12px; font-size: 12.5px; color: var(--muted); }
+.rv-stat strong { color: var(--ink-2); font-weight: 600; }
+.rv-stat.is-bad strong { color: var(--danger); }
+.rv-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.rv-row { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
+.rv-row-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rv-date { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.rv-position { font-size: 11.5px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.rv-thesis { margin: 6px 0 0; font-size: 13px; color: var(--ink); line-height: 1.55; }
+.rv-price { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.rv-price em { font-style: normal; margin-left: 6px; }
+.rv-price em.is-up { color: #1f8a4c; }
+.rv-price em.is-down { color: var(--danger); }
+.rv-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.rv-badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.rv-badge.rv-ok { color: #1f8a4c; border-color: #1f8a4c; }
+.rv-badge.rv-miss { color: #b25e00; border-color: #d9a15c; }
+.rv-badge.rv-bad { color: var(--danger); border-color: var(--danger); }
+
 .portrait-timeline h3 { font-size: 14px; margin: 0 0 12px; color: var(--ink); }
 .pt-list { list-style: none; margin: 0; padding: 0 0 0 14px; border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: 16px; }
 .pt-event { position: relative; }

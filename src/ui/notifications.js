@@ -87,6 +87,7 @@ const NOTIF_KIND_META = {
   digest: { label: "速报", cls: "nk-digest" },
   position_alert: { label: "触线", cls: "nk-alert" },
   falsify_alert: { label: "证伪", cls: "nk-falsify" },
+  review_reminder: { label: "复盘", cls: "nk-falsify" },
   system: { label: "系统", cls: "nk-system" }
 };
 

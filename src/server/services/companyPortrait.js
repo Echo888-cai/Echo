@@ -13,6 +13,27 @@ import { replaceFalsifierRules } from "../repositories/watchRules.js";
 import { parseFalsifierRules, parseFalsifierRule } from "./falsifyRules.js";
 import { companyByTicker } from "../../data.js";
 import { beijingDate } from "../utils/time.js";
+import { marketCurrency } from "../../market.js";
+import { insertResearchSnapshot } from "../repositories/researchSnapshotsRepository.js";
+
+/**
+ * 价格相对估值中枢的客观位置——刻意不是"看多/看空"评级（宪法：不给买卖指令），
+ * 只记录"当时价格相对我们自己算的估值带在哪"这一几何关系，供 R7 复盘用。
+ */
+function deriveValuationPosition(valuation) {
+  if (!valuation || valuation.base == null || valuation.currentPrice == null) return null;
+  if (valuation.currentPrice < valuation.base) return "below_base";
+  if (valuation.currentPrice > valuation.base) return "above_base";
+  return "at_base";
+}
+
+/** 从面板的展示级价格字符串（如"431.2 HKD"）兜底解析数字+币种（valuation 缺失时用）。 */
+function parsePriceFromPanel(panel, ticker) {
+  const raw = String(panel?.price?.value || "");
+  const match = raw.match(/^(-?[\d.]+)\s*([A-Za-z]+)?/);
+  if (!match) return { price: null, currency: marketCurrency(ticker) };
+  return { price: parseFloat(match[1]), currency: match[2] || marketCurrency(ticker) };
+}
 
 function asList(value, limit = 6) {
   if (!Array.isArray(value)) return [];
@@ -224,6 +245,26 @@ export function updatePortraitFromPanel({ ticker, panel, valuation = null, quest
     events,
     bumpTurn: true
   });
+
+  // R7 Phase A：判断快照——只在"建档/判断变化"这两个跟 profile_events 同源的触发点落一行，
+  // 不做流水账（跟时间线的沉淀节奏保持一致）。价格优先取估值引擎算出的 currentPrice
+  // （已核对过一致性），拿不到时兜底解析面板的展示级价格字符串。
+  if (isNew || changed) {
+    const fallback = parsePriceFromPanel(panel, ticker);
+    insertResearchSnapshot({
+      ticker,
+      snapshotDate: date,
+      thesis: view.thesis || null,
+      valuationPosition: deriveValuationPosition(view.valuation),
+      valuationBear: view.valuation?.bear ?? null,
+      valuationBase: view.valuation?.base ?? null,
+      valuationBull: view.valuation?.bull ?? null,
+      valuationCurrency: fallback.currency,
+      priceAtSnapshot: view.valuation?.currentPrice ?? fallback.price,
+      falsifiers: view.falsifiers,
+      sessionId
+    });
+  }
 
   // UX-7 研究→监控闭环：证伪条件里"明确的价格条件"落成 watch_rules，
   // 看盘状态机 + 定时巡检据此自动盯盘、命中推通知。解析失败不影响画像主流程。

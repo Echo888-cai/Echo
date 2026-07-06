@@ -13,7 +13,7 @@ import {
 import {
   renderWatchPage, refreshWatchDesk, addWatch, removeWatch, exportPortrait
 } from "./ui/watch.js";
-import { renderSettings, refreshStatus, loadSchedulerStatus } from "./ui/settings.js";
+import { renderSettings, refreshStatus, loadSchedulerStatus, loadResearchScorecard } from "./ui/settings.js";
 import { showPortfolio, deletePortfolioPosition } from "./ui/portfolio.js";
 
 function render() {
@@ -24,6 +24,7 @@ function render() {
   const route = currentRoute();
   if (route === "/settings") {
     if (!S.schedStatusLoaded && !S.schedStatusLoading) void loadSchedulerStatus();
+    if (!S.researchScorecardLoaded && !S.researchScorecardLoading) void loadResearchScorecard();
     renderSettings();
   }
   else if (route === "/watch" || route.startsWith("/watch/")) renderWatchPage();
