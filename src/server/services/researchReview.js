@@ -28,12 +28,31 @@ function daysBetween(fromISO, toISO) {
 }
 
 /**
+ * F-2：这条快照之后有没有新财报到货——只有"最近一次已报告"日期晚于快照日期，才算是
+ * "这条判断做出之后才发生的新事实"，否则那份财报在判断当时就已经是已知信息。
+ * @param {object} snapshot
+ * @param {object|null} earningsRow - `earningsCalendarRepository.getEarningsCalendarRow` 的原始
+ *   行（snake_case，故意不重新包一层——只有这一个消费点，多包一层反而增加维护面）
+ */
+function computePostEarnings(snapshot, earningsRow) {
+  if (!earningsRow?.last_date) return null;
+  if (!(earningsRow.last_date > snapshot.snapshotDate)) return null;
+  return {
+    date: earningsRow.last_date,
+    epsSurprisePct: earningsRow.last_eps_surprise_pct ?? null,
+    revenueSurprisePct: earningsRow.last_revenue_surprise_pct ?? null
+  };
+}
+
+/**
  * 单条快照 vs 现价的复盘计算。
  * @param {object} snapshot - researchSnapshotsRepository 的 hydrate 结果
  * @param {{price: number|null, asOf?: string}} current - 现价（null 表示行情源不可用）
  * @param {string} [asOfDate] - 复盘计算发生的日期（默认今天，纯函数需要传入避免测试不稳定）
+ * @param {object|null} [earningsRow] - F-2：该 ticker 的财报日历原始行，用于判定快照之后
+ *   有没有新财报到货（beat/miss）；不传或没有数据时 `postEarnings` 诚实为 null
  */
-export function computeSnapshotReview(snapshot, current, asOfDate = new Date().toISOString().slice(0, 10)) {
+export function computeSnapshotReview(snapshot, current, asOfDate = new Date().toISOString().slice(0, 10), earningsRow = null) {
   const daysElapsed = daysBetween(snapshot.snapshotDate, asOfDate);
   const priceThen = snapshot.priceAtSnapshot;
   const priceNow = current?.price ?? null;
@@ -81,17 +100,32 @@ export function computeSnapshotReview(snapshot, current, asOfDate = new Date().t
     withinBand,
     towardBase,
     falsifierStatus,
+    postEarnings: computePostEarnings(snapshot, earningsRow),
     sessionId: snapshot.sessionId
   };
+}
+
+/**
+ * F-2：EPS beat 率——只在能算出惊喜幅度的样本里算（预期缺失的报告没法判断 beat/miss，
+ * 不计入分母）。样本为 0 时诚实返回 null，不是 0%（0% 意味着"全 miss"，跟"没数据"是
+ * 两回事，混为一谈会误导）。
+ */
+function summarizePostEarnings(reviews) {
+  const withCheck = reviews.filter((r) => r.postEarnings?.epsSurprisePct != null);
+  if (!withCheck.length) return { postEarningsSampleSize: 0, epsBeatRate: null };
+  const beats = withCheck.filter((r) => r.postEarnings.epsSurprisePct > 0).length;
+  return { postEarningsSampleSize: withCheck.length, epsBeatRate: Math.round((beats / withCheck.length) * 100) };
 }
 
 /**
  * 一只票的记分卡：聚合该 ticker 全部快照的复盘结果。样本不足时诚实降级，不算百分比。
  * @param {object[]} snapshots - listSnapshots(ticker) 的结果，按时间正序
  * @param {{price: number|null}} current
+ * @param {string} [asOfDate]
+ * @param {object|null} [earningsRow] - F-2：见 computeSnapshotReview 的同名参数
  */
-export function computeTickerScorecard(snapshots = [], current, asOfDate) {
-  const reviews = snapshots.map((s) => computeSnapshotReview(s, current, asOfDate));
+export function computeTickerScorecard(snapshots = [], current, asOfDate, earningsRow = null) {
+  const reviews = snapshots.map((s) => computeSnapshotReview(s, current, asOfDate, earningsRow));
   const mature = reviews.filter((r) => r.isMature && r.withinBand != null);
   const matureSampleSize = mature.length;
   const insufficientSample = matureSampleSize < MIN_MATURE_SAMPLES;
@@ -109,7 +143,8 @@ export function computeTickerScorecard(snapshots = [], current, asOfDate) {
     ? Math.round((towardBaseSamples.filter((r) => r.towardBase).length / towardBaseSamples.length) * 100)
     : null;
   const falsifierBreaches = mature.reduce((n, r) => n + r.falsifierStatus.filter((f) => f.breached).length, 0);
-  return { ...base, withinBandRate, towardBaseRate, falsifierBreaches };
+  const { postEarningsSampleSize, epsBeatRate } = summarizePostEarnings(mature);
+  return { ...base, withinBandRate, towardBaseRate, falsifierBreaches, postEarningsSampleSize, epsBeatRate };
 }
 
 /**
@@ -135,5 +170,6 @@ export function computeGlobalScorecard(perTicker = []) {
   const towardBaseRate = towardBaseSamples.length
     ? Math.round((towardBaseSamples.filter((r) => r.towardBase).length / towardBaseSamples.length) * 100)
     : null;
-  return { tickerCount, matureSampleSize, insufficientSample, withinBandRate, towardBaseRate };
+  const { postEarningsSampleSize, epsBeatRate } = summarizePostEarnings(allMature);
+  return { tickerCount, matureSampleSize, insufficientSample, withinBandRate, towardBaseRate, postEarningsSampleSize, epsBeatRate };
 }

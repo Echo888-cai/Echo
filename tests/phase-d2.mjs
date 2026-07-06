@@ -25,7 +25,7 @@ console.log("[1] 全新库：迁移到最新版本，全部表就位");
 {
   const db = getDb();
   const version = db.pragma("user_version", { simple: true });
-  check("user_version 推进到 7（001_init + 002_g1_health + 003_earnings_calendar + 004_comp_peers + 005_llm_audit + 006_research_snapshots + 007_fact_guard_audit）", version === 7, `实际 ${version}`);
+  check("user_version 推进到 8（001_init + 002_g1_health + 003_earnings_calendar + 004_comp_peers + 005_llm_audit + 006_research_snapshots + 007_fact_guard_audit + 008_earnings_actuals）", version === 8, `实际 ${version}`);
 
   const tables = new Set(
     db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name)
@@ -51,6 +51,15 @@ console.log("[3] research_sessions：此前靠运行时 ALTER TABLE 补的列已
   const db = getDb();
   const cols = new Set(db.prepare("PRAGMA table_info(research_sessions)").all().map((c) => c.name));
   for (const name of ["conversation_id", "title", "decision_panel", "full_research", "data_sources", "thread_json", "turn_count"]) {
+    check(`列存在：${name}`, cols.has(name));
+  }
+}
+
+console.log("[4] earnings_calendar：008_earnings_actuals 的 last_* 列（F-2 业绩闭环）已就位");
+{
+  const db = getDb();
+  const cols = new Set(db.prepare("PRAGMA table_info(earnings_calendar)").all().map((c) => c.name));
+  for (const name of ["last_date", "last_quarter", "last_year", "last_eps_estimate", "last_eps_actual", "last_revenue_estimate", "last_revenue_actual", "last_eps_surprise_pct", "last_revenue_surprise_pct"]) {
     check(`列存在：${name}`, cols.has(name));
   }
 }

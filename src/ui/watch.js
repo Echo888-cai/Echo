@@ -608,6 +608,11 @@ function renderReviewRow(r) {
     .filter((f) => f.evaluable)
     .map((f) => `<span class="rv-badge ${f.breached ? "rv-bad" : "rv-ok"}" title="${esc(f.label)}">${f.breached ? "证伪线已越线" : "证伪线未越线"}</span>`)
     .join("");
+  // F-2：这条快照之后有没有新财报到货（beat/miss），只在有可比 EPS 惊喜幅度时显示。
+  const pe = r.postEarnings;
+  const earningsBadge = pe?.epsSurprisePct != null
+    ? `<span class="rv-badge ${pe.epsSurprisePct >= 0 ? "rv-ok" : "rv-bad"}" title="财报日 ${esc(pe.date)}">财报 EPS ${pe.epsSurprisePct >= 0 ? "+" : ""}${pe.epsSurprisePct}%</span>`
+    : "";
   return `<li class="rv-row">
     <div class="rv-row-head">
       <span class="rv-date">${esc(r.snapshotDate)} · T+${r.daysElapsed ?? "?"}天</span>
@@ -615,7 +620,7 @@ function renderReviewRow(r) {
     </div>
     ${r.thesis ? `<p class="rv-thesis">${esc(r.thesis)}</p>` : ""}
     <div class="rv-price">${priceLine}</div>
-    <div class="rv-badges">${bandBadge}${towardBadge}${falsifierBadges}</div>
+    <div class="rv-badges">${bandBadge}${towardBadge}${falsifierBadges}${earningsBadge}</div>
   </li>`;
 }
 
@@ -635,6 +640,7 @@ function renderResearchReview(ticker) {
         <span class="rv-stat"><strong>${sc.withinBandRate}%</strong> 现价落在当时估值带内</span>
         ${sc.towardBaseRate != null ? `<span class="rv-stat"><strong>${sc.towardBaseRate}%</strong> 向估值中枢靠拢</span>` : ""}
         ${sc.falsifierBreaches ? `<span class="rv-stat is-bad"><strong>${sc.falsifierBreaches}</strong> 条证伪线已越线</span>` : ""}
+        ${sc.epsBeatRate != null ? `<span class="rv-stat"><strong>${sc.epsBeatRate}%</strong> 判断之后的财报 EPS beat 率（${sc.postEarningsSampleSize} 条）</span>` : ""}
       </div>`;
   const rows = [...sc.reviews].reverse().map(renderReviewRow).join("");
   return `<div class="portrait-review">

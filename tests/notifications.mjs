@@ -151,8 +151,8 @@ await checkAsync("同一时点第二轮 tick 不重复执行", async () => {
   assert.equal(ran.length, 0, `不应有任务执行，实际跑了：${ran.map((r) => r.id).join(",")}`);
 });
 
-check("JOBS 注册表完整（6 个内置任务，含 R7 研究复盘提醒 + F-1 每日备份）", () => {
-  assert.equal(JOBS.length, 6);
+check("JOBS 注册表完整（7 个内置任务，含 R7 研究复盘提醒 + F-1 每日备份 + F-2 业绩后复核）", () => {
+  assert.equal(JOBS.length, 7);
   assert.ok(JOBS.every((j) => j.id && j.label && j.schedule && typeof j.run === "function"));
 });
 

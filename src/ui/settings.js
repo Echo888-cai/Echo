@@ -130,6 +130,7 @@ function renderScorecardCard() {
     <p>跨 ${sc.tickerCount} 只票、${sc.matureSampleSize} 条满 14 天的判断快照。</p>
     <div class="setting-row"><span>现价落在当时估值带内</span><strong>${sc.withinBandRate}%</strong></div>
     ${sc.towardBaseRate != null ? `<div class="setting-row"><span>向估值中枢靠拢</span><strong>${sc.towardBaseRate}%</strong></div>` : ""}
+    ${sc.epsBeatRate != null ? `<div class="setting-row"><span>判断之后的财报 EPS beat 率</span><strong>${sc.epsBeatRate}%</strong></div><p class="setting-sub">样本 ${sc.postEarningsSampleSize} 条（F-2：只统计快照之后、且有可比预期的财报）。</p>` : ""}
   </article>`;
 }
 
