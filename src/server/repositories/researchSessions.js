@@ -191,6 +191,43 @@ export function listConversations({ limit = 20 } = {}) {
   return list.slice(0, limit).map(({ lastSeq, ...group }) => group);
 }
 
+// snippet() 高亮定界符用两个控制字符占位，而不是直接用 `<b>`/`</b>`——命中片段本身
+// 摘自用户问题/模型正文，可能含 `<`/`>` 等字符，直接拼字面 HTML 标签会把这些原始字符
+// 一起当成标签插进页面（存储型 XSS 风险）。路由层会先对整段做 HTML 转义，再把这两个
+// 占位符换回真正的 <b>/</b>，转义和高亮互不干扰。
+const SNIPPET_OPEN = "\u0001";
+const SNIPPET_CLOSE = "\u0002";
+
+/**
+ * P7：研究历史全文检索（FTS5，见 013_research_sessions_fts.sql）。
+ * tokenize='trigram' 不支持短于 3 个字符的查询串（子串索引本身的限制，不是 bug）——
+ * 调用方（路由层）负责在查询串过短时给出提示，这里只诚实返回空数组，不报错。
+ * snippet() 从 report_markdown 里截取命中片段，report_markdown 为空时退化到 question
+ * 字段，避免空标题的会话搜中了却看不出匹配在哪。
+ */
+export function searchResearchSessions(query, { limit = 20 } = {}) {
+  const q = String(query || "").trim();
+  if (q.length < 3) return [];
+  const db = getDb();
+  try {
+    return db.prepare(`
+      SELECT s.id, s.ticker, s.title, s.question, s.status, s.rating, s.confidence,
+             s.turn_count, s.created_at, s.updated_at, c.name_zh AS company_name,
+             snippet(research_sessions_fts, 2, ?, ?, '…', 12) AS snippet_report,
+             snippet(research_sessions_fts, 1, ?, ?, '…', 12) AS snippet_question
+      FROM research_sessions_fts fts
+      JOIN research_sessions s ON s.rowid = fts.rowid
+      LEFT JOIN companies c ON c.ticker = s.ticker
+      WHERE research_sessions_fts MATCH ?
+      ORDER BY rank
+      LIMIT ?
+    `).all(SNIPPET_OPEN, SNIPPET_CLOSE, SNIPPET_OPEN, SNIPPET_CLOSE, q, limit);
+  } catch {
+    // trigram 对形如纯标点/超长查询串可能抛"fts5: syntax error"——诚实返回空结果，不让搜索崩前端。
+    return [];
+  }
+}
+
 export function deleteResearchSession(id) {
   const db = getDb();
   const result = db.prepare("DELETE FROM research_sessions WHERE id = ?").run(id);

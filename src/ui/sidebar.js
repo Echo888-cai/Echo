@@ -124,6 +124,43 @@ function groupSessionsForSidebar() {
   return [...groups.values()];
 }
 
+// P7：搜索框永远渲染在展开的历史面板顶部；查询串非空时下面整个区域切换成扁平搜索结果，
+// 不再显示分组列表——避免"搜索结果"和"全部历史"两套列表同时出现造成混淆。
+function renderHistorySearchBox() {
+  return `<div class="history-search">
+    <input type="search" class="history-search-input" placeholder="搜索历史研究…（至少3个字）" value="${esc(S.historySearchQuery)}" />
+    ${S.historySearchQuery ? `<button type="button" class="history-search-clear" data-action="clear-history-search" aria-label="清除搜索">×</button>` : ""}
+  </div>`;
+}
+
+// 后端 snippet 用 / 当高亮定界符占位符（不是字面 <b> 标签），这里先对整段
+// 转义、再把占位符换回真正的 <b>/</b>——命中片段摘自用户问题/模型正文，可能含 `<`/`>`
+// 之类字符，顺序反过来（先替换标签再转义）会把这些原始字符也一起转义掉/或让原始内容
+// 被当成标签注入页面（存储型 XSS），必须先转义再替换。
+function highlightSnippet(snippet) {
+  if (!snippet) return "";
+  return esc(snippet).replace(/\u0001/g, "<b>").replace(/\u0002/g, "</b>");
+}
+
+function renderSearchResultItem(r, activeSessionId) {
+  const active = r.id === activeSessionId;
+  const title = r.title || r.companyName || r.ticker || "未命名研究";
+  return `<div class="session-item search-result ${active ? "is-active" : ""}">
+    <button class="session-open" type="button" data-action="load-session" data-id="${esc(r.id)}">
+      <strong>${esc(title)}</strong>
+      <span>${esc(r.companyName || r.ticker || "")}</span>
+      ${r.snippet ? `<em class="search-snippet">${highlightSnippet(r.snippet)}</em>` : ""}
+    </button>
+  </div>`;
+}
+
+function renderHistorySearchResults(activeSessionId) {
+  if (S.historySearchTooShort) return `<div class="history-empty">再多打几个字（至少3个）才能搜索。</div>`;
+  if (S.historySearchLoading) return `<div class="history-empty">正在搜索…</div>`;
+  if (!S.historySearchResults.length) return `<div class="history-empty">没有匹配的历史研究。</div>`;
+  return `<div class="session-list">${S.historySearchResults.map((r) => renderSearchResultItem(r, activeSessionId)).join("")}</div>`;
+}
+
 function renderSessionHistory(activeSessionId) {
   const count = S.recentSessions.length;
   const toggle = `<button class="history-toggle ${S.historyOpen ? "is-open" : ""}" type="button" data-action="toggle-history" aria-expanded="${S.historyOpen}">
@@ -133,15 +170,19 @@ function renderSessionHistory(activeSessionId) {
   if (!S.historyOpen) {
     return `<section class="history-panel collapsed">${toggle}</section>`;
   }
+  const searching = !!S.historySearchQuery;
   const groups = groupSessionsForSidebar();
-  const body = !S.sessionsLoaded
-    ? `<div class="history-empty">正在读取历史...</div>`
-    : count
-      ? `<div class="session-list">${groups.map((group) => renderConversationGroup(group, activeSessionId)).join("")}</div>`
-      : `<div class="history-empty">还没有历史研究。完成第一轮回答后会自动保存。</div>`;
+  const body = searching
+    ? renderHistorySearchResults(activeSessionId)
+    : !S.sessionsLoaded
+      ? `<div class="history-empty">正在读取历史...</div>`
+      : count
+        ? `<div class="session-list">${groups.map((group) => renderConversationGroup(group, activeSessionId)).join("")}</div>`
+        : `<div class="history-empty">还没有历史研究。完成第一轮回答后会自动保存。</div>`;
   return `<section class="history-panel">
     ${toggle}
-    ${count ? `<div class="history-actions"><button type="button" data-action="clear-sessions">清空全部</button></div>` : ""}
+    ${count || searching ? renderHistorySearchBox() : ""}
+    ${!searching && count ? `<div class="history-actions"><button type="button" data-action="clear-sessions">清空全部</button></div>` : ""}
     ${body}
   </section>`;
 }
