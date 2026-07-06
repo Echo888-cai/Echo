@@ -161,12 +161,12 @@
 | R3 + 估值叙事强化 | factGuard 数字级防幻觉护栏（shadow 模式，两轮真实样本调阈值）；正文稳定引用真实同业/财报日历锚点（4 轮真实模型输出验证） | 2026-07-05 |
 | R5+P2 + E4 | 组合体检三路联动（行业集中度/证伪线临近/财报×证伪）+ 证伪通知回链到研究会话；llm_audit 调用留痕 + 设置页卡片 | 2026-07-05 |
 | R7 | 研究记分卡/自动复盘：`research_snapshots` 快照落库 + 复盘计算（样本成熟度门槛、诚实降级）+ 画像页复盘区块 + 设置页记分卡 + 复盘提醒任务 | 2026-07-06 |
+| F-1 | factGuard 升档路径 + 研究库每日备份：`fact_guard_audit` 表（`007_fact_guard_audit.sql`）——`chatOrchestrator.applyFactGuard` 每次校验（不只是 shadow 模式的 console.log）都落一行 `{ticker, mode, total, pass/soft/hard 计数, hardDetails}`，`factGuardRepository.getFactGuardStats` 按 14 天窗口聚合 hard/soft 命中率，设置页新增"防幻觉护栏"卡片（`renderFactGuardCard`，达标依据取代人工翻 console）。顺手 E8：`dbBackup.js` 用 better-sqlite3 在线备份 API 每日 03:30 落一份快照（scheduler 新任务 `db_backup`），备份后立刻打开文件跑 `integrity_check` + 抽真实表验证"能恢复"不是纸面承诺，按 `retain=14` 滚动清理旧文件；`LUVIO_BACKUP_DIR` 可覆盖目录。真实数据验证：真实发起一轮 AAPL 研究（DeepSeek 实际作答），确认 `fact_guard_audit` 落了一行真实校验结果（33 处数字校验、1 处 hard 命中——模型提及"折叠屏备货 1000 万部"的手机出货量被误判成金额，跟"现金及等价物"数量级比对判 hard，这正是 v2 已知的"股数/份额误判成金额"边界情形的姊妹案例，记录在案供后续调阈值参考，不在本次修）；设置页卡片截图确认渲染正确（hard 命中率 3%、soft 命中率 42.4%）；`npm run dev` 实测 `db_backup` 任务真实触发，生成的备份文件通过 `verifyBackup` 校验。验证后已清理该临时研究会话（保留 `fact_guard_audit` 真实留痕数据，因为这正是 F-1 要收集的观测资产）。**shadow→soft 的升档暂不动**：14 天窗口刚开始积累，样本量为 1 次回答，红线 10 要求"以落库的真实误报率为依据"，现在还不到时候，留给持续观察。`tests/phase-f1.mjs`（10 项：仓库聚合/永不抛错、chatOrchestrator 集成真实校验落库、scheduler 任务注册、dbBackup 真实备份+校验+滚动保留），`tests/notifications.mjs` 的 JOBS 计数更新到 6，`tests/phase-d2.mjs` 迁移版本断言更新到 7。全套测试/lint/typecheck 干净。 | 2026-07-06 |
 
 ### 待办（本计划 F 轨，待对齐）
 
 | 阶段 | 名称 | 状态 | 备注 |
 |------|------|:---:|------|
-| F-1 | factGuard 升档路径（P6）+ 顺手：研究库每日备份（E8） | ⬜ | 命中落库 → 误报复盘视图 → 达标默认 soft；备份 `VACUUM INTO` 滚动 N 份 + 恢复演练 |
 | F-2 | 业绩闭环（R8） | ⬜ | actual/surprise 入库 + 业绩后复核任务 + 画像/快照/通知联动 + R7 接入 beat/miss；港股无 estimate 降级为"新 filing 到货对比上期" |
 | F-3 | 基本面证伪条件（R9） | ⬜ | 研究时结构化输出（不做事后文本解析）+ 新财报到货自动核对；旧数据文本兜底不硬迁 |
 | F-4 | 股东回报供数（R10） | ⬜ | HKEX 回购报告 + EDGAR Form 4 + 股本趋势；逐源真实实测后再接评分 |

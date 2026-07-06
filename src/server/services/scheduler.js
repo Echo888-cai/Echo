@@ -27,6 +27,7 @@ import { listAllActiveRules, markTriggered } from "../repositories/watchRules.js
 import { evaluateRule } from "./falsifyRules.js";
 import { getMarketSnapshot } from "../../marketData.js";
 import { listSnapshotTickers } from "../repositories/researchSnapshotsRepository.js";
+import { runBackup } from "./dbBackup.js";
 
 // ── 时间判定（纯函数，可测） ──────────────────────────────────
 
@@ -195,13 +196,19 @@ async function runReviewReminderJob() {
   return `${tickers.length} 只票检查完成，${reminded} 条复盘提醒已通知`;
 }
 
+/** 研究库每日备份（E8，PLAN v3 F-1 顺手项）：在线备份 + 恢复校验 + 滚动保留 14 份。 */
+async function runDbBackupJob() {
+  return runBackup({ retain: 14 });
+}
+
 /** 内置任务注册表（代码即配置，可版本管理）。 */
 export const JOBS = [
   { id: "digest_hk", label: "港股盘前速报", schedule: { kind: "daily", at: "09:00" }, run: () => runDigestJob("HK", "港股") },
   { id: "digest_us", label: "美股盘前速报", schedule: { kind: "daily", at: "21:15" }, run: () => runDigestJob("US", "美股") },
   { id: "position_lines", label: "持仓触线巡检", schedule: { kind: "interval", everyMinutes: 30, tradingHoursOnly: true }, run: runPositionLinesJob },
   { id: "falsify_watch", label: "证伪监控巡检", schedule: { kind: "interval", everyMinutes: 30, tradingHoursOnly: true }, run: runFalsifyWatchJob },
-  { id: "review_reminder", label: "研究复盘提醒", schedule: { kind: "daily", at: "08:00" }, run: runReviewReminderJob }
+  { id: "review_reminder", label: "研究复盘提醒", schedule: { kind: "daily", at: "08:00" }, run: runReviewReminderJob },
+  { id: "db_backup", label: "研究库每日备份", schedule: { kind: "daily", at: "03:30" }, run: runDbBackupJob }
 ];
 
 // ── 引擎 ─────────────────────────────────────────────────────
