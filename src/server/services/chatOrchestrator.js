@@ -6,6 +6,7 @@ import { runAgent } from "./agentService.js";
 import { getProviderStatus, callModel } from "./modelGateway.js";
 import { buildFactsRegistry, verifyAnswerNumbers, buildSoftNote, summarizeVerdict, renderHardFailIssues } from "./factGuard.js";
 import { insertFactGuardAudit } from "../repositories/factGuardRepository.js";
+import { extractStructuredFalsifiers } from "./falsifyRules.js";
 import { companyByTicker } from "../../data.js";
 import { saveResearchSession } from "../repositories/researchSessions.js";
 import { classifyResearchIntent } from "./intentClassifier.js";
@@ -458,6 +459,12 @@ async function finalizeChat({ payload, result, webEvidence, valuation, analyst, 
   const question = payload.question || "";
   content = normalizeResearchAnswer(content, result.decisionPanel, result.dataSources);
 
+  // F-3：模型在正文末尾按纪律附带的结构化基本面证伪条件（FALSIFIERS_JSON: [...]）——
+  // 抽取后立刻从用户可见内容里剥离，这行是给系统看的，不该出现在聊天气泡/历史记录里。
+  // 必须在 factGuard 之前做：正文里不该再混着这段 JSON 让数字校验误判。
+  const { rules: structuredFalsifiers, cleanContent } = extractStructuredFalsifiers(content);
+  content = cleanContent;
+
   // R3：数字级防幻觉护栏——只在有真实模型作答时才有意义（fallback 本身就是确定性拼接的
   // 面板文案，数字保证接地，没必要也拿去校验）。
   let factGuardVerdict = null;
@@ -543,8 +550,9 @@ async function finalizeChat({ payload, result, webEvidence, valuation, analyst, 
         panel: result.decisionPanel,
         valuation: valuation.cannotValueReason ? null : valuation,
         question,
-        answerContent: content, // 证伪段落里的量化条件（含价格线）从这里抽取沉淀
-        sessionId
+        answerContent: content, // 证伪段落里的价格线条件从这里抽取沉淀
+        sessionId,
+        structuredFalsifiers // F-3：基本面条件走模型结构化输出，不再靠事后文本解析
       });
     } catch (err) {
       console.warn("company_profile 回写失败:", err?.message || err);

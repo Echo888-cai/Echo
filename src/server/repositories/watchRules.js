@@ -6,6 +6,10 @@
  * 股价低于 300）就落成一条可自动核对的规则；叙述性条件（"云增速连续两季<20%"）
  * 不解析，仍以文本形式留在画像里。
  *
+ * F-3：基本面条件（kind=fundamental_below/above）不再靠事后文本解析——模型研究时
+ * 直接结构化输出（见 chatOrchestrator.js 的 extractStructuredFalsifiers），这里
+ * 跟价格规则存进同一张表，多一个 metric 列标注对应哪个财务指标（价格规则该列为 null）。
+ *
  * source='falsifier' 的规则每轮研究后整组重建（幂等）；未来手动规则用别的 source。
  */
 
@@ -35,10 +39,10 @@ export function replaceFalsifierRules(ticker, rules = [], { sessionId = null } =
   const run = db.transaction(() => {
     db.prepare("DELETE FROM watch_rules WHERE ticker = ? AND source = 'falsifier'").run(t);
     const ins = db.prepare(`
-      INSERT INTO watch_rules (ticker, kind, threshold, label, source, session_id)
-      VALUES (?, ?, ?, ?, 'falsifier', ?)
+      INSERT INTO watch_rules (ticker, kind, threshold, label, metric, source, session_id)
+      VALUES (?, ?, ?, ?, ?, 'falsifier', ?)
     `);
-    for (const r of rules) ins.run(t, r.kind, r.threshold, String(r.label || "").slice(0, 300), sessionId);
+    for (const r of rules) ins.run(t, r.kind, r.threshold, String(r.label || "").slice(0, 300), r.metric || null, sessionId);
     return rules.length;
   });
   return run();
@@ -55,6 +59,7 @@ function hydrate(row) {
     kind: row.kind,
     threshold: row.threshold,
     label: row.label || "",
+    metric: row.metric || null,
     source: row.source,
     sessionId: row.session_id || null,
     active: Boolean(row.active),
