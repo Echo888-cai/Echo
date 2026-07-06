@@ -17,6 +17,7 @@ import { isUS } from "../../market.js";
 import { saveMarketSnapshot } from "../../db/index.js";
 import { getHkFinancials } from "../repositories/hkFinancialsRepository.js";
 import { hkRowToFinancials, refreshHkFinancialsInBackground } from "./hkFilingsPipeline.js";
+import { getInsiderActivity } from "./insiderActivity.js";
 
 // B-5：展示级近似汇率（人民币列报 → 港元，估值口径用；非交易口径），与 portfolioReview.js
 // 的 FX_TO_USD 同一处理原则——不接汇率 API，只求量级不失真。
@@ -143,10 +144,13 @@ export async function collectDataSources({ company, suppliedMarketSnapshot = nul
       ? withTimeout(getRevenueSegments(company.ticker), 6000, { providerStatus: "missing" })
       : Promise.resolve({ providerStatus: "missing" }),
     // 区间回报（近1月/年初至今）——美股可得、港股免费档拿不到时返回 missing。
-    withTimeout(getRangeReturns(company.ticker), 6500, { providerStatus: "missing" })
+    withTimeout(getRangeReturns(company.ticker), 6500, { providerStatus: "missing" }),
+    // F-4a：内部人净买卖（SEC Form 4，美股先行，24h TTL 缓存——首次未命中缓存时最多
+    // 顺序拉 10 份原始 XML，9s 预算足够；命中缓存是一次本地 DB 读，几乎零延迟）。
+    withTimeout(getInsiderActivity(company.ticker), 9000, { providerStatus: "missing", detail: "内部人交易请求超时" })
   ]);
 
-  const [market, news, financials, filings, estimates, profileResult, segmentsResult, rangesResult] = tasks;
+  const [market, news, financials, filings, estimates, profileResult, segmentsResult, rangesResult, insiderResult] = tasks;
   const marketSnapshot = market.status === "fulfilled" ? market.value : fallbackMarketSnapshot(company.ticker, market.reason?.message || "行情失败");
   // 区间回报挂到行情快照上，随 marketSnapshot 一路流到 prompt / 前端 / 决策面板。
   const ranges = rangesResult?.status === "fulfilled" ? rangesResult.value : null;
@@ -161,6 +165,11 @@ export async function collectDataSources({ company, suppliedMarketSnapshot = nul
   const segments = segmentsResult?.status === "fulfilled" ? segmentsResult.value : null;
   if (financialsData?.providerStatus === "ok" && segments?.providerStatus === "ok") {
     financialsData.segments = segments;
+  }
+  // F-4a：内部人净买卖挂到 financialsData 上，随它流到 prompt 事实块/factGuard 登记表。
+  const insiderActivity = insiderResult?.status === "fulfilled" ? insiderResult.value : null;
+  if (financialsData && insiderActivity?.providerStatus === "ok") {
+    financialsData.insiderActivity = insiderActivity;
   }
   // P7 港股一手财报：hk_financials 已落库则同步附挂（零延迟）；第三方全挂时提升为主数据，
   // 第三方部分成功（腾讯只给行情）时按字段补空（B-5，见 mergeHkFinancialGaps）。

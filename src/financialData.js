@@ -731,6 +731,14 @@ export function financialsToMarkdown(financials) {
 
   const hk = hkFilingsToMarkdown(financials.hkFilings);
 
+  // F-4a：内部人净买卖（SEC Form 4，近 180 天）——只在真实抓到数据时才出现在事实块里，
+  // 没有 insiderActivity 字段（港股/请求失败）时这段整体不出现，不写"未核到"占位行
+  // （港股这条本就不该出现，写"未核到"反而暗示"本该有但没查到"，误导用户）。
+  const ia = financials.insiderActivity;
+  const insider = ia && ia.providerStatus === "ok"
+    ? `\n内部人净买卖（SEC Form 4，近 180 天，仅统计公开市场真实买卖 P/S，不含期权行权/税务代扣）：\n- 净${ia.netShares >= 0 ? "买入" : "卖出"} ${Math.abs(ia.netShares).toLocaleString("en-US")} 股${ia.netValueUsd ? `，净值约 ${compactNumber(Math.abs(ia.netValueUsd))} 美元` : ""}\n- ${ia.buyCount} 次买入、${ia.sellCount} 次卖出，涉及 ${ia.distinctInsiders} 位内部人${ia.lastTransactionAt ? `，最近一次 ${ia.lastTransactionAt}` : ""}`
+    : "";
+
   return [
     `财务数据来源：${financials.source}${period}（唯一财务事实源——下列没有的财务数字一律写"未核到"，禁止编造或估算）`,
     `收入${financials.period ? `（${financials.period}）` : "（TTM）"}：${fmtCompact(financials.revenue)} | 增速：${fmt(financials.revenueGrowth, "%")}`,
@@ -752,7 +760,7 @@ export function financialsToMarkdown(financials) {
     financials.debtToEquity ? `资产负债率：${financials.debtToEquity}` : "",
     financials.returnOnEquity ? `ROE：${fmtPercent(financials.returnOnEquity)}` : "",
     financials.returnOnAssets ? `ROA：${fmtPercent(financials.returnOnAssets)}` : ""
-  ].filter(Boolean).join("\n") + seg + hk;
+  ].filter(Boolean).join("\n") + seg + hk + insider;
 }
 
 /**

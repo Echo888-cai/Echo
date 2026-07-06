@@ -146,6 +146,15 @@ export function buildFactsRegistry(sources = {}) {
     pushMultiple(registry, fin.pb, "PB", "financialsData");
     pushDate(registry, fin.period, "财报期", "financialsData.period");
 
+    // F-4a：内部人净买卖——真实实测抓到过：不登记这两项时，模型正确复述的净值/交易日
+    // 会被误判 hard（金额桶里离得最近的是分析师目标价，数量级差一万多倍；日期桶完全
+    // 找不到，判"日期不存在"）。只登记金额/日期，不登记股数（股数量级与货币金额不同源，
+    // 混进同一个桶会重演"3451万股当金额"那类误报，见 extractNumbers 顶部注释）。
+    if (fin.insiderActivity?.providerStatus === "ok") {
+      pushAmount(registry, fin.insiderActivity.netValueUsd, cur, "内部人净买卖金额", "financialsData.insiderActivity");
+      pushDate(registry, fin.insiderActivity.lastTransactionAt, "内部人最近交易日", "financialsData.insiderActivity");
+    }
+
     for (const row of Array.isArray(fin.hkFilings) ? fin.hkFilings : []) {
       const rc = row.currency || cur;
       pushAmount(registry, row.revenue, rc, "收入（一手）", "hkFilings");
