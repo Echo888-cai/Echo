@@ -222,6 +222,99 @@ function eventKey(e) {
 }
 
 /**
+ * P11 事件去重（M-3）：多个新闻源报同一天同一件事，措辞不同、`eventKey` 精确匹配抓不到——
+ * 真实抓到的例子（0700.HK 同一天三条回购新闻，应合并成一条）：
+ *   "腾讯控股(00700.HK)7月6日回购46.50万股，耗资2.05亿港元"
+ *   "腾讯控股回购47万股 金额达2.05亿港元"
+ *   "腾讯控股7月6日回购46.5万股股份"
+ *
+ * **第一版方案（字符 trigram 重叠率）被真实数据推翻**：同一天还抓到三条不同时间点的涨跌
+ * 快讯——"腾讯控股涨超4%"（10:28）/"港股科网股拉升…腾讯控股涨超3%"（10:11）/"港股午盘｜
+ * 恒指涨0.83% 腾讯控股涨近4%"（12:05），说的是三个不同时刻的不同涨幅，重叠率却算出
+ * 0.6~0.8（因为"腾讯控股涨超4%"这类短标题的字符集几乎是任何提及同一公司的标题的子集，
+ * 重叠系数天然偏高）——真实跑过一遍就复现了错误合并，Jaccard 相似度同样测过，两类真假
+ * 案例的分数区间有重叠，找不到能同时保真阳性、零假阳性的单一阈值（详见 git history 的
+ * 首版实现与验证过程）。通用文本相似度对这类高度模板化的短财经标题不可靠，遂放弃。
+ *
+ * **现方案：只认具体数字，不看措辞相似度。** 财经快讯的"回购"类新闻会携带一个具体的
+ * 金额/股数（"2.05亿港元"“46.5万股”），不同来源转述同一笔交易时这个数字要么完全一致、
+ * 要么四舍五入误差 <2%——而不同笔交易/不同时点的数字几乎不可能巧合相同。涨跌类快讯只有
+ * 百分比（"4%"“0.83%”），百分比取值范围小、天天都在重复（"涨超4%"随时可能撞见另一条
+ * 不相关新闻），特意不参与匹配——两条标题必须都能提取到具体金额/股数，且至少一个数字
+ * 相对误差 ≤2%，才判定为同一事件；提不到数字的标题一律不参与聚合（宁可漏合并，
+ * 不可错合并，红线：错合=0）。真实数据验证：三条回购新闻两两之间都能通过金额或股数匹配
+ * （A/B 共享"2.05亿港元"，A/C 共享"46.5万股"附近的股数），全部正确聚合成一条；四条
+ * 涨跌快讯因为提不出金额/股数 token，互相之间保证不会误合并。
+ */
+const AMOUNT_TOKEN_RE = /([\d]+(?:\.\d+)?)\s*(亿|万)\s*(港元|美元|元)/g;
+const SHARE_TOKEN_RE = /([\d]+(?:\.\d+)?)\s*万\s*股/g;
+const AMOUNT_MATCH_TOLERANCE = 0.02; // 相对误差 2%——覆盖"46.50万"vs"47万"这类四舍五入差异
+
+/** 从标题里提取具体金额（统一换算成"元"）与股数（统一换算成"股"）token。 */
+function extractNumberTokens(title) {
+  const s = String(title || "");
+  const out = [];
+  let m;
+  AMOUNT_TOKEN_RE.lastIndex = 0;
+  while ((m = AMOUNT_TOKEN_RE.exec(s))) {
+    const scale = m[2] === "亿" ? 1e8 : 1e4;
+    out.push(parseFloat(m[1]) * scale);
+  }
+  SHARE_TOKEN_RE.lastIndex = 0;
+  while ((m = SHARE_TOKEN_RE.exec(s))) {
+    out.push(parseFloat(m[1]) * 1e4);
+  }
+  return out.filter((n) => Number.isFinite(n) && n > 0);
+}
+
+/** 两个标题是否共享至少一个（在容差内）相同的具体数字——判定"同一件事"的唯一依据。 */
+function shareNumberToken(tokensA, tokensB) {
+  for (const a of tokensA) {
+    for (const b of tokensB) {
+      if (Math.abs(a - b) / Math.max(a, b) <= AMOUNT_MATCH_TOLERANCE) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 只对 kind==="news" 事件做同题材聚合（position_alert/earnings 是确定性生成的单条事件，
+ * 没有"多源报道同一事实"的问题）。按 ticker+日历日分组后两两比较数字 token，
+ * 传递聚类（A 与 B 共享数字、B 与 C 共享数字 → A/B/C 归一簇，即使 A/C 本身不共享）；
+ * 最终展示标题取簇内最长的一条（信息量通常更完整），命中 ≥2 条时附 `relatedCount`。
+ */
+export function dedupeSimilarNews(events) {
+  const passthrough = [];
+  const byDay = new Map(); // "ticker|date" -> news events
+  for (const e of events) {
+    if (e.kind !== "news") { passthrough.push(e); continue; }
+    const day = String(e.date || "").slice(0, 10);
+    const key = `${e.ticker}|${day}`;
+    if (!byDay.has(key)) byDay.set(key, []);
+    byDay.get(key).push(e);
+  }
+  const out = [...passthrough];
+  for (const dayEvents of byDay.values()) {
+    /** @type {Array<{tokens: number[], members: object[]}>} */
+    const clusters = [];
+    for (const e of dayEvents) {
+      const tokens = extractNumberTokens(e.title);
+      // 提不到数字的标题（如纯涨跌幅新闻）永远单独成簇，不参与任何匹配。
+      const cluster = tokens.length ? clusters.find((c) => c.tokens.length && shareNumberToken(tokens, c.tokens)) : null;
+      if (cluster) { cluster.members.push(e); cluster.tokens.push(...tokens); }
+      else clusters.push({ tokens, members: [e] });
+    }
+    for (const c of clusters) {
+      const rep = c.members.reduce((longest, m) =>
+        String(m.title || "").length > String(longest.title || "").length ? m : longest
+      );
+      out.push(c.members.length > 1 ? { ...rep, relatedCount: c.members.length } : rep);
+    }
+  }
+  return out;
+}
+
+/**
  * 为单家公司收集事件，并返回明确状态（错误不再被静默吞掉）。
  * @returns {Promise<{ ticker: string, companyName: string, market: string, status: "ok"|"empty"|"error", reasons: string[], events: object[], earnings: object|null }>}
  */
@@ -249,10 +342,11 @@ async function collectCompanyEvents(company, cfg) {
   }
   if (news.status === "error") { errored = true; reasons.push(`新闻抓取失败：${news.reason}`); }
 
-  // 组内：blockedKinds 整类静音 → 去重 → 按 severity/日期排序 → low 限额。
+  // 组内：blockedKinds 整类静音 → 精确去重 → 同题材新闻聚合（M-3 P11）→ 按 severity/日期排序 → low 限额。
   let kept = events.filter((e) => !cfg.blockedKinds.includes(e.kind));
   const seen = new Set();
   kept = kept.filter((e) => { const k = eventKey(e); if (seen.has(k)) return false; seen.add(k); return true; });
+  kept = dedupeSimilarNews(kept);
   kept.sort((a, b) => (SEVERITY_RANK[b.severity] || 0) - (SEVERITY_RANK[a.severity] || 0) || String(b.date).localeCompare(String(a.date)));
   let lowSeen = 0;
   kept = kept.filter((e) => {

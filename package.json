@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node server.js",
     "seed": "node scripts/seed-db.js",
-    "test": "node tests/smoke.mjs && node tests/reliability.mjs && node tests/phase3.mjs && node tests/phase4.mjs && node tests/notifications.mjs && node tests/phase6.mjs && node tests/phase7.mjs && node tests/phase-ea0.mjs && node tests/phase-ea1.mjs && node tests/phase-ea2.mjs && node tests/phase-ea3.mjs && node tests/phase-ea4.mjs && node tests/phase-ea5-1.mjs && node tests/phase-b1.mjs && node tests/phase-b2.mjs && node tests/phase-b3.mjs && node tests/phase-b4.mjs && node tests/phase-b5.mjs && node tests/phase-b6.mjs && node tests/phase-b7.mjs && node tests/phase-d2.mjs && node tests/phase-g1.mjs && node tests/phase-g3.mjs && node tests/phase-r3.mjs && node tests/phase-e4.mjs && node tests/phase-r7.mjs && node tests/phase-f1.mjs && node tests/phase-f2.mjs && node tests/phase-f3.mjs && node tests/phase-f4.mjs && node tests/phase-f4b.mjs && node tests/phase-f5.mjs && node tests/phase-p7.mjs && node tests/phase-m1.mjs",
+    "test": "node tests/smoke.mjs && node tests/reliability.mjs && node tests/phase3.mjs && node tests/phase4.mjs && node tests/notifications.mjs && node tests/phase6.mjs && node tests/phase7.mjs && node tests/phase-ea0.mjs && node tests/phase-ea1.mjs && node tests/phase-ea2.mjs && node tests/phase-ea3.mjs && node tests/phase-ea4.mjs && node tests/phase-ea5-1.mjs && node tests/phase-b1.mjs && node tests/phase-b2.mjs && node tests/phase-b3.mjs && node tests/phase-b4.mjs && node tests/phase-b5.mjs && node tests/phase-b6.mjs && node tests/phase-b7.mjs && node tests/phase-d2.mjs && node tests/phase-g1.mjs && node tests/phase-g3.mjs && node tests/phase-r3.mjs && node tests/phase-e4.mjs && node tests/phase-r7.mjs && node tests/phase-f1.mjs && node tests/phase-f2.mjs && node tests/phase-f3.mjs && node tests/phase-f4.mjs && node tests/phase-f4b.mjs && node tests/phase-f5.mjs && node tests/phase-p7.mjs && node tests/phase-m1.mjs && node tests/phase-m3.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p jsconfig.json",
     "doctor": "node scripts/doctor.js",
@@ -14,6 +14,7 @@
     "factguard-sample": "node scripts/factguard-sample.js",
     "hk-coverage": "node scripts/hk-coverage.js",
     "clean:portraits": "node scripts/clean-portrait-noise.js",
+    "clean:thesis-fragments": "node scripts/clean-thesis-fragments.js",
     "test:smoke": "node tests/smoke.mjs",
     "test:reliability": "node tests/reliability.mjs",
     "test:phase3": "node tests/phase3.mjs"
