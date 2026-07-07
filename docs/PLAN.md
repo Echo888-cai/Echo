@@ -167,12 +167,12 @@ manifest + service worker（静态资源 cache-first，API network-only，版本
 | R3 + 估值叙事 + R5/P2 + E4 + R7 | factGuard（shadow）；真实锚点叙事；组合三路联动 + 证伪回链；llm_audit；研究记分卡/自动复盘 | 2026-07-05 ~ 06 |
 | **F-1…F-5（含 F-4a/b）+ 顺手 E8/P7** | factGuard 升档路径（`fact_guard_audit` 全量留痕 + 设置页命中率卡）；业绩闭环（实际 vs 预期 → 通知/画像/记分卡）；基本面证伪结构化输出 + 财报到货自动核对；股东回报一手供数（SEC Form 4 + HKEX 回购/股本趋势）；历史估值分位（年度 PE 序列）；每日验证备份；研究历史 FTS5 全文检索 | 2026-07-06 |
 | **M-1** | 持仓一级页面（`#/portfolio`）+ 每日组合快照（E9）。`014_portfolio_snapshots.sql` 新表（`snapshot_date` 主键，同日 upsert 幂等）；`portfolioEnrich.js` 从 routes 抽到 services 层（route 与 scheduler 共用同一份丰富化逻辑，新增 `changePct` 字段供"今日盈亏"用）；`portfolioSnapshot.js` 纯函数 `computeSnapshotTotals`（缺现价诚实降为 null，不是 0）+ scheduler 新任务 `portfolio_snapshot`（每日 08:05，两市均已收盘）；净值曲线复用 `watch.js` 导出的 `buildChartPaths`，无插值断口 + 一次性描边入场动画（红线 14/15）。前端：看盘页"我的持仓"改为直接跳转 `#/portfolio`（不再借道对话插卡片）；旧的聊天卡片入口（`showPortfolio`/`refreshPortfolioPanel`）确认零调用后移除，`renderPositionCard`/`renderPortfolioReview` 保留导出供新页面与历史会话回放共用；持仓卡整卡可点进 `#/watch/:ticker`（新增全局 `[data-action][tabindex]` 回车激活，补上键盘可达性）+ 止损/止盈可视化条。真实数据验证：真实 dev DB 跑通全链路——启动时 scheduler misfire 补跑真实记录一条快照（1 笔腾讯控股持仓，≈$6,021），持仓页横幅/体检卡/曲线用真实数据渲染；临时插入两天快照验证净值曲线正确连线（+11.5% 区间），验证后已清理临时行（保留真实的 2026-07-07 一条）；375/768/1280 × 亮/暗双主题实跑截图确认无横向溢出、卡片/曲线渲染正确（§3.5 视觉验收）。`tests/phase-m1.mjs`（8 项：`computeSnapshotTotals` 多币种/缺失降级/空组合、仓库落库/幂等/最近N天排序、scheduler 注册）；`tests/notifications.mjs` JOBS 计数更新到 8，`tests/phase-d2.mjs` 迁移版本断言更新到 14。全套测试/lint/typecheck 干净。 | 2026-07-07 |
+| **M-2** | 移动端看盘修复（纯 CSS，无 JS/后端改动）。根因（§1.2 发现①）：`.wl-main > * { flex: none }` 让 ticker/市场徽章/财报徽章全部不可收缩，窄屏单行网格放不下时公司名被挤压到 0 宽、徽章溢出压在价格数字上。**改两行式网格**（`06-watch.css` ≤640px 断点）：`grid-template-areas` 定义 `"dot main main main" / ". spark price chg"`，第一行公司名独占整行（`.wl-main { overflow: hidden }` 兜底，不再溢出到相邻列），第二行迷你曲线+现价+涨跌——顺带恢复了此前直接砍掉的窄屏 sparkline。财报徽章（`.wl-earnings`）在 ≤960px 和 ≤640px 两档都让位给公司名（个股详情页仍可见，属于补充信息不是扫一眼的必需信息）；`.wl-cols` 列头在两行式卡片下没有对齐意义，窄屏直接隐藏。顺手修 `01-shell.css` 顶栏：≤480px 收紧间距/按钮尺寸 + 隐藏"RESEARCH"副标题文字，解决 375px 下"研究/看盘/设置"三个导航项换行成两行的问题。真实数据验证：375px 实跑（真实 6 只关注股，含真实"财报 2026-08-11"徽章数据）确认公司名全部完整可读、无重叠、无横向溢出、顶栏单行；768px（960px 中间档）实跑确认同一成因的轻度版本（此前"腾…"被压成一个字）已同样修复；1280px 桌面端逐一截图确认原有布局零回归；亮/暗双主题分别验证；`closest()` DOM 内省确认删除按钮（✕）点击命中自身而不会被外层"点击进详情页"吞掉。**发现即修不新开阶段**：960px 档的同源问题是本次实跑验证时才发现的（原 PLAN 只点名了 375px），随手一并处理，避免"改完一个断点、另一个断点还留着同一个坑"。全套测试/lint/typecheck 干净（本次改动零 JS/后端改动，未新增测试）。 | 2026-07-07 |
 
 ### 待办（本计划 M 轨）
 
 | 阶段 | 名称 | 状态 | 备注 |
 |------|------|:---:|------|
-| M-2 | 移动端看盘修复（P10） | ⬜ | 根因 file:line 见 §1.2 发现① |
 | M-3 | 看盘内容质量：thesis 治理 + 事件去重（R12+P11） | ⬜ | 套 F-3 结构化输出模式；错合 = 0 硬标准 |
 | M-4 | PWA（P12） | ⬜ | 真机安装实测；iOS 限制诚实记录 |
 | 顺手 | 分享图导出（P13）/ 成本汇总视图（E10） | ⬜ | 挂任意阶段 |
