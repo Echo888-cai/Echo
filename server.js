@@ -25,7 +25,7 @@ import { handleReportGenerateApi } from "./src/server/routes/reports.js";
 import { handleProfileList, handleProfileGet, handleProfileDelete, handleProfileReview, handleResearchScorecard } from "./src/server/routes/portraits.js";
 import { handleEventsDigest } from "./src/server/routes/events.js";
 import { handleWatchDesk, handleWatchStock, handleWatchTrack, handleWatchUntrack } from "./src/server/routes/watch.js";
-import { handlePortfolioList, handlePortfolioUpsert, handlePortfolioDelete, handlePortfolioReview } from "./src/server/routes/portfolio.js";
+import { handlePortfolioList, handlePortfolioUpsert, handlePortfolioDelete, handlePortfolioReview, handlePortfolioSnapshots } from "./src/server/routes/portfolio.js";
 import { handleNotificationsList, handleNotificationsUnread, handleNotificationsRead, handleNotificationsTest, handleSchedulerStatus } from "./src/server/routes/notifications.js";
 import { handleHkFinancialsList, handleHkFinancialsIngest } from "./src/server/routes/hkFinancials.js";
 import { startScheduler } from "./src/server/services/scheduler.js";
@@ -100,6 +100,7 @@ const server = createServer(async (req, res) => {
 
   // ── Portfolio (natural-language ledger + manual edit) ──
   if (method === "GET" && url.startsWith("/api/portfolio/review")) return handlePortfolioReview(req, res);
+  if (method === "GET" && url.startsWith("/api/portfolio/snapshots")) return handlePortfolioSnapshots(req, res);
   if (method === "GET" && url.startsWith("/api/portfolio")) return handlePortfolioList(req, res);
   if (method === "POST" && url.startsWith("/api/portfolio")) return handlePortfolioUpsert(req, res);
   if (method === "DELETE" && url.startsWith("/api/portfolio")) return handlePortfolioDelete(req, res);

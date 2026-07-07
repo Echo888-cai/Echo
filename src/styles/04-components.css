@@ -4,11 +4,22 @@
   gap: 12px;
 }
 .pf-card {
+  display: block;
+  width: 100%;
   padding: 14px 16px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel-soft);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.16s var(--ease-soft), box-shadow 0.16s var(--ease-soft), transform 0.16s var(--ease-soft);
 }
+.pf-card:hover, .pf-card:focus-visible {
+  border-color: var(--line-strong);
+  box-shadow: var(--sh-1);
+  transform: translateY(-1px);
+}
+.pf-card:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .pf-card-head {
   display: flex;
   align-items: flex-start;
@@ -104,6 +115,39 @@
 .is-flat { color: var(--muted); }
 .pf-dist.is-up { color: #1c8c4a; }
 .pf-dist.is-down { color: var(--danger); }
+
+/* 止损/止盈可视化条（M-1）：现价落在 [止损, 止盈] 区间的相对位置。 */
+.pf-range { margin-top: 12px; }
+.pf-range-track {
+  position: relative;
+  height: 5px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255, 59, 48, 0.28), rgba(28, 140, 74, 0.28));
+}
+.pf-range-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: transparent; /* 底色渐变已经给出方向感，这里只需要圆点标记当前位置 */
+}
+.pf-range-dot {
+  position: absolute;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--ink);
+  border: 2px solid var(--panel-soft);
+  transform: translate(-50%, -50%);
+  transition: left 0.24s var(--ease-soft);
+}
+.pf-range-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 5px;
+  font-size: 10.5px;
+  color: var(--muted-2);
+  font-variant-numeric: tabular-nums;
+}
 .pf-actions {
   margin-top: 14px;
 }

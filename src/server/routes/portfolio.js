@@ -1,9 +1,11 @@
 /**
  * Portfolio routes:
  *
- * GET    /api/portfolio          → list positions, enriched with live price + P&L
- * POST   /api/portfolio          → upsert a position (manual add / edit)
- * DELETE /api/portfolio?ticker=  → remove a position
+ * GET    /api/portfolio            → list positions, enriched with live price + P&L
+ * GET    /api/portfolio/review     → portfolio discipline check (concentration/stop-loss/etc.)
+ * GET    /api/portfolio/snapshots  → daily net-worth snapshots (M-1, for the net worth chart)
+ * POST   /api/portfolio            → upsert a position (manual add / edit)
+ * DELETE /api/portfolio?ticker=    → remove a position
  *
  * Positions are recorded automatically from natural-language chat (cost / shares /
  * stop-loss / take-profit), and can also be added/edited manually via POST.
@@ -12,84 +14,8 @@
 import { sendOk, sendError, readJsonBody } from "../utils/async.js";
 import { listPositions, upsertPosition, deletePosition } from "../repositories/portfolio.js";
 import { computePortfolioReview } from "../services/portfolioReview.js";
-import { getMarketSnapshot } from "../../marketData.js";
-import { marketCurrency } from "../../market.js";
-import { getCompanyByTickerComplete } from "../repositories/companyRepository.js";
-import { listRules } from "../repositories/watchRules.js";
-import { evaluateRule } from "../services/falsifyRules.js";
-import { getNextEarnings } from "../services/earningsCalendar.js";
-import { beijingDate } from "../utils/time.js";
-
-/** 该持仓活跃证伪规则里离现价最近的一条（用于组合体检的"证伪临近"联动）。 */
-function nearestFalsifierRule(ticker, price) {
-  const rules = listRules(ticker);
-  if (!rules.length) return { ruleCount: 0, nearestRule: null };
-  if (!(price > 0)) return { ruleCount: rules.length, nearestRule: null };
-  let nearest = null;
-  for (const rule of rules) {
-    const { sane, distancePct, triggered } = evaluateRule(rule, price);
-    if (!sane || distancePct == null) continue;
-    if (!nearest || Math.abs(distancePct) < Math.abs(nearest.distancePct)) {
-      nearest = { ruleId: rule.id, label: rule.label, kind: rule.kind, threshold: rule.threshold, distancePct, triggered };
-    }
-  }
-  return { ruleCount: rules.length, nearestRule: nearest };
-}
-
-/** 该持仓的下一业绩日（Finnhub，24h TTL 缓存，港股经 ADR 核到；核不到时诚实返回 null）。 */
-async function nextEarningsInfo(ticker) {
-  try {
-    const info = await getNextEarnings(ticker);
-    if (info.providerStatus !== "ok" || !info.nextDate) return null;
-    const today = beijingDate();
-    if (info.nextDate < today) return null;
-    const days = Math.round((new Date(info.nextDate).getTime() - new Date(today).getTime()) / 86400000);
-    return { date: info.nextDate, daysToEarnings: days };
-  } catch {
-    return null; // 财报日历不可用不阻断组合体检
-  }
-}
-
-/** Attach live price + unrealized P&L to a position. Degrades gracefully when no quote. */
-async function enrichPosition(p) {
-  let price = null;
-  let currency = marketCurrency(p.ticker);
-  let asOf = null;
-  let priceStatus = "missing";
-  try {
-    const snap = await getMarketSnapshot(p.ticker);
-    if (snap?.providerStatus === "ok" && snap.price != null) {
-      price = snap.price;
-      currency = snap.currency || currency;
-      asOf = snap.asOf;
-      priceStatus = "ok";
-    }
-  } catch {
-    // 行情源不可用时静默降级——前端显示"现价暂不可用"。
-  }
-  const out = { ...p, currentPrice: price, currency, asOf, priceStatus };
-  if (price != null && p.avgCost != null && p.avgCost !== 0) {
-    out.returnPct = (price - p.avgCost) / p.avgCost;
-    if (p.shares != null) {
-      out.marketValue = price * p.shares;
-      out.costValue = p.avgCost * p.shares;
-      out.unrealizedPnl = out.marketValue - out.costValue;
-    }
-  }
-  if (price != null && price !== 0 && p.stopLoss != null) out.toStopPct = (price - p.stopLoss) / price;
-  if (price != null && price !== 0 && p.takeProfit != null) out.toTakePct = (p.takeProfit - price) / price;
-  try {
-    const company = getCompanyByTickerComplete(p.ticker);
-    if (company) { out.sector = company.sector || null; out.industry = company.industry || null; }
-  } catch {
-    // companies 表查询失败不阻断持仓展示
-  }
-  const { ruleCount, nearestRule } = nearestFalsifierRule(p.ticker, price);
-  out.falsifierRuleCount = ruleCount;
-  out.nearestFalsifierRule = nearestRule;
-  out.nextEarnings = await nextEarningsInfo(p.ticker);
-  return out;
-}
+import { enrichPosition } from "../services/portfolioEnrich.js";
+import { getPortfolioSnapshots } from "../services/portfolioSnapshot.js";
 
 export async function handlePortfolioList(req, res) {
   try {
@@ -109,6 +35,15 @@ export async function handlePortfolioReview(req, res) {
     sendOk(res, { review: computePortfolioReview(enriched) });
   } catch (error) {
     sendError(res, 500, error.message || "组合体检失败");
+  }
+}
+
+/** GET /api/portfolio/snapshots → 每日组合快照（M-1 净值曲线数据源，E9 每日 scheduler 任务落库）。 */
+export async function handlePortfolioSnapshots(req, res) {
+  try {
+    sendOk(res, { snapshots: getPortfolioSnapshots(180) });
+  } catch (error) {
+    sendError(res, 500, error.message || "获取组合快照失败");
   }
 }
 

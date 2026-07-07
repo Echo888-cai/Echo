@@ -371,7 +371,8 @@ function stockEventRow(e) {
 
 // ── 价格曲线（公司页真曲线：美股收盘价面积/折线；港股预留）──
 // 收盘价序列 → SVG path。viewBox 640×168，svg width:100%/height:auto 等比缩放。
-function buildChartPaths(pts, W, H) {
+// export：M-1 持仓页净值曲线复用同一条构建逻辑（同样是"数值序列 → 面积/折线路径"）。
+export function buildChartPaths(pts, W, H) {
   const top = 8;
   const bot = H - 8;
   const drawH = bot - top;
