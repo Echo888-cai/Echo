@@ -106,6 +106,19 @@
 [data-theme="dark"] .topbar nav a:hover { background: rgba(255, 255, 255, 0.06); }
 [data-theme="dark"] .topbar nav a.active { background: rgba(255, 255, 255, 0.09); }
 
+/* M-2：375px 顶栏此前会挤到换行（brand min-width:180px + 3 个 nav 链接 + 铃铛 + 主题切换
+   在窄屏下预算不够）。收紧间距/内边距，副标题"RESEARCH"窄屏让位给导航——不砍功能，只
+   砍装饰性文字。*/
+@media (max-width: 480px) {
+  .topbar { gap: 8px; padding: 0 12px; }
+  .brand { min-width: 0; gap: 7px; }
+  .brand em { display: none; }
+  .brand strong { font-size: 16px; }
+  .topbar nav { gap: 0; }
+  .topbar nav a { padding: 7px 9px; font-size: 13px; white-space: nowrap; }
+  .notif-bell, .theme-toggle { width: 32px; height: 32px; }
+}
+
 /* ── 通知中心（铃铛 + 面板） ─────────────────────────── */
 
 .notif-wrap {

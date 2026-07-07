@@ -250,23 +250,47 @@
 .wl-linkbtn { border: none; background: transparent; color: var(--blue-ink); font: inherit; font-size: 13.5px; cursor: pointer; }
 .wl-empty-add { margin-top: 18px; display: flex; justify-content: center; }
 
-/* 中屏：收掉主线列，保数字列对齐 */
+/* 中屏：收掉主线列，保数字列对齐。财报徽章在这一档同样会跟公司名抢空间（M-2 实跑
+   768px 时抓到：名字被压成"腾…"一个字——不到 375px 那么破，但同一个成因，一并修），
+   窄屏让位给公司名，个股详情页仍能看到财报日。 */
 @media (max-width: 960px) {
   .wl-row, .wl-cols { grid-template-columns: 8px minmax(140px, 1.3fr) 92px 88px 74px 84px 18px; }
   .wl-thesis, .wl-cols span:nth-child(7) { display: none; }
+  .wl-row .wl-main { overflow: hidden; }
+  .wl-row .wl-earnings { display: none; }
 }
-/* 窄屏：再收 sparkline 与持有列，✕ 常显 */
+/* 窄屏（M-2 重写）：单行网格在 375px 下放不下"名称+代码+市场徽章+财报徽章"，
+   之前的做法是把除公司名以外的一切都设成 flex:none 不可收缩——挤爆后公司名被压成 0 宽、
+   财报徽章直接溢出压在现价数字上（PLAN v4 §1.2 发现①，file:line 见 .wl-main 附近注释）。
+   改两行式：第一行公司名+徽章（名称本身可省略号截断，不再整体消失），第二行迷你曲线+
+   现价+今日涨跌——两行式腾出的宽度足够，顺带恢复了之前直接砍掉的窄屏 sparkline。
+   列头（.wl-cols）在两行式卡片下没有意义（第一行是全宽名称，不对齐任何数字列），
+   窄屏直接隐藏，行自身用文字标签自解释（现价/涨跌本身就是数字，不需要列头）。 */
 @media (max-width: 640px) {
   .wd-head { flex-direction: column; align-items: flex-start; }
   .wd-summary { justify-content: flex-start; }
   .wd-overview { gap: 6px; padding: 7px 10px; }
-  .wl-row, .wl-cols { grid-template-columns: 8px minmax(0, 1fr) 84px 70px; gap: 8px; }
-  .wl-spark, .wl-cols .c-spark { display: none; }
-  .wl-pnl, .wl-cols span:nth-child(6) { display: none; }
-  .wl-chev, .wl-cols span:nth-child(8) { display: none; }
+  .wl-cols { display: none; }
+  .wl-row {
+    grid-template-columns: 14px minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "dot  main  main  main"
+      ".    spark price chg";
+    row-gap: 6px;
+    column-gap: 8px;
+    padding: 12px 42px 12px 14px; /* 右侧留 ✕ 的空间 */
+  }
+  .wl-row .wd-dot { grid-area: dot; align-self: start; margin-top: 5px; }
+  .wl-row .wl-main { grid-area: main; overflow: hidden; }
+  .wl-row .wl-spark { grid-area: spark; display: inline-flex; } /* 两行式腾出空间，恢复显示 */
+  .wl-row .wl-price { grid-area: price; }
+  .wl-row .wd-chg { grid-area: chg; }
+  .wl-pnl, .wl-thesis, .wl-chev { display: none; }
+  /* 财报徽章是补充信息（个股详情页仍看得到），窄屏让位给公司名——名字才是扫一眼时的
+     主信息，徽章挤占名字空间是本次要修的那个问题的根源之一。 */
+  .wl-row .wl-earnings { display: none; }
   /* ✕ 常显（无 hover），行右侧留出它的宽度，别盖住涨跌幅 */
   .wl-x { opacity: 1; }
-  .wl-row { padding-right: 42px; }
   .wl-controls { gap: 8px; }
   .wl-sorts .wl-seglabel { display: none; }
 }
