@@ -32,6 +32,7 @@ import { runBackup } from "./dbBackup.js";
 import { getNextEarnings } from "./earningsCalendar.js";
 import { listWithLastReported } from "../repositories/earningsCalendarRepository.js";
 import { compactNumberServer } from "../utils/format.js";
+import { recordDailySnapshot } from "./portfolioSnapshot.js";
 
 // ── 时间判定（纯函数，可测） ──────────────────────────────────
 
@@ -304,7 +305,10 @@ export const JOBS = [
   { id: "falsify_watch", label: "证伪监控巡检", schedule: { kind: "interval", everyMinutes: 30, tradingHoursOnly: true }, run: runFalsifyWatchJob },
   { id: "review_reminder", label: "研究复盘提醒", schedule: { kind: "daily", at: "08:00" }, run: runReviewReminderJob },
   { id: "db_backup", label: "研究库每日备份", schedule: { kind: "daily", at: "03:30" }, run: runDbBackupJob },
-  { id: "earnings_review", label: "业绩后复核", schedule: { kind: "daily", at: "07:30" }, run: runEarningsReviewJob }
+  { id: "earnings_review", label: "业绩后复核", schedule: { kind: "daily", at: "07:30" }, run: runEarningsReviewJob },
+  // M-1（PLAN v4 E9）：08:05 时两市均已收盘（港股 16:00 HKT 收盘、美股最晚 04:10 北京时间收盘），
+  // 各用最近收盘价折一份近似 USD 快照，喂持仓页净值曲线，也是数据护城河的自沉淀序列。
+  { id: "portfolio_snapshot", label: "组合每日快照", schedule: { kind: "daily", at: "08:05" }, run: recordDailySnapshot }
 ];
 
 // ── 引擎 ─────────────────────────────────────────────────────

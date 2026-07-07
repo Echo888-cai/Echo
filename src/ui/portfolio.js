@@ -1,53 +1,21 @@
-// ── 持仓面板：持仓卡 + P3 组合体检卡 + 增删刷新 ─────────────
-import { render, getThread, setThread, appendMessage } from "./state.js";
-import { api } from "./api.js";
-import { esc, toast, fmtPct, fmtNum, pnlDir } from "./format.js";
+// ── 持仓渲染：持仓卡 + P3 组合体检卡（纯渲染，无副作用）──────
+// M-1：持仓的常驻入口搬到了一级页面 `#/portfolio`（见 portfolioPage.js）。这个文件只留
+// 纯渲染函数——一是给新页面用，二是给历史研究会话里可能存量的 meta.type==="portfolio"
+// 消息做回放渲染（components.js 读旧会话 thread_json 时仍会命中，不能删，否则老记录空白）。
+import { esc, fmtPct, fmtNum, pnlDir } from "./format.js";
 
-export async function showPortfolio() {
-  try {
-    // 持仓列表 + 组合体检并行拉；体检失败不影响列表（review=null 时卡片不渲染）。
-    const [data, reviewData] = await Promise.all([
-      api("/api/portfolio"),
-      api("/api/portfolio/review").catch(() => null)
-    ]);
-    appendMessage("assistant", "我的持仓", { type: "portfolio", positions: data.positions || [], review: reviewData?.review || null });
-  } catch (error) {
-    toast(error.message || "暂时无法读取持仓。");
-  }
+// 距止损/止盈的可视化条：现价落在 [止损, 止盈] 区间的相对位置。两端都设好才画，
+// 单边缺失时信息量不够画一条有意义的进度条，保持文本形式即可。
+function stopTakeBar(p) {
+  if (p.stopLoss == null || p.takeProfit == null || p.currentPrice == null || p.takeProfit <= p.stopLoss) return "";
+  const pct = Math.min(100, Math.max(0, ((p.currentPrice - p.stopLoss) / (p.takeProfit - p.stopLoss)) * 100));
+  return `<div class="pf-range" title="止损 ${fmtNum(p.stopLoss)} · 现价 ${fmtNum(p.currentPrice)} · 止盈 ${fmtNum(p.takeProfit)}">
+    <div class="pf-range-track"><div class="pf-range-fill" style="width:${pct.toFixed(1)}%"></div><i class="pf-range-dot" style="left:${pct.toFixed(1)}%"></i></div>
+    <div class="pf-range-labels"><span>止损 ${fmtNum(p.stopLoss)}</span><span>止盈 ${fmtNum(p.takeProfit)}</span></div>
+  </div>`;
 }
 
-// 删除某条持仓后，原地刷新最近那张持仓面板，而不是再插一张新的。
-export async function refreshPortfolioPanel() {
-  const [data, reviewData] = await Promise.all([
-    api("/api/portfolio"),
-    api("/api/portfolio/review").catch(() => null)
-  ]);
-  const positions = data.positions || [];
-  const review = reviewData?.review || null;
-  const thread = getThread();
-  for (let i = thread.length - 1; i >= 0; i -= 1) {
-    if (thread[i].meta?.type === "portfolio") {
-      thread[i] = { ...thread[i], meta: { ...thread[i].meta, positions, review } };
-      break;
-    }
-  }
-  setThread(thread);
-  render();
-}
-
-export async function deletePortfolioPosition(ticker) {
-  if (!ticker) return;
-  if (!window.confirm(`从持仓里移除 ${ticker}？`)) return;
-  try {
-    await api(`/api/portfolio?ticker=${encodeURIComponent(ticker)}`, { method: "DELETE" });
-    await refreshPortfolioPanel();
-    toast("已移除持仓。");
-  } catch (error) {
-    toast(error.message || "删除失败。");
-  }
-}
-
-function renderPositionCard(p) {
+export function renderPositionCard(p) {
   const name = esc(p.companyName || p.ticker);
   const ticker = esc(p.ticker);
   const ccy = esc(p.currency || "");
@@ -62,18 +30,21 @@ function renderPositionCard(p) {
   if (p.unrealizedPnl != null) metrics.push(`<div><span>浮动盈亏</span><b class="${pnlDir(p.unrealizedPnl)}">${p.unrealizedPnl >= 0 ? "+" : ""}${fmtNum(p.unrealizedPnl, 0)} ${ccy}</b></div>`);
   if (p.stopLoss != null) metrics.push(`<div><span>止损</span><b>${fmtNum(p.stopLoss)}${typeof p.toStopPct === "number" ? ` <em class="pf-dist ${pnlDir(p.toStopPct)}">缓冲 ${fmtPct(p.toStopPct)}</em>` : ""}</b></div>`);
   if (p.takeProfit != null) metrics.push(`<div><span>止盈</span><b>${fmtNum(p.takeProfit)}${typeof p.toTakePct === "number" ? ` <em class="pf-dist">空间 ${fmtPct(p.toTakePct)}</em>` : ""}</b></div>`);
-  return `<article class="pf-card">
+  // 卡片整体可点进个股看盘页（M-1）；删除按钮是内层独立 data-action，点击时
+  // closest() 先命中按钮自身，不会被外层的 open-stock 吞掉（同 watch.js 的 wl-item 模式）。
+  return `<article class="pf-card" data-action="open-stock" data-ticker="${ticker}" data-name="${name}" role="button" tabindex="0">
     <div class="pf-card-head">
       <div class="pf-id"><strong>${name}</strong><span>${ticker}</span></div>
       <button class="pf-del" type="button" data-action="delete-position" data-ticker="${ticker}" aria-label="删除持仓">删除</button>
     </div>
     ${priceBlock}
     ${metrics.length ? `<div class="pf-metrics">${metrics.join("")}</div>` : ""}
+    ${stopTakeBar(p)}
   </article>`;
 }
 
 // P3 组合体检卡：一句话结论 + 币种总额/盈亏 + 市场暴露/权重条 + 纪律检查清单。
-function renderPortfolioReview(review) {
+export function renderPortfolioReview(review) {
   if (!review || !review.positionCount) return "";
   const LEVEL = { bad: { icon: "●", cls: "pr-bad" }, warn: { icon: "●", cls: "pr-warn" }, info: { icon: "●", cls: "pr-info" } };
   const totals = (review.totals || []).map((t) =>
@@ -109,6 +80,7 @@ function renderPortfolioReview(review) {
   </div>`;
 }
 
+// 历史会话回放专用（新入口见 portfolioPage.renderPortfolioPage）。
 export function renderPortfolioPanel(positions = [], review = null) {
   if (!positions.length) {
     return `<p class="pf-empty">还没有记账。点下面按钮，或在对话里说一句即可记录，例如：<strong>耐世特 成本 4.9 持有 3000 股 止损 4.2 止盈 6.5</strong>。</p>

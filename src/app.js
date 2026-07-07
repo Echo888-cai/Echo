@@ -15,7 +15,7 @@ import {
   renderWatchPage, refreshWatchDesk, addWatch, removeWatch, exportPortrait
 } from "./ui/watch.js";
 import { renderSettings, refreshStatus, loadSchedulerStatus, loadResearchScorecard } from "./ui/settings.js";
-import { showPortfolio, deletePortfolioPosition } from "./ui/portfolio.js";
+import { renderPortfolioPage, deletePortfolioPosition } from "./ui/portfolioPage.js";
 
 function render() {
   // 后台会话完成会触发 render() 重建视图——若用户正在 composer 里打字，full innerHTML 会清掉
@@ -33,6 +33,7 @@ function render() {
     renderSettings();
   }
   else if (route === "/watch" || route.startsWith("/watch/")) renderWatchPage();
+  else if (route === "/portfolio") renderPortfolioPage(); // M-1：持仓一级页面
   else renderResearch(); // "/" 与 "/research" 都落到研究页（灵魂入口）
   if (preserved && preserved.value) {
     const next = /** @type {HTMLTextAreaElement|null} */ (document.querySelector(".composer textarea"));
@@ -112,7 +113,7 @@ document.addEventListener("click", async (event) => {
   if (action === "watch-add-close") { S.watchAddOpen = false; S.watchAddError = ""; render(); return; }
   if (action === "untrack-stock") { void removeWatch(target.dataset.ticker); return; }
   // 持仓管理沉在研究对话里（复用现成的自然语言记账 + 面板），从任意页点入都先切到研究页。
-  if (action === "portfolio-view") { location.hash = "#/research"; render(); await showPortfolio(); return; }
+  if (action === "portfolio-view") { location.hash = "#/portfolio"; render(); return; }
   if (action === "load-session") await loadSession(target.dataset.id);
   if (action === "choice-act") {
     const { act, ticker, name } = target.dataset;
@@ -151,6 +152,9 @@ document.addEventListener("click", async (event) => {
   if (action === "report") await generateDeepResearch();
   if (action === "delete-position") await deletePortfolioPosition(target.dataset.ticker);
   if (action === "portfolio-add") {
+    // 记账走对话（自然语言解析），composer 只活在研究页——从持仓页点进来时先跳过去。
+    const onResearch = currentRoute() === "/" || currentRoute() === "/research";
+    if (!onResearch) { location.hash = "#/research"; render(); }
     const input = /** @type {HTMLTextAreaElement|null} */ (document.querySelector(".composer textarea"));
     if (input) {
       input.value = "<公司名或代码> 成本 <价> 持有 <股数> 股 止损 <价> 止盈 <价>";
@@ -183,6 +187,16 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     input.closest("form")?.requestSubmit();
   }
+});
+
+// M-1：非原生按钮但带 data-action 的可点击元素（如 .pf-card，整卡可点但删除键要留独立
+// 点击区）——补上键盘可达性，Enter/空格等价于点击，行为与鼠标点击完全复用同一条 action 分发。
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const el = /** @type {HTMLElement|null} */ (event.target);
+  if (!el || !el.matches?.("[data-action][tabindex]")) return;
+  event.preventDefault();
+  el.click();
 });
 
 window.addEventListener("hashchange", () => {

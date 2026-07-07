@@ -89,7 +89,11 @@ export const S = {
   // R7：设置页的全局研究记分卡（同样懒加载一次）。
   researchScorecard: null,
   researchScorecardLoading: false,
-  researchScorecardLoaded: false
+  researchScorecardLoaded: false,
+  // M-1：持仓一级页面（#/portfolio）——持仓列表 + 组合体检 + 每日净值快照，一次性拉齐。
+  portfolioPage: null, // { positions, review, snapshots }
+  portfolioPageLoading: false,
+  portfolioPageLoaded: false
 };
 
 // 并行会话：每个在跑的请求一条 run（key=sessionId；新研究用 new:<ticker>）。这样推理中可以

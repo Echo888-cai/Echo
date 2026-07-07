@@ -26,7 +26,7 @@ console.log("[1] 全新库：迁移到最新版本，全部表就位");
 {
   const db = getDb();
   const version = db.pragma("user_version", { simple: true });
-  check("user_version 推进到 13（001_init + 002_g1_health + 003_earnings_calendar + 004_comp_peers + 005_llm_audit + 006_research_snapshots + 007_fact_guard_audit + 008_earnings_actuals + 009_watch_rules_metric + 010_insider_activity + 011_historical_valuation + 012_hk_buybacks + 013_research_sessions_fts）", version === 13, `实际 ${version}`);
+  check("user_version 推进到 14（001_init + 002_g1_health + 003_earnings_calendar + 004_comp_peers + 005_llm_audit + 006_research_snapshots + 007_fact_guard_audit + 008_earnings_actuals + 009_watch_rules_metric + 010_insider_activity + 011_historical_valuation + 012_hk_buybacks + 013_research_sessions_fts + 014_portfolio_snapshots）", version === 14, `实际 ${version}`);
 
   const tables = new Set(
     db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name)
