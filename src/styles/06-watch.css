@@ -95,6 +95,16 @@
   text-overflow: ellipsis;
 }
 .wd-evt-when { flex: none; font-size: 11.5px; color: var(--muted-2); }
+/* M-3（P11）：同题材事件折叠角标——多源报道同一事实时，代表标题旁标个数，不悄悄吞掉其余几条。 */
+.wd-evt-related {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--panel-soft);
+  color: var(--muted-2);
+  font-size: 10.5px;
+  font-weight: 600;
+}
 
 .wd-note {
   font-size: 12px;

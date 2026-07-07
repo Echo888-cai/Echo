@@ -120,13 +120,30 @@ export function extractFalsifiersFromAnswer(content = "") {
   return [...new Set(loose)].slice(0, 6);
 }
 
+/**
+ * R12（M-3）：thesis 碎片过滤——真实审计发现 6 只关注股里 5 只的"投资主线"存的是
+ * "收入增速 -1.10%，毛利率 55.71%"这类数据碎片，不是一句判断。根因是旧版 distillView
+ * 把 `panel.keyDrivers` 里"基本面"驱动因素的数据摘要当 oneLineView 的回落值——那是给
+ * "关键驱动因素"卡片用的数字罗列，从来就不是给"投资主线"用的。已从回落链路里彻底删除
+ * （不是"过滤更严"，是"这条路本来就不该走"）；这里的过滤器是防御性的第二道——万一
+ * 模型的 oneLineView 本身混进数据罗列（未观察到，但代价低，值得留），同样拒收置空，
+ * 让下面"没有新主线就保留旧主线"的逻辑接管，而不是让碎片糊弄过去。
+ */
+const FRAGMENT_METRIC_HEAD_RE = /^(收入增速|营收增速|收入|营收|毛利率|净利率|净利润率|经营利润率|净利润增速|利润增速|自由现金流|ROE|ROIC|PE|PB|EPS|同比|环比|增速波动)[\s：:、,，]/;
+export function isDataFragmentThesis(text) {
+  const s = String(text || "").trim();
+  if (!s) return false;
+  if (FRAGMENT_METRIC_HEAD_RE.test(s)) return true;
+  // 数字密度信号：≥2 个百分号且数字字符占比过高，是"数据罗列"而非"论点陈述"
+  // （真实碎片样本："增速波动、无单一方向（59.9% → 1.3% → 127.0% → 115.4% → 67.4%）"）。
+  const pctCount = (s.match(/%/g) || []).length;
+  const digitCount = (s.match(/[0-9]/g) || []).length;
+  if (pctCount >= 2 && digitCount / s.length > 0.12) return true;
+  return false;
+}
+
 /** 从 decisionPanel + 本地公司档案蒸馏画像的"当前 view"字段。 */
 function distillView(panel = {}, profile = {}, valuation = null) {
-  const driverSummary = (name) => {
-    const d = (panel.keyDrivers || []).find((x) => x.name === name);
-    const s = String(d?.summary || "").trim();
-    return s && !/暂不评分|未接入|缺失/.test(s) ? s : "";
-  };
   // 证伪条件：优先用面板的 riskTriggers，回落到公司档案 bear。
   const falsifiers = asList(
     (Array.isArray(panel.riskTriggers) && panel.riskTriggers.length
@@ -134,9 +151,10 @@ function distillView(panel = {}, profile = {}, valuation = null) {
       : profile.bear),
     6
   );
+  const thesisCandidate = String(panel.oneLineView || profile.summary?.[0] || "").trim();
   return {
     companyName: panel.companyName || profile.nameZh || panel.ticker,
-    thesis: String(panel.oneLineView || driverSummary("基本面") || profile.summary?.[0] || "").trim(),
+    thesis: isDataFragmentThesis(thesisCandidate) ? "" : thesisCandidate,
     researchStatus: panel.researchStatus || "",
     confidence: panel.confidence || "",
     bull: asList(profile.bull),

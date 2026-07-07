@@ -365,7 +365,10 @@ function stockEventRow(e) {
   const sev = e.severity === "high" ? "sev-high" : e.severity === "medium" ? "sev-med" : "sev-low";
   const when = wdWhen(e.date);
   const title = String(e.title || "").replace(/[[\]]/g, "");
-  const inner = `<span class="wd-dot ${sev}"></span><span class="wd-evt-title">${esc(title)}</span>${when ? `<span class="wd-evt-when">${esc(when)}</span>` : ""}`;
+  // M-3（P11）：同题材多条新闻已在服务端聚合成一条代表性标题，relatedCount>1 时标个折叠角标，
+  // 让用户知道"这不是唯一一条报道"，而不是悄悄吞掉其余几条。
+  const related = e.relatedCount > 1 ? `<span class="wd-evt-related">同题材 ${e.relatedCount} 条</span>` : "";
+  const inner = `<span class="wd-dot ${sev}"></span><span class="wd-evt-title">${esc(title)}</span>${related}${when ? `<span class="wd-evt-when">${esc(when)}</span>` : ""}`;
   return e.url ? `<a class="stock-event-row" href="${esc(e.url)}" target="_blank" rel="noopener">${inner}</a>` : `<span class="stock-event-row">${inner}</span>`;
 }
 

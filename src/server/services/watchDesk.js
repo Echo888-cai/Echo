@@ -136,7 +136,8 @@ export async function buildWatchDesk(companies = [], { slot = "premarket", event
         ? { nextDate: earnings.nextDate, source: earnings.source }
         : null,
       // 看盘台个股页要展开"近期事件"时间线，所以把前几条也带上（卡片墙忽略它）。
-      events: events.slice(0, 6).map((e) => ({ severity: e.severity, kind: e.kind, title: e.title, date: e.date, url: e.url || "" })),
+      // relatedCount（M-3 P11 同题材聚合）要透传，否则前端的"同题材 n 条"折叠角标永远拿不到数据。
+      events: events.slice(0, 6).map((e) => ({ severity: e.severity, kind: e.kind, title: e.title, date: e.date, url: e.url || "", relatedCount: e.relatedCount || undefined })),
       priceStatus: snap.priceStatus,
       price,
       currency: snap.currency || "",
