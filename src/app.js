@@ -12,7 +12,7 @@ import {
   searchSessionHistory, clearSessionHistorySearch
 } from "./ui/research.js";
 import {
-  renderWatchPage, refreshWatchDesk, addWatch, removeWatch, exportPortrait
+  renderWatchPage, refreshWatchDesk, addWatch, removeWatch, exportPortrait, exportPortraitImage
 } from "./ui/watch.js";
 import { renderSettings, refreshStatus, loadSchedulerStatus, loadResearchScorecard } from "./ui/settings.js";
 import { renderPortfolioPage, deletePortfolioPosition } from "./ui/portfolioPage.js";
@@ -109,6 +109,7 @@ document.addEventListener("click", async (event) => {
   if (action === "chart-range") { S.chartRange = target.dataset.range || "3m"; render(); return; }
   if (action === "stock-tab") { S.stockTab = target.dataset.tab || "overview"; render(); return; }
   if (action === "export-portrait") { exportPortrait(); return; }
+  if (action === "export-portrait-image") { exportPortraitImage(); return; }
   if (action === "watch-add-open") { S.watchAddOpen = true; S.watchAddError = ""; render(); setTimeout(() => /** @type {HTMLElement|null} */ (document.querySelector(".wl-add input"))?.focus(), 0); return; }
   if (action === "watch-add-close") { S.watchAddOpen = false; S.watchAddError = ""; render(); return; }
   if (action === "untrack-stock") { void removeWatch(target.dataset.ticker); return; }

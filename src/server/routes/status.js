@@ -46,6 +46,7 @@ export function handleStatusApi(req, res) {
   } catch { /* 同上 */ }
 
   // E4：模型网关调用留痕汇总——谁在接、各自延迟/失败率、最近一次失败原因。
+  // E10：+ token 用量与估算成本（价格未配置时 estimatedCostUsd 为 null，前端诚实显示"未配置计价"）。
   let llmAudit = [];
   try {
     llmAudit = getProviderCallStats({ days: 7 }).map((row) => ({
@@ -56,7 +57,10 @@ export function handleStatusApi(req, res) {
       avgLatencyMs: row.avgLatencyMs,
       lastSuccessAt: row.lastSuccessAt,
       lastFailureDetail: row.lastFailureDetail,
-      lastFailureAt: row.lastFailureAt
+      lastFailureAt: row.lastFailureAt,
+      promptTokens: row.promptTokens,
+      completionTokens: row.completionTokens,
+      estimatedCostUsd: row.estimatedCostUsd
     }));
   } catch { /* llm_audit 表若尚未迁移到（不应发生，但面板不能因此整体挂掉） */ }
 

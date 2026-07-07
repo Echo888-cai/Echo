@@ -123,7 +123,11 @@ async function tryProvider(provider) {
       model,
       content: result.choices?.[0]?.message?.content || result.output_text || result.output?.[0]?.content || "",
       latencyMs,
-      label: provider.label
+      label: provider.label,
+      // E10：OpenAI 兼容响应体真实带 usage（GLM/DeepSeek/OpenAI 都是），此前直接丢弃——
+      // 拿不到就是 undefined，insertLlmAudit 落 null，不假设一个数字。
+      promptTokens: result.usage?.prompt_tokens ?? null,
+      completionTokens: result.usage?.completion_tokens ?? null
     };
   } catch (error) {
     clearTimeout(timer);
@@ -159,7 +163,7 @@ export async function callModel({ system, user }) {
     const attemptStart = Date.now();
     try {
       const result = await tryProvider(provider);
-      insertLlmAudit({ provider: provider.id, model: result.model, kind: "chat", status: "ok", latencyMs: result.latencyMs });
+      insertLlmAudit({ provider: provider.id, model: result.model, kind: "chat", status: "ok", latencyMs: result.latencyMs, promptTokens: result.promptTokens, completionTokens: result.completionTokens });
       // Clean up
       for (const p of providers) delete p.cachedMessages;
       return result;
@@ -198,7 +202,7 @@ export async function callModelStream({ system, user, onToken, onReasoning }) {
     const attemptStart = Date.now();
     try {
       const result = await streamProvider(provider, messages, onToken, onReasoning);
-      insertLlmAudit({ provider: provider.id, model: result.model, kind: "stream", status: "ok", latencyMs: result.latencyMs });
+      insertLlmAudit({ provider: provider.id, model: result.model, kind: "stream", status: "ok", latencyMs: result.latencyMs, promptTokens: result.promptTokens, completionTokens: result.completionTokens });
       return result;
     } catch (err) {
       insertLlmAudit({ provider: provider.id, model: process.env[provider.envModel] || provider.defaultModel, kind: "stream", status: "error", latencyMs: Date.now() - attemptStart, errorDetail: err.message });
@@ -219,6 +223,9 @@ async function streamProvider(provider, messages, onToken, onReasoning) {
   try {
     const body = buildRequestBody(provider.id, model, messages);
     body.stream = true;
+    // E10：请求最后一个 SSE 分片附带 usage（OpenAI 兼容扩展）。真实验证过 DeepSeek/OpenAI
+    // 都支持——不支持的 provider 会忽略这个未知字段，不影响流式主链路，拿不到就是 null。
+    body.stream_options = { include_usage: true };
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
@@ -231,6 +238,7 @@ async function streamProvider(provider, messages, onToken, onReasoning) {
     }
 
     let full = "";
+    let usage = null;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -253,12 +261,17 @@ async function streamProvider(provider, messages, onToken, onReasoning) {
           // 答案。reasoning 期不进 full、只回调 onReasoning，让前端显示"正在推理"而非空白。
           if (delta.reasoning_content) onReasoning?.(delta.reasoning_content);
           if (delta.content) { full += delta.content; onToken?.(delta.content); }
+          // 带 include_usage 时，最后一个分片 choices 为空数组、usage 字段真实携带用量。
+          if (json.usage) usage = json.usage;
         } catch { /* 心跳/分片非 JSON 行，忽略 */ }
       }
     }
     clearTimeout(timer);
     if (!full) throw new Error("流式返回空内容");
-    return { provider: provider.id, model, content: full, latencyMs: Date.now() - start, label: provider.label };
+    return {
+      provider: provider.id, model, content: full, latencyMs: Date.now() - start, label: provider.label,
+      promptTokens: usage?.prompt_tokens ?? null, completionTokens: usage?.completion_tokens ?? null
+    };
   } catch (error) {
     clearTimeout(timer);
     if (error.name === "AbortError") throw new Error(`${provider.label} 流式请求超时 (${STREAM_TIMEOUT_MS}ms)`, { cause: error });

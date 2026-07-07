@@ -670,7 +670,10 @@ function renderPortraitTab(stock) {
   return `<div class="portrait-pane">
     <div class="portrait-bar">
       <span class="portrait-meta">研究 ${p.turnCount || 0} 轮 · 更新于 ${esc((p.updatedAt || "").slice(0, 10))}</span>
-      <button class="wl-linkbtn" type="button" data-action="export-portrait">导出 Markdown ↓</button>
+      <span class="portrait-bar-actions">
+        <button class="wl-linkbtn" type="button" data-action="export-portrait">导出 Markdown ↓</button>
+        <button class="wl-linkbtn" type="button" data-action="export-portrait-image">导出分享图 ↓</button>
+      </span>
     </div>
     <div class="portrait-doc">${portraitDocHtml(S.stockPortrait.markdown)}</div>
     ${renderResearchReview(stock.ticker)}
@@ -699,4 +702,161 @@ export function exportPortrait() {
   anchor.remove();
   URL.revokeObjectURL(url);
   toast("已导出画像 Markdown。");
+}
+
+// ── P13：分享图导出（画像 → 品牌化 PNG 卡片）──────────────
+// 纯 Canvas 2D 绘制，不引入图片/图表依赖（红线 14 的延伸）。颜色手动对齐
+// 00-foundation.css 的浅色 token——分享图脱离页面 DOM，没有 CSS 变量可用，
+// 只能硬编码；品牌色若改动，这里要跟着改（唯一的维护成本）。
+const SHARE_FONT = "-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI', sans-serif";
+const SHARE_COLORS = {
+  bg: "#f0eee6", panel: "#fcfbf8", ink: "#141413", ink2: "#3d3b35",
+  muted: "#82807a", accent: "#bf5c3e", line: "rgba(31,30,24,0.14)"
+};
+
+/** 按字符换行（中文无空格分词，逐字符量宽度）；调用前应先截断源文本，不在这里截断。 */
+function wrapCanvasText(ctx, text, x, y, maxWidth, lineHeight) {
+  const chars = Array.from(String(text || ""));
+  let line = "";
+  let curY = y;
+  for (const ch of chars) {
+    const test = line + ch;
+    if (line && ctx.measureText(test).width > maxWidth) {
+      ctx.fillText(line, x, curY);
+      line = ch;
+      curY += lineHeight;
+    } else {
+      line = test;
+    }
+  }
+  if (line) { ctx.fillText(line, x, curY); curY += lineHeight; }
+  return curY;
+}
+
+function drawRoundedRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  if (typeof ctx.roundRect === "function") ctx.roundRect(x, y, w, h, r);
+  else {
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+  }
+  ctx.closePath();
+}
+
+export function exportPortraitImage() {
+  const profile = S.stockPortrait?.profile;
+  if (!profile) { toast("画像还没加载好。"); return; }
+  const W = 1080, H = 1350, pad = 64, inner = pad + 56;
+  const canvas = document.createElement("canvas");
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  const C = SHARE_COLORS;
+
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, W, H);
+  drawRoundedRect(ctx, pad, pad, W - pad * 2, H - pad * 2, 28);
+  ctx.fillStyle = C.panel;
+  ctx.fill();
+  ctx.strokeStyle = C.line;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  let y = inner + 20;
+  ctx.fillStyle = C.accent;
+  ctx.beginPath();
+  ctx.arc(inner + 14, y - 8, 14, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = C.muted;
+  ctx.font = `600 26px ${SHARE_FONT}`;
+  ctx.fillText("ECHO RESEARCH", inner + 40, y);
+
+  y += 76;
+  ctx.fillStyle = C.ink;
+  ctx.font = `700 64px ${SHARE_FONT}`;
+  ctx.fillText(String(profile.companyName || profile.ticker || "").slice(0, 12), inner, y);
+
+  y += 48;
+  ctx.fillStyle = C.muted;
+  ctx.font = `400 30px ${SHARE_FONT}`;
+  ctx.fillText(String(profile.ticker || ""), inner, y);
+
+  y += 56;
+  ctx.strokeStyle = C.line;
+  ctx.beginPath();
+  ctx.moveTo(inner, y);
+  ctx.lineTo(W - inner, y);
+  ctx.stroke();
+
+  y += 64;
+  ctx.fillStyle = C.muted;
+  ctx.font = `600 24px ${SHARE_FONT}`;
+  ctx.fillText("投资主线", inner, y);
+
+  y += 48;
+  ctx.fillStyle = C.ink2;
+  ctx.font = `400 40px ${SHARE_FONT}`;
+  const thesis = String(profile.thesis || "还没有沉淀投资主线，完成一轮研究后自动生成。").slice(0, 160);
+  y = wrapCanvasText(ctx, thesis, inner, y, W - inner * 2, 56);
+
+  const bull = Array.isArray(profile.bull) ? profile.bull.slice(0, 2) : [];
+  if (bull.length) {
+    y += 24;
+    ctx.fillStyle = C.muted;
+    ctx.font = `600 24px ${SHARE_FONT}`;
+    ctx.fillText("看多要点", inner, y);
+    y += 44;
+    ctx.font = `400 32px ${SHARE_FONT}`;
+    ctx.fillStyle = C.ink2;
+    for (const b of bull) {
+      y = wrapCanvasText(ctx, `· ${String(b).slice(0, 60)}`, inner, y, W - inner * 2, 44);
+      y += 8;
+    }
+  }
+
+  // valuation 的 bear/base/bull 落库时是格式化过的十进制字符串（如 "73.40"），不是 number——
+  // 真实数据验证时发现：原先用 `!= null` 判存在性会误放行字符串，fmtNum（要求 typeof==="number"）
+  // 拿到字符串只会吐"—"，画出一整块只有"—/—/—"的空段落。改用 Number() 转换后判 isFinite。
+  const val = profile.valuation;
+  const valNums = val ? [val.bear, val.base, val.bull].map(Number) : [];
+  if (val && valNums.every((n) => Number.isFinite(n))) {
+    y += 32;
+    ctx.fillStyle = C.muted;
+    ctx.font = `600 24px ${SHARE_FONT}`;
+    ctx.fillText("估值区间（熊 / 中枢 / 牛）", inner, y);
+    y += 48;
+    ctx.fillStyle = C.ink;
+    ctx.font = `700 36px ${SHARE_FONT}`;
+    ctx.fillText(`${fmtNum(valNums[0])}  /  ${fmtNum(valNums[1])}  /  ${fmtNum(valNums[2])}`, inner, y);
+  }
+
+  const footY = H - pad - 56;
+  ctx.fillStyle = C.muted;
+  ctx.font = `400 26px ${SHARE_FONT}`;
+  const tags = [];
+  if (profile.researchStatus) tags.push(RS_LABEL[profile.researchStatus] || profile.researchStatus);
+  if (profile.confidence) tags.push(`置信度 · ${profile.confidence}`);
+  if (profile.turnCount) tags.push(`已研究 ${profile.turnCount} 轮`);
+  ctx.fillText(tags.join("　·　"), inner, footY);
+
+  ctx.fillStyle = C.accent;
+  ctx.font = `italic 400 26px ${SHARE_FONT}`;
+  ctx.textAlign = "right";
+  ctx.fillText("喧声之外，见真知", W - inner, footY);
+  ctx.textAlign = "left";
+
+  canvas.toBlob((blob) => {
+    if (!blob) { toast("生成分享图失败。"); return; }
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${String(profile.ticker || "echo").replace(/[^\w.-]/g, "")}-share.png`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    toast("已导出分享图。");
+  }, "image/png");
 }

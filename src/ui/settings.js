@@ -68,6 +68,8 @@ function renderCanaryCard() {
 }
 
 // E4：模型网关调用留痕面板——谁在接、各自延迟/失败率、最近失败原因，取代此前纯 console 的运维盲区。
+// E10：+ token 用量与估算成本——成本只在用户自己配置了 LLM_PRICE_<PROVIDER>_INPUT/OUTPUT
+// 时才折算美元，没配置就诚实显示"未配置计价"，不用一个可能过期/猜的价格冒充真实成本。
 function renderLlmAuditCard() {
   const rows = S.apiStatus?.llmAudit || [];
   if (!rows.length) {
@@ -75,16 +77,27 @@ function renderLlmAuditCard() {
       <p>还没有调用留痕——发起一轮研究后，每次 provider 尝试（含 failover）都会记一行。</p>
     </article>`;
   }
+  const totalTokens = rows.reduce((s, r) => s + (r.promptTokens || 0) + (r.completionTokens || 0), 0);
+  const anyCostConfigured = rows.some((r) => r.estimatedCostUsd != null);
+  const totalCost = rows.reduce((s, r) => s + (r.estimatedCostUsd || 0), 0);
+  const summaryLine = totalTokens
+    ? `<p class="setting-sub">近 7 天累计 ${totalTokens.toLocaleString()} tokens${anyCostConfigured ? ` · 预计成本 ≈$${totalCost.toFixed(2)}（仅统计已配置计价的 provider）` : " · 未配置计价，仅统计真实用量（.env 加 LLM_PRICE_PROVIDER_INPUT/OUTPUT 可折算美元）"}</p>`
+    : "";
   return `<article class="settings-card"><h2>模型调用（近 7 天）</h2>
+    ${summaryLine}
     ${rows.map((r) => {
       const total = r.attempts || 0;
       const failRate = total ? Math.round((r.failures / total) * 100) : 0;
       const tone = r.failures > 0 && r.failures === total ? " is-down" : failRate >= 30 ? " is-degraded" : "";
       const failure = r.failures > 0 && r.lastFailureDetail ? `<div class="setting-sub">最近失败：${esc(r.lastFailureDetail)}（${notifWhen(r.lastFailureAt || "")}）</div>` : "";
+      const tokenSum = (r.promptTokens || 0) + (r.completionTokens || 0);
+      const tokenLine = tokenSum
+        ? `<div class="setting-sub">${tokenSum.toLocaleString()} tokens（输入 ${(r.promptTokens || 0).toLocaleString()} / 输出 ${(r.completionTokens || 0).toLocaleString()}）${r.estimatedCostUsd != null ? ` · ≈$${r.estimatedCostUsd.toFixed(3)}` : ""}</div>`
+        : "";
       return `<div class="setting-row${tone}">
         <span>${esc(r.provider)} · ${total} 次调用（${r.failures} 次失败）</span>
         <strong>${r.avgLatencyMs != null ? `均延迟 ${r.avgLatencyMs}ms` : "无成功记录"}</strong>
-      </div>${failure}`;
+      </div>${tokenLine}${failure}`;
     }).join("")}
   </article>`;
 }
