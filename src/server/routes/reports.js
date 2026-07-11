@@ -9,6 +9,7 @@ import { displayValuation } from "../services/valuationEngine.js";
 import { getComparableCompanies } from "../services/compPeers.js";
 import { composeReport, reportPreview } from "../services/reportComposer.js";
 import { saveResearchSession } from "../repositories/researchSessions.js";
+import { quotaGuard } from "../services/quotaService.js";
 
 const DISCLAIMER =
   "\n\n---\n> 本报告仅供研究学习，不构成投资建议。请用公司原始公告核验关键数据，独立做出决定。";
@@ -16,6 +17,9 @@ const DISCLAIMER =
 export async function handleReportGenerateApi(req, res) {
   try {
     const payload = await readJsonBody(req);
+    payload.userId = req.echoUser?.id || "local";
+    const limited = quotaGuard(payload.userId);
+    if (limited) return sendJson(res, limited.status, { error: limited.message, code: "QUOTA_EXCEEDED", usage: limited.usage });
     const question = payload.question || "";
     const companyForEvidence = companyByTicker(payload.company?.ticker) || payload.company || {};
     const intent = classifyResearchIntent(question);
@@ -52,7 +56,7 @@ export async function handleReportGenerateApi(req, res) {
     let model = null;
     if (getProviderStatus().configured && panel) {
       model = await withTimeout(callModel({
-        system: "你是 Luvio 的港股研究负责人，写资深买方研究员风格的深度研究报告：判断优先、克制、可证伪。绝不暴露后台/产品/厂商词，绝不给买卖指令。",
+        system: "你是 Echo Research 的研究负责人，写资深买方研究员风格的深度研究报告：判断优先、克制、可证伪。绝不暴露后台/产品/厂商词，绝不给买卖指令。",
         user: buildReportPrompt(question, panel, result.dataSources, context)
       }), 42000, null);
       if (model?.content && model.content.trim().length > 200) {
@@ -106,7 +110,7 @@ function persistFinalReportSession(payload, result, markdown) {
       researchStatus: panel?.researchStatus,
       confidence: panel?.confidence,
       thread
-    });
+    }, payload.userId || "local");
     return saved.id;
   } catch (error) {
     console.warn("report session 持久化失败:", error?.message || error);

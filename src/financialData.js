@@ -1,13 +1,9 @@
 import { normalizeTicker } from "./data.js";
-import { fmpSymbol, finnhubSymbol, tencentSymbol, hkCode, detectMarket } from "./market.js";
+import { fmpSymbol, finnhubSymbol, tencentSymbol, detectMarket, marketCurrency, marketLabel } from "./market.js";
 import { fmpGet, FMP_TTL } from "./fmpClient.js";
 
 function env(name) {
   return process.env[name] || "";
-}
-
-function toHongKongSymbol(ticker) {
-  return hkCode(ticker).replace(/^0+(?=\d)/, "");
 }
 
 function numberOrNull(value) {
@@ -87,7 +83,7 @@ async function fetchJson(url, options = {}) {
       ...options,
       signal: controller.signal,
       headers: {
-        "User-Agent": "Luvio/0.1 financial data adapter",
+        "User-Agent": "EchoResearch/1.0 financial data adapter",
         Accept: "application/json",
         ...(options.headers || {})
       }
@@ -506,15 +502,10 @@ async function fetchYahooStatistics(ticker) {
   };
 }
 
-// ─── Tencent Finance (免费港股基础财务数据) ──────────────────────────
-
-function toTencentHongKongSymbol(ticker) {
-  const code = toHongKongSymbol(ticker);
-  return `hk${code.padStart(5, "0")}`;
-}
+// ─── Tencent Finance (免费港股/A股基础财务数据) ──────────────────────
 
 async function fetchTencentFinancials(ticker) {
-  const url = `https://qt.gtimg.cn/q=${toTencentHongKongSymbol(ticker)}`;
+  const url = `https://qt.gtimg.cn/q=${tencentSymbol(ticker)}`;
   const buffer = await fetchBuffer(url, { timeoutMs: 5000 });
   const text = decodeGb2312(buffer);
   const match = text.match(/="(.+)";?\s*$/);
@@ -531,14 +522,17 @@ async function fetchTencentFinancials(ticker) {
   const low = numberOrNull(fields[34]);
   const change = numberOrNull(fields[31]);
   const changePercent = numberOrNull(fields[32]);
-  const eps = numberOrNull(fields[57]);
-  const stockName = fields[1] || "港股";
+  // field[57] 是 HK/US 报价格式下的 EPS，但 A 股报价格式里同一位置是成交额（万元），
+  // 实测贵州茅台曾把 622334.36（当日成交额）当成 EPS 塞进估值引擎——A 股这里诚实留空，
+  // 真实 EPS 靠 cn_financials 一手数据补（mergeCnFinancialGaps），不能瞎猜哪个字段对。
+  const eps = detectMarket(ticker) === "CN" ? null : numberOrNull(fields[57]);
+  const stockName = fields[1] || marketLabel(ticker);
 
   return {
     source: `腾讯财经 · ${stockName}`,
     ticker: normalizeTicker(ticker),
     period: "",
-    currency: "HKD",
+    currency: marketCurrency(ticker),
     price,
     pe,
     marketCap,
@@ -592,7 +586,7 @@ async function fetchBuffer(url, options = {}) {
       ...options,
       signal: controller.signal,
       headers: {
-        "User-Agent": "Mozilla/5.0 Luvio/0.1",
+        "User-Agent": "Mozilla/5.0 EchoResearch/1.0",
         Accept: "text/plain,*/*",
         ...(options.headers || {})
       }
@@ -621,7 +615,7 @@ async function fetchText(url, options = {}) {
       ...options,
       signal: controller.signal,
       headers: {
-        "User-Agent": "Mozilla/5.0 Luvio/0.1",
+        "User-Agent": "Mozilla/5.0 EchoResearch/1.0",
         Accept: "text/plain,*/*",
         ...(options.headers || {})
       }

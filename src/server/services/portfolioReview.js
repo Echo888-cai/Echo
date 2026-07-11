@@ -19,9 +19,13 @@
  * 刻意不做：相关性矩阵/波动率/VaR——个人研究工具阶段，可解释性 >> 学术完备。
  */
 
+import { detectMarket } from "../../market.js";
+
 // 展示级近似汇率（体检权重用，非交易口径；界面标注"≈"）。M-1 的组合快照服务复用同一常量，
 // 保证"权重折算"和"净值折算"用的是同一套近似口径，不会出现两处数字对不上。
-export const FX_TO_USD = { USD: 1, HKD: 1 / 7.8 };
+// CNY≈7.2/USD 同 dataSources.js 的 CNY_TO_HKD=1.08（1.08 HKD/CNY × 7.8 HKD/USD ≈ 7.22 CNY/USD）
+// 换算口径一致，避免两处近似汇率互相打架。
+export const FX_TO_USD = { USD: 1, HKD: 1 / 7.8, CNY: 1 / 7.2 };
 
 const pct = (x) => Math.round(x * 1000) / 10; // 0.3456 → 34.6
 
@@ -58,11 +62,11 @@ export function computePortfolioReview(enriched = []) {
     .map((p) => ({ ticker: p.ticker, name: p.companyName || p.ticker, weightPct: totalUsd ? pct(usdValue(p) / totalUsd) : null, returnPct: p.returnPct ?? null }))
     .sort((a, b) => (b.weightPct || 0) - (a.weightPct || 0));
 
-  // 市场暴露
-  const isHk = (t) => /\.HK$/i.test(t) || /^\d{4,5}$/.test(t);
-  const hkUsd = priced.filter((p) => isHk(p.ticker)).reduce((s, p) => s + usdValue(p), 0);
+  // 市场暴露（三路：HK/US/CN，此前 isHk 二元判断会把 A 股仓位错记进"美股"桶）
+  const usdByMarket = { HK: 0, US: 0, CN: 0 };
+  for (const p of priced) usdByMarket[detectMarket(p.ticker)] += usdValue(p);
   const marketExposure = totalUsd
-    ? { HK: pct(hkUsd / totalUsd), US: pct((totalUsd - hkUsd) / totalUsd) }
+    ? { HK: pct(usdByMarket.HK / totalUsd), US: pct(usdByMarket.US / totalUsd), CN: pct(usdByMarket.CN / totalUsd) }
     : {};
 
   // 行业暴露（R5）：sector 缺失（未研究过的老 ticker、companies 表未覆盖）统一归"未分类"。
@@ -130,8 +134,9 @@ export function computePortfolioReview(enriched = []) {
       text: `${p.companyName || p.ticker} 财报临近（T-${p.nextEarnings.daysToEarnings}，${p.nextEarnings.date}），${p.falsifierRuleCount} 条证伪条件将被检验`
     });
   }
-  if (positions.length >= 2 && (marketExposure.HK === 100 || marketExposure.US === 100)) {
-    checks.push({ level: "info", text: `组合 100% 集中在${marketExposure.HK === 100 ? "港股" : "美股"}单一市场（提示，不是错误）` });
+  if (positions.length >= 2 && (marketExposure.HK === 100 || marketExposure.US === 100 || marketExposure.CN === 100)) {
+    const soleMarket = marketExposure.HK === 100 ? "港股" : marketExposure.US === 100 ? "美股" : "A股";
+    checks.push({ level: "info", text: `组合 100% 集中在${soleMarket}单一市场（提示，不是错误）` });
   }
 
   // 一句话结论：最严重的问题定调

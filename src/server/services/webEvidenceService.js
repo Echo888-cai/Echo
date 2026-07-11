@@ -83,7 +83,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = SEARCH_TIMEOUT_MS
       ...options,
       signal: controller.signal,
       headers: {
-        "User-Agent": "Mozilla/5.0 LuvioResearch/0.1",
+        "User-Agent": "Mozilla/5.0 EchoResearch/1.0",
         Accept: "application/json, application/rss+xml, application/xml, text/html, */*",
         ...(options.headers || {})
       }
@@ -243,7 +243,7 @@ async function urlIsAlive(url = "", timeoutMs = 3500) {
       method: "HEAD",
       redirect: "follow",
       signal: controller.signal,
-      headers: { "User-Agent": "Mozilla/5.0 LuvioResearch/0.1" }
+      headers: { "User-Agent": "Mozilla/5.0 EchoResearch/1.0" }
     });
     // Some hosts reject HEAD (405/501) — retry a lightweight ranged GET.
     if (res.status === 405 || res.status === 501) {
@@ -251,7 +251,7 @@ async function urlIsAlive(url = "", timeoutMs = 3500) {
         method: "GET",
         redirect: "follow",
         signal: controller.signal,
-        headers: { "User-Agent": "Mozilla/5.0 LuvioResearch/0.1", Range: "bytes=0-2048" }
+        headers: { "User-Agent": "Mozilla/5.0 EchoResearch/1.0", Range: "bytes=0-2048" }
       });
     }
     // Only an explicit "gone" status removes a link. 403/429/5xx (bot-blocking,

@@ -71,7 +71,7 @@ async function fetchJson(url, timeoutMs = 6000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "Luvio/0.1 earnings calendar", Accept: "application/json" } });
+    const response = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "EchoResearch/1.0 earnings calendar", Accept: "application/json" } });
     const text = await response.text();
     if (!response.ok) throw new Error(`${response.status} ${text.slice(0, 160)}`);
     return JSON.parse(text);
@@ -99,7 +99,8 @@ const EMPTY_EARNINGS_FIELDS = { nextDate: null, quarter: null, year: null, epsEs
 async function fetchFromFinnhub(ticker) {
   const symbol = adrOrBareSymbol(ticker);
   if (!symbol) {
-    return { ...EMPTY_EARNINGS_FIELDS, lastReported: null, providerStatus: "missing", detail: "港股无美股 ADR 映射，Finnhub 免费档无法核到财报日", source: null };
+    const marketName = detectMarket(ticker) === "CN" ? "A 股" : "港股";
+    return { ...EMPTY_EARNINGS_FIELDS, lastReported: null, providerStatus: "missing", detail: `${marketName}无美股 ADR 映射，Finnhub 免费档无法核到财报日`, source: null };
   }
   const apiKey = env("FINNHUB_API_KEY");
   if (!apiKey) throw new Error("missing FINNHUB_API_KEY");

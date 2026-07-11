@@ -38,15 +38,15 @@ function hydrate(row) {
 }
 
 /** @returns {import("../types.js").PortfolioPosition|null} */
-export function getPosition(ticker) {
+export function getPosition(ticker, userId = "local") {
   const db = getDb();
-  return hydrate(db.prepare("SELECT * FROM portfolio_positions WHERE ticker = ?").get(normalizeTicker(ticker)));
+  return hydrate(db.prepare("SELECT * FROM portfolio_positions WHERE user_id = ? AND ticker = ?").get(userId, normalizeTicker(ticker)));
 }
 
 /** @returns {import("../types.js").PortfolioPosition[]} */
-export function listPositions() {
+export function listPositions(userId = "local") {
   const db = getDb();
-  return db.prepare("SELECT * FROM portfolio_positions ORDER BY updated_at DESC").all().map(hydrate);
+  return db.prepare("SELECT * FROM portfolio_positions WHERE user_id = ? ORDER BY updated_at DESC").all(userId).map(hydrate);
 }
 
 /**
@@ -55,11 +55,11 @@ export function listPositions() {
  * @param {{companyName?: string, shares?: number, avgCost?: number, stopLoss?: number, takeProfit?: number, note?: string}} [patch]
  * @returns {import("../types.js").PortfolioPosition|null}
  */
-export function upsertPosition(ticker, patch = {}) {
+export function upsertPosition(ticker, patch = {}, userId = "local") {
   const db = getDb();
   const normalized = normalizeTicker(ticker);
   ensureCompanyRow(db, normalized, patch.companyName);
-  const existing = getPosition(normalized);
+  const existing = getPosition(normalized, userId);
   const merged = {
     companyName: patch.companyName ?? existing?.companyName ?? normalized,
     shares: patch.shares ?? existing?.shares ?? null,
@@ -69,9 +69,9 @@ export function upsertPosition(ticker, patch = {}) {
     note: patch.note ?? existing?.note ?? ""
   };
   db.prepare(`
-    INSERT INTO portfolio_positions (ticker, company_name, shares, avg_cost, stop_loss, take_profit, note, updated_at)
-    VALUES (@ticker, @companyName, @shares, @avgCost, @stopLoss, @takeProfit, @note, datetime('now'))
-    ON CONFLICT(ticker) DO UPDATE SET
+    INSERT INTO portfolio_positions (user_id, ticker, company_name, shares, avg_cost, stop_loss, take_profit, note, updated_at)
+    VALUES (@userId, @ticker, @companyName, @shares, @avgCost, @stopLoss, @takeProfit, @note, datetime('now'))
+    ON CONFLICT(user_id, ticker) DO UPDATE SET
       company_name = excluded.company_name,
       shares = excluded.shares,
       avg_cost = excluded.avg_cost,
@@ -79,11 +79,11 @@ export function upsertPosition(ticker, patch = {}) {
       take_profit = excluded.take_profit,
       note = excluded.note,
       updated_at = datetime('now')
-  `).run({ ticker: normalized, ...merged });
-  return getPosition(normalized);
+  `).run({ userId, ticker: normalized, ...merged });
+  return getPosition(normalized, userId);
 }
 
-export function deletePosition(ticker) {
+export function deletePosition(ticker, userId = "local") {
   const db = getDb();
-  return db.prepare("DELETE FROM portfolio_positions WHERE ticker = ?").run(normalizeTicker(ticker)).changes > 0;
+  return db.prepare("DELETE FROM portfolio_positions WHERE user_id = ? AND ticker = ?").run(userId, normalizeTicker(ticker)).changes > 0;
 }

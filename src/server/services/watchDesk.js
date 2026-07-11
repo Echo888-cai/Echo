@@ -27,7 +27,7 @@ import { companyByTicker } from "../../data.js";
 const STATUS_RANK = { falsified: 3, at_risk: 2, intact: 1 };
 
 /** 关注范围：研究过的公司（画像）∪ 持仓。显式传 tickers 时以传入为准。 */
-export function trackedUniverse(tickerParam) {
+export function trackedUniverse(tickerParam, userId = "local") {
   if (tickerParam) {
     return tickerParam.split(",").map((t) => t.trim()).filter(Boolean).map((ticker) => {
       const c = companyByTicker(ticker);
@@ -35,11 +35,11 @@ export function trackedUniverse(tickerParam) {
     });
   }
   const byTicker = new Map();
-  for (const p of listCompanyProfiles(40)) byTicker.set(p.ticker, { ticker: p.ticker, nameZh: p.companyName });
-  for (const pos of listPositions()) if (!byTicker.has(pos.ticker)) byTicker.set(pos.ticker, { ticker: pos.ticker, nameZh: pos.companyName });
+  for (const p of listCompanyProfiles(40, userId)) byTicker.set(p.ticker, { ticker: p.ticker, nameZh: p.companyName });
+  for (const pos of listPositions(userId)) if (!byTicker.has(pos.ticker)) byTicker.set(pos.ticker, { ticker: pos.ticker, nameZh: pos.companyName });
   // 叠加手动关注：add 补进来，hide 剔出去。最终自选 = (研究过 ∪ 持仓 ∪ add) − hide。
-  for (const a of listWatchAdds()) if (!byTicker.has(a.ticker)) byTicker.set(a.ticker, { ticker: a.ticker, nameZh: a.nameZh });
-  const hidden = getHiddenTickers();
+  for (const a of listWatchAdds(userId)) if (!byTicker.has(a.ticker)) byTicker.set(a.ticker, { ticker: a.ticker, nameZh: a.nameZh });
+  const hidden = getHiddenTickers(userId);
   return [...byTicker.values()].filter((c) => !hidden.has(c.ticker));
 }
 
@@ -77,9 +77,9 @@ function deriveStatus({ price, position, topNewsHigh, triggeredRule }) {
 }
 
 /** 该 ticker 的证伪监控规则 + 按现价的实时评估（列表/个股页共用）。 */
-function evaluatedRules(ticker, price) {
+function evaluatedRules(ticker, price, userId = "local") {
   try {
-    return listRules(ticker).map((r) => ({ ...r, ...evaluateRule(r, price) }));
+    return listRules(ticker, userId).map((r) => ({ ...r, ...evaluateRule(r, price) }));
   } catch {
     return [];
   }
@@ -88,20 +88,20 @@ function evaluatedRules(ticker, price) {
 /**
  * 为一组公司构建盯盘台。
  * @param {Array<{ticker: string, nameZh?: string}>} companies
- * @param {{slot?: string, events?: boolean}} [opts]
+ * @param {{slot?: string, events?: boolean, userId?: string}} [opts]
  * @returns {Promise<{generatedAt: string, slot: string, cards: Array<Object>, counts: Object, failures: Array<Object>}>}
  */
-export async function buildWatchDesk(companies = [], { slot = "premarket", events: withEvents = true } = {}) {
+export async function buildWatchDesk(companies = [], { slot = "premarket", events: withEvents = true, userId = "local" } = {}) {
   const universe = companies.slice(0, 30);
   // 事件复用现有 digest：每家的 events 已经过相关性/严重度过滤并排好序，卡片直接取最重那条。
   // fast 模式（withEvents=false）跳过 digest（新闻/财报日历是整盘刷新的慢源），先给价格与状态。
-  const digest = withEvents ? await buildDigest(universe, {}, { slot }) : { groups: [], failures: [] };
+  const digest = withEvents ? await buildDigest(universe, {}, { slot, userId }) : { groups: [], failures: [] };
   const groupByTicker = new Map((digest.groups || []).map((g) => [g.ticker, g]));
 
   const cards = await Promise.all(universe.map(async (c) => {
     const ticker = c.ticker;
-    const profile = getCompanyProfile(ticker);
-    const position = getPosition(ticker);
+    const profile = getCompanyProfile(ticker, userId);
+    const position = getPosition(ticker, userId);
     // spark 跟事件走慢阶段（fast 模式先给价格与状态）；序列有 30 分钟进程缓存，
     // 首轮未命中缓存的部分公司拿不到也无妨——sparkline 缺省不该拖垮整张卡。
     const [snap, spark] = await Promise.all([snapshotFor(ticker), withEvents ? sparkFor(ticker) : null]);
@@ -112,7 +112,7 @@ export async function buildWatchDesk(companies = [], { slot = "premarket", event
     const topNewsHigh = events.find((e) => e.kind === "news" && e.severity === "high")?.title || "";
 
     const price = snap.priceStatus === "ok" ? snap.price : null;
-    const rules = evaluatedRules(ticker, price);
+    const rules = evaluatedRules(ticker, price, userId);
     const triggeredRule = rules.find((r) => r.triggered) || null;
     const { status, statusReason } = deriveStatus({ price, position, topNewsHigh, triggeredRule });
     const held = Boolean(position && position.avgCost != null);
@@ -188,10 +188,10 @@ async function sparkFor(ticker) {
  * 单只股票的看盘台个股页数据 = 该公司的盯盘卡（价格/状态/事件）+ 完整画像
  * （投资主线/多空/证伪/估值/置信度）。看盘台详情页的唯一数据源。
  */
-export async function buildStockView(ticker) {
+export async function buildStockView(ticker, userId = "local") {
   const c = companyByTicker(ticker);
   const [desk, fundamentals, series] = await Promise.all([
-    buildWatchDesk([{ ticker, nameZh: c?.nameZh || ticker }]),
+    buildWatchDesk([{ ticker, nameZh: c?.nameZh || ticker }], { userId }),
     fetchFundamentals(ticker),
     getPriceSeries(ticker).catch(() => ({ providerStatus: "missing" }))
   ]);
@@ -200,7 +200,7 @@ export async function buildStockView(ticker) {
     status: "intact", statusReason: "", topEvent: null, eventCount: 0, events: [], earnings: null,
     priceStatus: "unavailable", price: null, currency: "", changePct: null, held: false, returnPct: null
   };
-  const p = getCompanyProfile(ticker);
+  const p = getCompanyProfile(ticker, userId);
   const profile = p ? {
     thesis: p.thesis, researchStatus: p.researchStatus, confidence: p.confidence,
     bull: p.bull, bear: p.bear, monitors: p.monitors, falsifiers: p.falsifiers,

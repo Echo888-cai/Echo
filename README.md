@@ -1,10 +1,10 @@
 # Echo Research
 
-**An AI research desk for Hong Kong & US equities.**
+**An AI research desk for Hong Kong, US & A-share equities.**
 
 > Seek signal. Ignore noise. — 喧声之外，见真知。
 
-Echo Research is a quiet, analyst-style workspace for asking better questions about public companies — in **HK and US markets**. It is built around one continuous conversation: start with a company, ask what matters, inspect the evidence, and turn scattered market information into a judgment you can revisit.
+Echo Research is a quiet, analyst-style workspace for asking better questions about public companies — in **HK, US and A-share (沪深) markets**. It is built around one continuous conversation: start with a company, ask what matters, inspect the evidence, and turn scattered market information into a judgment you can revisit.
 
 It is not a trading-signal machine. It is closer to a patient research partner: direct, skeptical, source-aware, and comfortable saying what is known, what is inferred, and what still needs to be verified.
 
@@ -24,7 +24,7 @@ That means the product is optimized for:
 - **plain-language financial reasoning**
 - **honest confidence** — confidence chips and a self-consistent valuation range, never fake certainty
 
-Echo Research covers **Hong Kong and US listings** — large-cap technology, internet, consumer, financial, semiconductor and infrastructure names.
+Echo Research covers **Hong Kong and US listings**, plus a **staged core universe of A-share (沪深) names** — large-cap technology, internet, consumer, financial, semiconductor and infrastructure names, with A-share coverage focused on 主板/创业板 (main board + ChiNext) leaders rather than the full 5,000+ market.
 
 The look is deliberate: warm kraft-paper surfaces, ink type, a terracotta accent, and calm motion — a research journal, not a trading terminal.
 
@@ -38,6 +38,7 @@ Ask in plain language, in either market:
 腾讯最近怎么样？        # HK by name
 AAPL 赚钱吗？           # US by ticker
 英伟达的护城河在哪？     # US by Chinese name
+贵州茅台赚钱吗？        # A-share by name
 比亚迪 vs 特斯拉 哪个赔率好？
 ```
 
@@ -45,7 +46,7 @@ Then continue naturally — `它靠什么赚钱？` / `护城河是什么？` / 
 
 Company resolution is layered, so almost any name works: a built-in **Chinese/English alias table** (`美光` / `Micron`, `博通`, `礼来`, …), an **FMP name-search** for English/pinyin (`Robinhood` → `HOOD`, `Coinbase` → `COIN`), and an **LLM resolver** that maps a free-form Chinese name to the right ticker and **verifies it against FMP** before trusting it (`泛林集团` → `LRCX`, `商汤` → `0020.HK`). Explicit notation always works too (bare `AAPL`, `$NVDA`, `TSLA.US`, `0700.HK`).
 
-**Honest about what it can't resolve.** If a question names a company Echo Research genuinely can't pin to a ticker, it says so and asks for a code — it will **never silently answer as the previously-open company**. A-share-only names (`贵州茅台`) are recognized and politely declined, since coverage is HK + US. Follow-ups (`护城河是什么？` / `估值贵不贵？`) are understood as questions about the current company, not mistaken for new ones.
+**Honest about what it can't resolve.** If a question names a company Echo Research genuinely can't pin to a ticker, it says so and asks for a code — it will **never silently answer as the previously-open company**. A-share names outside the current staged universe are recognized as real companies but honestly flagged as not-yet-covered, rather than silently guessed at. Follow-ups (`护城河是什么？` / `估值贵不贵？`) are understood as questions about the current company, not mistaken for new ones.
 
 **Dual-listed names** (Alibaba `9988.HK` / `BABA`, JD, Baidu, NetEase, NIO, Li Auto, …) are recognized as one company. Because FMP's free tier covers the US ADR but not the HK line, fundamentals & valuation route **to the US ADR** (richer data) while both tickers and a "双重上市" note are shown — so you always know it's the same business and which side the numbers come from.
 
@@ -70,13 +71,14 @@ Interaction principles:
 
 ### Market-aware data routing
 
-A single `src/market.js` layer knows whether a ticker is HK or US and spells it correctly for every provider:
+A single `src/market.js` layer knows whether a ticker is HK, US or A-share (CN) and spells it correctly for every provider:
 
 - **HK quotes** → Tencent Finance (free), with Finnhub / Alpha Vantage / Yahoo fallback.
 - **US quotes** → Finnhub / Alpha Vantage / Yahoo.
-- **Fundamentals** → FMP `/stable` when the plan allows it, else **Finnhub `/stock/metric`** (free: EPS / PE / margins / ROE / growth), then Yahoo. HK falls back to Tencent/Yahoo basics.
+- **A-share quotes** → Tencent Finance + Sina Finance (both free, no key), raced for the fastest response.
+- **Fundamentals** → FMP `/stable` when the plan allows it, else **Finnhub `/stock/metric`** (free: EPS / PE / margins / ROE / growth), then Yahoo. HK falls back to Tencent/Yahoo basics. A-share fundamentals come from the first-party CNINFO filing pipeline below (FMP/Finnhub/Alpha Vantage don't cover A-shares on the free tier).
 - **Company news** → Finnhub `/company-news` (free, keyed, reliable) as the primary source, with Yahoo / Bing scraping as supplement.
-- Currency is inferred per market (USD / HKD).
+- Currency is inferred per market (USD / HKD / CNY).
 
 > Every provider degrades gracefully. FMP's free tier gates the statement endpoints (`402 Special Endpoint`), so US fundamentals come from **Finnhub's free metric endpoint** — real EPS / PE / margins / ROE — which still powers the **profit-quality score** and the **valuation range bar**. A premium-gated endpoint never cools down the whole FMP key (so search/resolve keep working). HK full statements need a paid source or the first-party filing pipeline below.
 
@@ -100,9 +102,9 @@ A multi-method valuation engine (PE / Forward PE / FCF yield / DCF) with a displ
 
 When the data is available (Finnhub recommendations for the buy/hold/sell distribution, Yahoo as a best-effort target-price fallback), answers carry an **analyst-consensus block**: the rating distribution as a coloured bar, the consensus direction, and the consensus target with upside-to-target. The presence of consensus data also **raises the confidence score** — confidence is scored by how many real data dimensions (price / fundamentals / estimates / filings / news) are grounded.
 
-### First-party HK filings pipeline
+### First-party filings pipelines (HK + A-share)
 
-For HK names, an ingestion pipeline pulls HKEX results-announcement PDFs, extracts the key financial tables (revenue / profit / operating cash flow), and structures them into the same financial-snapshot shape the rest of the app reads — closing the biggest data gap on the HK side. US first-party filings route through SEC EDGAR (8-K / 10-Q / 10-K, free, no key).
+For HK names, an ingestion pipeline pulls HKEX results-announcement PDFs, extracts the key financial tables (revenue / profit / operating cash flow), and structures them into the same financial-snapshot shape the rest of the app reads — closing the biggest data gap on the HK side. US first-party filings route through SEC EDGAR (8-K / 10-Q / 10-K, free, no key). For A-share names, an equivalent pipeline pulls periodic reports (annual / quarterly / semi-annual) from CNINFO (巨潮资讯网, the official SSE/SZSE-designated disclosure platform), parsing the standardized statutory line items — real-world testing against a 66-company seed universe reached first-party data for 91% of names.
 
 ### Event digest
 
@@ -153,6 +155,12 @@ Where the current multiple sits against the company's **own trailing history** (
 
 Structured-output validation with one repair pass and a safe local fallback. No buy/sell/hold instructions — only research judgments, monitoring conditions and risk checkpoints.
 
+### Invite-only multi-user beta
+
+Echo Research now includes password authentication, one-time invite codes, signed HttpOnly sessions, CSRF checks, per-user private research/portfolio/watch data, daily model quotas, usage and cost visibility, onboarding, notification preferences, and in-app feedback. Existing single-user databases migrate non-destructively to the owner account.
+
+The public edge is deployment-ready for a single HK/SG VPS: Caddy TLS, loopback-only Node service, systemd sandboxing, verified local backups with optional off-site replication, static-file allowlisting, request-size limits, and per-IP/per-user rate limiting. Production readiness can be checked with `npm run doctor:prod`.
+
 ---
 
 ## Architecture
@@ -170,7 +178,7 @@ Echo Research
 │   │   ├── shell.js research.js watch.js settings.js portfolio.js
 │   │   └── notifications.js components.js
 │   ├── styles/                    # Layered CSS (00-foundation → 07-brand)
-│   ├── market.js                  # HK/US detection + per-provider symbol mapping
+│   ├── market.js                  # HK/US/CN detection + per-provider symbol mapping
 │   ├── data.js marketData.js financialData.js newsData.js filingData.js
 │   ├── fmpClient.js secFilings.js documentParser.js prompts.js
 │   ├── server/
@@ -258,9 +266,13 @@ SERPAPI_API_KEY=
 
 ## Status
 
-**Working:** HK + US research conversation · dual-listing routing (HK ↔ US ADR) · discovery layer (screener + macro) · market-aware quotes & fundamentals · US real profit-quality scores · intent routing (incl. financial-quality & falsification) · evidence provenance with URL validation · data-grounding bar + completeness % · data-dimension confidence scoring · analyst consensus (distribution + target anchor) · valuation range + odds + cross-validated methods · historical valuation percentile (own trailing history) · structured section answers · real-time SSE streaming · company-grouped event digest with severity + relevance gate · proactive scheduler + notification centre · earnings closed loop (actual vs. estimate, beat/miss) · structured, auto-checked fundamental falsification conditions · number-level anti-hallucination guard (factGuard, shadow mode) · research scorecard & review · shareholder-return signals (US Form 4 insider activity, HK exchange buybacks) · portfolio panel with live P&L · company portrait documents · HK first-party filing ingestion · full-text search over research history (SQLite FTS5) · daily verified DB backups · Markdown export · SQLite history · light & dark UI.
+**Working:** A/H/US research conversation · dual-listing routing · discovery layer (screener + macro) · market-aware quotes & first-party filings · evidence provenance · data-grounding and confidence · valuation range and odds · analyst consensus · structured streaming answers · event digest · scheduler and notification centre · earnings/falsification closed loops · factGuard shadow audit · research scorecard · portfolio and watch desk · company portraits · Markdown and branded PNG export · FTS5 history search · verified backups · responsive light/dark UI · invite-only authentication · per-user isolation, quotas and usage · onboarding, preferences and feedback · hardened single-VPS deployment assets.
 
-**Next:** stable web coverage (`TAVILY_API_KEY` + non-sandbox verification) · promoting factGuard from `shadow` to `soft` once the logged hit-rate supports it · deeper agentic reasoning across stocks · mobile (responsive + PWA) · deploy-ready auth & multi-user. See the plan docs below.
+**Next:** run the free invite-only beta on an actual HK/SG VPS · obtain commercial licenses for quote/news data before charging or public promotion · promote factGuard from `shadow` only after real misclassification metrics support it · prioritize P15/P16/R13–R16 and PWA from observed beta feedback. See the plan docs below.
+
+### Commercialization boundary
+
+The application architecture is ready for a small commercial beta, but the bundled Tencent/Sina public-market routes are **not a commercial data license**. Keep this build free, invite-only, and non-public until licensed quote/news sources are configured. Model, search, data-provider, VPS, domain, privacy-policy, and incident-response costs/obligations remain operator responsibilities.
 
 ---
 
@@ -275,4 +287,4 @@ SERPAPI_API_KEY=
 
 ## License
 
-Private research prototype. License to be decided.
+Proprietary source code. No permission is granted to copy, redistribute, host, or sell this software without the copyright holder's written authorization. Market data and third-party content remain subject to their providers' terms.

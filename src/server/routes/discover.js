@@ -15,7 +15,7 @@ export async function runDiscover(payload) {
     throw err;
   }
   const kind = payload.kind || classifyDiscoveryIntent(question);
-  if (kind === "screener") return runScreener(question);
+  if (kind === "screener") return runScreener(question, payload.userId || "local");
   if (kind === "macro") return runMacro(question);
   /** @type {Error & {statusCode?: number}} */
   const err = new Error("这不是筛选或宏观问题，请走公司研究通道。");
@@ -26,6 +26,7 @@ export async function runDiscover(payload) {
 export async function handleDiscoverApi(req, res) {
   try {
     const payload = await readJsonBody(req);
+    payload.userId = req.echoUser?.id || "local";
     sendJson(res, 200, await runDiscover(payload));
   } catch (error) {
     sendJson(res, error.statusCode || 500, { error: error.message || "发现层查询失败" });

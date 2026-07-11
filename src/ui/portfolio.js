@@ -52,10 +52,10 @@ export function renderPortfolioReview(review) {
       <i class="${t.pnl >= 0 ? "up" : "down"}">${t.pnl >= 0 ? "+" : ""}${Number(t.pnl).toLocaleString()}${t.pnlPct != null ? ` (${t.pnl >= 0 ? "+" : ""}${t.pnlPct}%)` : ""}</i></span>`
   ).join("");
   const exp = review.marketExposure || {};
-  const expBar = (exp.HK != null && exp.US != null)
-    ? `<div class="pr-exp" title="按 USD≈7.8HKD 折算的近似权重">
-        ${exp.HK > 0 ? `<span class="pr-exp-hk" style="width:${exp.HK}%">${exp.HK >= 12 ? `港股 ${exp.HK}%` : ""}</span>` : ""}
-        ${exp.US > 0 ? `<span class="pr-exp-us" style="width:${exp.US}%">${exp.US >= 12 ? `美股 ${exp.US}%` : ""}</span>` : ""}
+  const EXP_MARKETS = [["HK", "港股", "pr-exp-hk"], ["US", "美股", "pr-exp-us"], ["CN", "A股", "pr-exp-cn"]];
+  const expBar = EXP_MARKETS.some(([k]) => exp[k] != null)
+    ? `<div class="pr-exp" title="按 USD≈7.8HKD、USD≈7.2CNY 折算的近似权重">
+        ${EXP_MARKETS.map(([k, label, cls]) => (exp[k] > 0 ? `<span class="${cls}" style="width:${exp[k]}%">${exp[k] >= 12 ? `${label} ${exp[k]}%` : ""}</span>` : "")).join("")}
       </div>`
     : "";
   const weights = (review.weights || []).slice(0, 5).map((w) =>

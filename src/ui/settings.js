@@ -3,6 +3,7 @@ import { S, render, currentRoute } from "./state.js";
 import { api } from "./api.js";
 import { esc, notifWhen } from "./format.js";
 import { shell } from "./shell.js";
+import { renderNotificationPreferences } from "./beta.js";
 
 export async function refreshStatus() {
   try {
@@ -70,12 +71,15 @@ function renderCanaryCard() {
 // E4：模型网关调用留痕面板——谁在接、各自延迟/失败率、最近失败原因，取代此前纯 console 的运维盲区。
 function renderLlmAuditCard() {
   const rows = S.apiStatus?.llmAudit || [];
+  const usage = S.apiStatus?.usage;
   if (!rows.length) {
-    return `<article class="settings-card"><h2>模型调用（近 7 天）</h2>
-      <p>还没有调用留痕——发起一轮研究后，每次 provider 尝试（含 failover）都会记一行。</p>
+    return `<article class="settings-card"><h2>研究额度与模型调用</h2>
+      <p>今日还没有模型调用。${usage?.dailyCalls ? `每日额度 ${usage.dailyCalls} 次。` : "当前未设置调用次数上限。"}</p>
     </article>`;
   }
-  return `<article class="settings-card"><h2>模型调用（近 7 天）</h2>
+  const cost = usage?.estimatedCostUsd > 0 ? ` · 估算 $${Number(usage.estimatedCostUsd).toFixed(4)}` : "";
+  return `<article class="settings-card"><h2>研究额度与模型调用</h2>
+    <p>今日已用 ${usage?.successfulCalls || 0}${usage?.dailyCalls ? ` / ${usage.dailyCalls}` : ""} 次，剩余 ${usage?.remainingCalls ?? "不限"} 次；token ${((usage?.inputTokens || 0) + (usage?.outputTokens || 0)).toLocaleString()}${cost}。成本只在运营方配置模型单价后显示。</p>
     ${rows.map((r) => {
       const total = r.attempts || 0;
       const failRate = total ? Math.round((r.failures / total) * 100) : 0;
@@ -83,7 +87,7 @@ function renderLlmAuditCard() {
       const failure = r.failures > 0 && r.lastFailureDetail ? `<div class="setting-sub">最近失败：${esc(r.lastFailureDetail)}（${notifWhen(r.lastFailureAt || "")}）</div>` : "";
       return `<div class="setting-row${tone}">
         <span>${esc(r.provider)} · ${total} 次调用（${r.failures} 次失败）</span>
-        <strong>${r.avgLatencyMs != null ? `均延迟 ${r.avgLatencyMs}ms` : "无成功记录"}</strong>
+        <strong>${r.avgLatencyMs != null ? `均延迟 ${r.avgLatencyMs}ms · ${Number(r.inputTokens || 0) + Number(r.outputTokens || 0)} tokens` : "无成功记录"}</strong>
       </div>${failure}`;
     }).join("")}
   </article>`;
@@ -152,10 +156,14 @@ function renderHkCoverageCard() {
 export function renderSettings() {
   const sources = S.apiStatus?.sources || [];
   const providers = S.apiStatus?.ai?.providers || [];
+  const isOwner = !S.multiUser || S.authUser?.role === "owner";
   shell(`<section class="simple-page settings-page">
-    <div class="page-head"><p class="eyebrow">Settings</p><h1>后台设置与状态</h1><span>模型、数据源、隐藏功能都放在这里，不打扰研究主流程。</span></div>
+    <div class="page-head"><p class="eyebrow">Settings</p><h1>偏好与运行状态</h1><span>管理研究额度、通知偏好与个人体验。</span></div>
     <div class="settings-grid">
-      <article class="settings-card"><h2>模型</h2>
+      ${renderNotificationPreferences()}
+      ${renderLlmAuditCard()}
+      ${renderScorecardCard()}
+      ${isOwner ? `<article class="settings-card"><h2>模型</h2>
         <p>${S.apiStatus?.ai?.configured ? "已配置模型网关。" : "未配置模型 Key，系统会使用本地模板。"}</p>
         ${providers.map((p) => `<div class="setting-row"><span>${esc(p.label)}</span><strong>${esc(p.model)}</strong></div>`).join("") || `<div class="setting-row"><span>Provider</span><strong>未配置</strong></div>`}
       </article>
@@ -163,15 +171,14 @@ export function renderSettings() {
         ${sources.map((s) => `<div class="setting-row"><span>${esc(s.name)}</span><strong>${esc(s.status)}</strong></div>`).join("")}
       </article>
       ${renderCanaryCard()}
-      ${renderLlmAuditCard()}
       ${renderFactGuardCard()}
-      ${renderScorecardCard()}
       ${renderHkCoverageCard()}
+      ` : ""}
       <article class="settings-card"><h2>前台策略</h2>
         <p>研究 / 看盘 / 设置三个分区各司其职：落地即研究（连续对话，产品灵魂）；看盘是精简关注列表，点进公司页看真价格曲线（美股日线收盘价）、研究状况、基本面、证伪条件与事件。港股曲线预留付费源，暂标"待接入"。</p>
       </article>
       <article class="settings-card"><h2>数据怎么来的</h2>
-        <p>你不需要自己接任何接口。行情、财报、公告、新闻和网页证据都由平台统一接入，回答里会标注本轮用到了哪些来源、有没有上网。</p>
+        <p>你不需要自己接任何接口。行情、财报、公告、新闻和网页证据都由平台统一接入，回答里会标注本轮用到了哪些来源、有没有联网核验。</p>
         <div class="setting-row"><span>研究会话</span><strong>本地自动保存</strong></div>
         <div class="setting-row"><span>证据来源</span><strong>行情 / 财报 / 公告 / 网页</strong></div>
       </article>

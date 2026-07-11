@@ -13,8 +13,8 @@ import { getNextEarnings } from "./earningsCalendar.js";
 import { beijingDate } from "../utils/time.js";
 
 /** 该持仓活跃证伪规则里离现价最近的一条（用于组合体检的"证伪临近"联动）。 */
-export function nearestFalsifierRule(ticker, price) {
-  const rules = listRules(ticker);
+export function nearestFalsifierRule(ticker, price, userId = "local") {
+  const rules = listRules(ticker, userId);
   if (!rules.length) return { ruleCount: 0, nearestRule: null };
   if (!(price > 0)) return { ruleCount: rules.length, nearestRule: null };
   let nearest = null;
@@ -43,7 +43,7 @@ export async function nextEarningsInfo(ticker) {
 }
 
 /** Attach live price + unrealized P&L (+ today's change) to a position. Degrades gracefully when no quote. */
-export async function enrichPosition(p) {
+export async function enrichPosition(p, userId = "local") {
   let price = null;
   let currency = marketCurrency(p.ticker);
   let asOf = null;
@@ -78,7 +78,7 @@ export async function enrichPosition(p) {
   } catch {
     // companies 表查询失败不阻断持仓展示
   }
-  const { ruleCount, nearestRule } = nearestFalsifierRule(p.ticker, price);
+  const { ruleCount, nearestRule } = nearestFalsifierRule(p.ticker, price, userId);
   out.falsifierRuleCount = ruleCount;
   out.nearestFalsifierRule = nearestRule;
   out.nextEarnings = await nextEarningsInfo(p.ticker);

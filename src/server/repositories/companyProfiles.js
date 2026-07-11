@@ -35,7 +35,7 @@ function safeParse(value, fallback) {
   }
 }
 
-function hydrate(row) {
+function hydrate(row, userId = "local") {
   if (!row) return null;
   return {
     ticker: row.ticker,
@@ -48,7 +48,7 @@ function hydrate(row) {
     monitors: safeParse(row.monitors_json, []),
     falsifiers: safeParse(row.falsifiers_json, []),
     valuation: safeParse(row.valuation_json, null),
-    events: listProfileEvents(row.ticker),
+    events: listProfileEvents(row.ticker, 200, userId),
     profileMd: row.profile_md || "",
     turnCount: row.turn_count || 0,
     createdAt: row.created_at,
@@ -57,13 +57,14 @@ function hydrate(row) {
 }
 
 /** 追加一条判断变化事件（画像时间线）。只有判断变化才该调它——不是交易日志。 */
-export function appendProfileEvent(ticker, event = {}) {
+export function appendProfileEvent(ticker, event = {}, userId = "local") {
   if (!event.summary) return;
   const db = getDb();
   db.prepare(`
-    INSERT INTO profile_events (ticker, date, kind, summary, rationale, evidence_json, session_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO profile_events (user_id, ticker, date, kind, summary, rationale, evidence_json, session_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
+    userId,
     normalizeTicker(ticker),
     event.date || "",
     event.kind || "note",
@@ -75,12 +76,12 @@ export function appendProfileEvent(ticker, event = {}) {
 }
 
 /** 按时间正序返回时间线（date/kind/summary/rationale/evidence/sessionId）。 */
-export function listProfileEvents(ticker, limit = 200) {
+export function listProfileEvents(ticker, limit = 200, userId = "local") {
   const db = getDb();
   const rows = db.prepare(`
     SELECT date, kind, summary, rationale, evidence_json, session_id
-    FROM profile_events WHERE ticker = ? ORDER BY id DESC LIMIT ?
-  `).all(normalizeTicker(ticker), limit);
+    FROM profile_events WHERE user_id = ? AND ticker = ? ORDER BY id DESC LIMIT ?
+  `).all(userId, normalizeTicker(ticker), limit);
   return rows.reverse().map((r) => ({
     date: r.date,
     kind: r.kind,
@@ -91,20 +92,21 @@ export function listProfileEvents(ticker, limit = 200) {
   }));
 }
 
-export function getCompanyProfile(ticker) {
+export function getCompanyProfile(ticker, userId = "local") {
   const db = getDb();
-  const row = db.prepare("SELECT * FROM company_profiles WHERE ticker = ?").get(normalizeTicker(ticker));
-  return hydrate(row);
+  const row = db.prepare("SELECT * FROM company_profiles WHERE user_id = ? AND ticker = ?").get(userId, normalizeTicker(ticker));
+  return hydrate(row, userId);
 }
 
-export function listCompanyProfiles(limit = 50) {
+export function listCompanyProfiles(limit = 50, userId = "local") {
   const db = getDb();
   const rows = db.prepare(`
     SELECT ticker, company_name, thesis, research_status, confidence, turn_count, updated_at
     FROM company_profiles
+    WHERE user_id = ?
     ORDER BY updated_at DESC
     LIMIT ?
-  `).all(limit);
+  `).all(userId, limit);
   return rows.map((r) => ({
     ticker: r.ticker,
     companyName: r.company_name || r.ticker,
@@ -121,15 +123,15 @@ export function listCompanyProfiles(limit = 50) {
  * `event`（单条）/`events`（多条）to append to the timeline (profile_events 表)。
  * Current-view fields are overwritten (not accumulated); events are append-only.
  */
-export function upsertCompanyProfile(ticker, patch = {}) {
+export function upsertCompanyProfile(ticker, patch = {}, userId = "local") {
   const db = getDb();
   const normalized = normalizeTicker(ticker);
   ensureCompanyRow(db, normalized, patch.companyName);
-  const existing = getCompanyProfile(normalized);
+  const existing = getCompanyProfile(normalized, userId);
 
   const newEvents = [...(Array.isArray(patch.events) ? patch.events : []), ...(patch.event ? [patch.event] : [])];
-  for (const e of newEvents) appendProfileEvent(normalized, e);
-  const allEvents = listProfileEvents(normalized);
+  for (const e of newEvents) appendProfileEvent(normalized, e, userId);
+  const allEvents = listProfileEvents(normalized, 200, userId);
 
   const merged = {
     companyName: patch.companyName || existing?.companyName || normalized,
@@ -147,12 +149,12 @@ export function upsertCompanyProfile(ticker, patch = {}) {
 
   db.prepare(`
     INSERT INTO company_profiles
-      (ticker, company_name, thesis, research_status, confidence, bull_json, bear_json,
+      (user_id, ticker, company_name, thesis, research_status, confidence, bull_json, bear_json,
        monitors_json, falsifiers_json, valuation_json, profile_md, turn_count, updated_at)
     VALUES
-      (@ticker, @companyName, @thesis, @researchStatus, @confidence, @bull, @bear,
+      (@userId, @ticker, @companyName, @thesis, @researchStatus, @confidence, @bull, @bear,
        @monitors, @falsifiers, @valuation, @profileMd, @turnCount, datetime('now'))
-    ON CONFLICT(ticker) DO UPDATE SET
+    ON CONFLICT(user_id, ticker) DO UPDATE SET
       company_name = excluded.company_name,
       thesis = excluded.thesis,
       research_status = excluded.research_status,
@@ -166,6 +168,7 @@ export function upsertCompanyProfile(ticker, patch = {}) {
       turn_count = excluded.turn_count,
       updated_at = datetime('now')
   `).run({
+    userId,
     ticker: normalized,
     companyName: merged.companyName,
     thesis: merged.thesis,
@@ -179,14 +182,14 @@ export function upsertCompanyProfile(ticker, patch = {}) {
     profileMd,
     turnCount: merged.turnCount
   });
-  return getCompanyProfile(normalized);
+  return getCompanyProfile(normalized, userId);
 }
 
-export function deleteCompanyProfile(ticker) {
+export function deleteCompanyProfile(ticker, userId = "local") {
   const db = getDb();
   const normalized = normalizeTicker(ticker);
-  db.prepare("DELETE FROM profile_events WHERE ticker = ?").run(normalized);
-  return db.prepare("DELETE FROM company_profiles WHERE ticker = ?").run(normalized).changes > 0;
+  db.prepare("DELETE FROM profile_events WHERE user_id = ? AND ticker = ?").run(userId, normalized);
+  return db.prepare("DELETE FROM company_profiles WHERE user_id = ? AND ticker = ?").run(userId, normalized).changes > 0;
 }
 
 export const PROFILE_EVENT_KIND_LABEL = {
@@ -247,6 +250,6 @@ export function renderProfileMarkdown(ticker, view = {}, events = []) {
     }
     lines.push("");
   }
-  lines.push("---", "> 由 Luvio 生成的长期研究画像，仅供研究学习，不构成投资建议。");
+  lines.push("---", "> 由 Echo Research 生成的长期研究画像，仅供研究学习，不构成投资建议。");
   return lines.join("\n");
 }

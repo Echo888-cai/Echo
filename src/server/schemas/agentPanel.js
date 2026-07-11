@@ -295,7 +295,7 @@ export function buildRepairPrompt(errors, raw) {
     .slice(0, 12)
     .map((e) => `- ${e.path}: ${e.message}`)
     .join("\n");
-  return `上一次输出没有通过 Luvio 决策面板校验，请立刻修复并重新输出一个合法 JSON 对象。
+  return `上一次输出没有通过 Echo Research 决策面板校验，请立刻修复并重新输出一个合法 JSON 对象。
 
 校验失败项：
 ${list}
@@ -312,7 +312,7 @@ ${list}
 ${String(raw || "").slice(0, 1500)}`;
 }
 
-export const REPAIR_SYSTEM_PROMPT = `你是 Luvio 决策面板的"修复器"。你的唯一任务是把非法输出改成一个严格匹配 JSON Schema 的对象。
+export const REPAIR_SYSTEM_PROMPT = `你是 Echo Research 决策面板的"修复器"。你的唯一任务是把非法输出改成一个严格匹配 JSON Schema 的对象。
 规则：
 - 只输出合法 JSON，不要 Markdown，不要代码块，不要解释。
 - 任何缺字段一律补最小可用的占位（null、空数组、空字符串）。

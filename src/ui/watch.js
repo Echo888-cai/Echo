@@ -5,6 +5,16 @@ import { esc, toast, fmtPct, fmtNum, pnlDir, wdChg, wdWhen } from "./format.js";
 import { markdownToHtml } from "./markdown.js";
 import { resolveCompany } from "./resolve.js";
 import { shell } from "./shell.js";
+import { detectMarket } from "../market.js";
+
+// 市场徽章：三路（港股/美股/A股），css class 用小写市场码。
+function exBadge(marketOrTicker) {
+  const mkt = marketOrTicker === "US" || marketOrTicker === "HK" || marketOrTicker === "CN"
+    ? marketOrTicker
+    : detectMarket(marketOrTicker);
+  const label = mkt === "US" ? "美股" : mkt === "CN" ? "A股" : "港股";
+  return `<span class="ex-badge ${mkt.toLowerCase()}">${label}</span>`;
+}
 
 // 两段式刷新（UX-6 提速）：先 fast 模式（跳过新闻等慢源，1-3s 有价格和状态可看），
 // 再全量补事件。全量失败时保留 fast 结果——宁可少事件，不要白屏。
@@ -70,7 +80,7 @@ const WL_BAD_THESIS = /不可用|无法形成|暂无|尚未|待补充|已有财�
 // 持有盈亏 · 主线一句 · 悬停×移除。列由 .wl-row 的 grid 对齐，数字列右对齐 tabular-nums。
 function renderWatchRow(c) {
   const st = WD_STATUS[c.status] || WD_STATUS.intact;
-  const mkt = c.market === "US" ? `<span class="ex-badge us">美股</span>` : `<span class="ex-badge hk">港股</span>`;
+  const mkt = exBadge(c.market);
   // intact 靠圆点 + 左沿颜色表达即可，不再多贴一个状态标签（克制）；falsified/at_risk 才点名。
   const statusPill = c.status !== "intact" ? `<span class="wd-status ${st.cls}">${st.label}</span>` : "";
   // 一句摘要：优先我的投资主线（中文、干净）；主线是失败占位就退回今日事件（去掉" - 来源"后缀）。
@@ -138,6 +148,7 @@ function applyWatchView(cards) {
   let out = cards;
   if (S.watchFilter === "hk") out = out.filter((c) => c.market === "HK");
   else if (S.watchFilter === "us") out = out.filter((c) => c.market === "US");
+  else if (S.watchFilter === "cn") out = out.filter((c) => c.market === "CN");
   else if (S.watchFilter === "held") out = out.filter((c) => c.held);
   else if (S.watchFilter === "risk") out = out.filter((c) => c.status === "falsified" || c.status === "at_risk");
   if (S.watchSort === "change") {
@@ -149,7 +160,7 @@ function applyWatchView(cards) {
 }
 
 const WATCH_FILTERS = [
-  ["all", "全部"], ["hk", "港股"], ["us", "美股"], ["held", "持仓"], ["risk", "预警"]
+  ["all", "全部"], ["hk", "港股"], ["us", "美股"], ["cn", "A股"], ["held", "持仓"], ["risk", "预警"]
 ];
 const WATCH_SORTS = [["urgency", "紧急度"], ["change", "涨跌"], ["name", "名称"]];
 
@@ -293,7 +304,7 @@ export async function addWatch(q) {
       await api("/api/watch/track", { method: "POST", body: JSON.stringify({ ticker, name: company.nameZh || ticker }) });
       S.watchAddOpen = false; S.watchAddError = ""; S.watchAddBusy = false;
       if (S.watchDesk && Array.isArray(S.watchDesk.cards) && !S.watchDesk.cards.some((c) => c.ticker === ticker)) {
-        const market = /\.HK$/i.test(ticker) || /^\d{3,5}$/.test(ticker) ? "HK" : "US";
+        const market = detectMarket(ticker);
         S.watchDesk.cards.unshift({ ticker, companyName: company.nameZh || ticker, market, status: "intact", priceStatus: "loading", held: false });
         recountDesk();
       }
@@ -301,9 +312,7 @@ export async function addWatch(q) {
       void refreshWatchDesk().then(render); // 后台对账，不阻塞
       return;
     }
-    S.watchAddError = company && company.unsupported
-      ? `${company.name || q} 看起来是 A 股，目前只支持港股 / 美股`
-      : `没识别出「${q}」，换个代码试试，如 AAPL、0700.HK`;
+    S.watchAddError = `没识别出「${q}」，换个代码试试，如 AAPL、0700.HK、600519.SS`;
   } catch {
     S.watchAddError = "添加失败，请重试";
   }
@@ -427,7 +436,7 @@ function renderPriceChart(series) {
 
 function renderStockDetail(stock) {
   const st = WD_STATUS[stock.status] || WD_STATUS.intact;
-  const mkt = stock.market === "US" ? `<span class="ex-badge us">美股</span>` : `<span class="ex-badge hk">港股</span>`;
+  const mkt = exBadge(stock.market);
   const chg = wdChg(stock.changePct);
 
   const priceBlock = stock.priceStatus === "ok" && stock.price != null
@@ -670,7 +679,10 @@ function renderPortraitTab(stock) {
   return `<div class="portrait-pane">
     <div class="portrait-bar">
       <span class="portrait-meta">研究 ${p.turnCount || 0} 轮 · 更新于 ${esc((p.updatedAt || "").slice(0, 10))}</span>
-      <button class="wl-linkbtn" type="button" data-action="export-portrait">导出 Markdown ↓</button>
+      <span class="portrait-bar-actions">
+        <button class="wl-linkbtn" type="button" data-action="export-portrait">导出 Markdown ↓</button>
+        <button class="wl-linkbtn" type="button" data-action="export-portrait-image">导出分享图 ↓</button>
+      </span>
     </div>
     <div class="portrait-doc">${portraitDocHtml(S.stockPortrait.markdown)}</div>
     ${renderResearchReview(stock.ticker)}
@@ -699,4 +711,173 @@ export function exportPortrait() {
   anchor.remove();
   URL.revokeObjectURL(url);
   toast("已导出画像 Markdown。");
+}
+
+// 画像分享图使用浏览器原生 Canvas 绘制，避免引入重型截图依赖或上传用户研究数据。
+const SHARE_FONT = "-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI', sans-serif";
+const SHARE_COLORS = {
+  bg: "#f0eee6", panel: "#fcfbf8", ink: "#141413", ink2: "#3d3b35",
+  muted: "#82807a", accent: "#bf5c3e", line: "rgba(31,30,24,0.14)"
+};
+
+function wrapCanvasText(ctx, text, x, y, maxWidth, lineHeight) {
+  const chars = Array.from(String(text || ""));
+  let line = "";
+  let curY = y;
+  for (const ch of chars) {
+    const next = line + ch;
+    if (line && ctx.measureText(next).width > maxWidth) {
+      ctx.fillText(line, x, curY);
+      line = ch;
+      curY += lineHeight;
+    } else {
+      line = next;
+    }
+  }
+  if (line) {
+    ctx.fillText(line, x, curY);
+    curY += lineHeight;
+  }
+  return curY;
+}
+
+function drawRoundedRect(ctx, x, y, width, height, radius) {
+  ctx.beginPath();
+  if (typeof ctx.roundRect === "function") {
+    ctx.roundRect(x, y, width, height, radius);
+  } else {
+    ctx.moveTo(x + radius, y);
+    ctx.arcTo(x + width, y, x + width, y + height, radius);
+    ctx.arcTo(x + width, y + height, x, y + height, radius);
+    ctx.arcTo(x, y + height, x, y, radius);
+    ctx.arcTo(x, y, x + width, y, radius);
+  }
+  ctx.closePath();
+}
+
+export function exportPortraitImage() {
+  const profile = S.stockPortrait?.profile;
+  if (!profile) {
+    toast("画像还没加载好。");
+    return;
+  }
+
+  const W = 1080;
+  const H = 1350;
+  const pad = 64;
+  const inner = pad + 56;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    toast("当前浏览器不支持生成分享图。");
+    return;
+  }
+  const C = SHARE_COLORS;
+
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, W, H);
+  drawRoundedRect(ctx, pad, pad, W - pad * 2, H - pad * 2, 28);
+  ctx.fillStyle = C.panel;
+  ctx.fill();
+  ctx.strokeStyle = C.line;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  let y = inner + 20;
+  ctx.fillStyle = C.accent;
+  ctx.beginPath();
+  ctx.arc(inner + 14, y - 8, 14, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = C.muted;
+  ctx.font = `600 26px ${SHARE_FONT}`;
+  ctx.fillText("ECHO RESEARCH", inner + 40, y);
+
+  y += 76;
+  ctx.fillStyle = C.ink;
+  ctx.font = `700 64px ${SHARE_FONT}`;
+  ctx.fillText(String(profile.companyName || profile.ticker || "").slice(0, 12), inner, y);
+
+  y += 48;
+  ctx.fillStyle = C.muted;
+  ctx.font = `400 30px ${SHARE_FONT}`;
+  ctx.fillText(String(profile.ticker || ""), inner, y);
+
+  y += 56;
+  ctx.strokeStyle = C.line;
+  ctx.beginPath();
+  ctx.moveTo(inner, y);
+  ctx.lineTo(W - inner, y);
+  ctx.stroke();
+
+  y += 64;
+  ctx.fillStyle = C.muted;
+  ctx.font = `600 24px ${SHARE_FONT}`;
+  ctx.fillText("投资主线", inner, y);
+
+  y += 48;
+  ctx.fillStyle = C.ink2;
+  ctx.font = `400 40px ${SHARE_FONT}`;
+  const thesis = String(profile.thesis || "还没有沉淀投资主线，完成一轮研究后自动生成。").slice(0, 160);
+  y = wrapCanvasText(ctx, thesis, inner, y, W - inner * 2, 56);
+
+  const bull = Array.isArray(profile.bull) ? profile.bull.slice(0, 2) : [];
+  if (bull.length) {
+    y += 24;
+    ctx.fillStyle = C.muted;
+    ctx.font = `600 24px ${SHARE_FONT}`;
+    ctx.fillText("看多要点", inner, y);
+    y += 44;
+    ctx.font = `400 32px ${SHARE_FONT}`;
+    ctx.fillStyle = C.ink2;
+    for (const point of bull) {
+      y = wrapCanvasText(ctx, `· ${String(point).slice(0, 60)}`, inner, y, W - inner * 2, 44);
+      y += 8;
+    }
+  }
+
+  const valuation = profile.valuation;
+  const valuationNumbers = valuation ? [valuation.bear, valuation.base, valuation.bull].map(Number) : [];
+  if (valuation && valuationNumbers.every((value) => Number.isFinite(value))) {
+    y += 32;
+    ctx.fillStyle = C.muted;
+    ctx.font = `600 24px ${SHARE_FONT}`;
+    ctx.fillText("估值区间（熊 / 中枢 / 牛）", inner, y);
+    y += 48;
+    ctx.fillStyle = C.ink;
+    ctx.font = `700 36px ${SHARE_FONT}`;
+    ctx.fillText(`${fmtNum(valuationNumbers[0])}  /  ${fmtNum(valuationNumbers[1])}  /  ${fmtNum(valuationNumbers[2])}`, inner, y);
+  }
+
+  const footY = H - pad - 56;
+  ctx.fillStyle = C.muted;
+  ctx.font = `400 26px ${SHARE_FONT}`;
+  const tags = [];
+  if (profile.researchStatus) tags.push(RS_LABEL[profile.researchStatus] || profile.researchStatus);
+  if (profile.confidence) tags.push(`置信度 · ${profile.confidence}`);
+  if (profile.turnCount) tags.push(`已研究 ${profile.turnCount} 轮`);
+  ctx.fillText(tags.join("　·　"), inner, footY);
+
+  ctx.fillStyle = C.accent;
+  ctx.font = `italic 400 26px ${SHARE_FONT}`;
+  ctx.textAlign = "right";
+  ctx.fillText("喧声之外，见真知", W - inner, footY);
+  ctx.textAlign = "left";
+
+  canvas.toBlob((blob) => {
+    if (!blob) {
+      toast("生成分享图失败。");
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${String(profile.ticker || "echo").replace(/[^\w.-]/g, "")}-share.png`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    toast("已导出分享图。");
+  }, "image/png");
 }

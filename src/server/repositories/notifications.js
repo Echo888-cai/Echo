@@ -16,21 +16,21 @@ import { getDb } from "../../db/index.js";
  * 落一条通知。带 dedupeKey 时，若窗口期（默认 12h）内已有同 key 通知则跳过。
  * @returns {{ id:number }|null} null = 被去重跳过
  */
-export function insertNotification({ kind, title, body = "", ticker = null, payload = null, dedupeKey = null, dedupeWindowHours = 12 }) {
+export function insertNotification({ kind, title, body = "", ticker = null, payload = null, dedupeKey = null, dedupeWindowHours = 12, userId = "local" }) {
   const db = getDb();
   if (dedupeKey) {
     const dup = db
-      .prepare("SELECT id FROM notifications WHERE dedupe_key = ? AND created_at >= datetime('now', ?) LIMIT 1")
-      .get(dedupeKey, `-${Math.max(1, Math.round(dedupeWindowHours))} hours`);
+      .prepare("SELECT id FROM notifications WHERE user_id = ? AND dedupe_key = ? AND created_at >= datetime('now', ?) LIMIT 1")
+      .get(userId, dedupeKey, `-${Math.max(1, Math.round(dedupeWindowHours))} hours`);
     if (dup) return null;
   }
   const info = db
     .prepare(`
-      INSERT INTO notifications (kind, title, body, ticker, payload, dedupe_key)
-      VALUES (@kind, @title, @body, @ticker, @payload, @dedupeKey)
+      INSERT INTO notifications (user_id, kind, title, body, ticker, payload, dedupe_key)
+      VALUES (@userId, @kind, @title, @body, @ticker, @payload, @dedupeKey)
     `)
     .run({
-      kind: String(kind || "system"),
+      userId, kind: String(kind || "system"),
       title: String(title || "").slice(0, 300),
       body: String(body || "").slice(0, 4000),
       ticker: ticker || null,
@@ -41,23 +41,23 @@ export function insertNotification({ kind, title, body = "", ticker = null, payl
 }
 
 /** 最近通知（新的在前）。 */
-export function listNotifications(limit = 20) {
+export function listNotifications(limit = 20, userId = "local") {
   return getDb()
-    .prepare("SELECT * FROM notifications ORDER BY id DESC LIMIT ?")
-    .all(Math.min(100, Math.max(1, limit)))
+    .prepare("SELECT * FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT ?")
+    .all(userId, Math.min(100, Math.max(1, limit)))
     .map(hydrate);
 }
 
-export function unreadCount() {
-  return getDb().prepare("SELECT COUNT(*) AS n FROM notifications WHERE read_at IS NULL").get().n;
+export function unreadCount(userId = "local") {
+  return getDb().prepare("SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL").get(userId).n;
 }
 
-export function markRead(id) {
-  getDb().prepare("UPDATE notifications SET read_at = datetime('now') WHERE id = ? AND read_at IS NULL").run(Number(id));
+export function markRead(id, userId = "local") {
+  getDb().prepare("UPDATE notifications SET read_at = datetime('now') WHERE user_id = ? AND id = ? AND read_at IS NULL").run(userId, Number(id));
 }
 
-export function markAllRead() {
-  getDb().prepare("UPDATE notifications SET read_at = datetime('now') WHERE read_at IS NULL").run();
+export function markAllRead(userId = "local") {
+  getDb().prepare("UPDATE notifications SET read_at = datetime('now') WHERE user_id = ? AND read_at IS NULL").run(userId);
 }
 
 function hydrate(row) {

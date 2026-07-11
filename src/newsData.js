@@ -126,7 +126,7 @@ async function fetchText(url, timeoutMs = 7000) {
     const response = await fetch(url, {
       signal: controller.signal,
       headers: {
-        "User-Agent": "Mozilla/5.0 Luvio/0.1",
+        "User-Agent": "Mozilla/5.0 EchoResearch/1.0",
         Accept: "application/rss+xml, application/xml, text/xml, */*"
       }
     });

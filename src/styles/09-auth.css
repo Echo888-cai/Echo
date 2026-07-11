@@ -1,0 +1,136 @@
+/* ── 09-auth：登录 / 邀请注册卡（U-1）────────────────────────────
+   品牌语言承接 07-brand：牛皮纸底、墨色字、陶土红点睛（§3.5 不另起颜色语义）。
+   动效：卡片一次性 fade+rise 入场，150-350ms，prefers-reduced-motion 降级。 */
+
+.auth-page {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg, #f6f1e7);
+}
+
+.auth-card {
+  width: min(400px, 100%);
+  background: var(--surface, #fcfbf8);
+  border: 1px solid var(--line, rgba(60, 48, 36, 0.14));
+  border-radius: 16px;
+  padding: 32px 28px 24px;
+  box-shadow: 0 12px 40px rgba(48, 36, 24, 0.10);
+  animation: auth-rise 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes auth-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-card { animation: none; }
+}
+
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 20px;
+}
+.auth-brand .echo-mark { display: inline-flex; width: 26px; height: 26px; color: var(--accent, #bf5c3e); }
+.auth-brand .echo-mark svg { width: 100%; height: 100%; }
+.auth-brand em { font-style: normal; opacity: 0.62; font-weight: 500; }
+
+.auth-tagline {
+  margin: 6px 0 22px;
+  font-size: 13px;
+  color: var(--ink-soft, rgba(58, 48, 38, 0.62));
+  letter-spacing: 0.04em;
+}
+
+.auth-card form { display: grid; gap: 14px; }
+.auth-card label {
+  display: grid;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--ink-soft, rgba(58, 48, 38, 0.72));
+}
+.auth-card input {
+  font: inherit;
+  padding: 10px 12px;
+  border: 1px solid var(--line, rgba(60, 48, 36, 0.18));
+  border-radius: 10px;
+  background: var(--bg, #f6f1e7);
+  color: var(--ink, #2c241a);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.auth-card input:focus {
+  outline: none;
+  border-color: var(--accent, #bf5c3e);
+  box-shadow: 0 0 0 3px rgba(191, 92, 62, 0.14);
+}
+
+.auth-submit {
+  margin-top: 4px;
+  font: inherit;
+  font-weight: 600;
+  padding: 11px 12px;
+  border: none;
+  border-radius: 10px;
+  background: var(--accent, #bf5c3e);
+  color: #fcfbf8;
+  cursor: pointer;
+  transition: filter 0.18s ease, transform 0.18s ease;
+}
+.auth-submit:hover:not(:disabled) { filter: brightness(1.06); }
+.auth-submit:active:not(:disabled) { transform: translateY(1px); }
+.auth-submit:disabled { opacity: 0.6; cursor: default; }
+
+.auth-error {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--danger, #b23a2f);
+}
+
+.auth-switch {
+  margin-top: 16px;
+  font: inherit;
+  font-size: 12.5px;
+  background: none;
+  border: none;
+  color: var(--accent, #bf5c3e);
+  cursor: pointer;
+  padding: 4px 0;
+}
+.auth-switch:hover { text-decoration: underline; }
+
+.auth-note {
+  margin: 14px 0 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--ink-soft, rgba(58, 48, 38, 0.5));
+}
+
+/* 顶栏用户徽章（多用户模式登录后显示，点击退出） */
+.auth-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 10px;
+  border: 1px solid var(--line, rgba(60, 48, 36, 0.16));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-soft, rgba(58, 48, 38, 0.72));
+  cursor: pointer;
+  transition: color 0.18s ease, border-color 0.18s ease;
+}
+.auth-chip svg { width: 14px; height: 14px; }
+.auth-chip:hover { color: var(--accent, #bf5c3e); border-color: var(--accent, #bf5c3e); }
+@media (max-width: 640px) {
+  .auth-chip span { display: none; } /* 窄屏只留图标，给导航让宽度（M-2 的教训） */
+}
+
+/* 深色主题：沿用全局 token（07-brand 会覆写变量），这里只补阴影浓度 */
+:root[data-theme="dark"] .auth-card {
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}

@@ -11,6 +11,7 @@ import { sendOk, sendError } from "../utils/async.js";
 import { searchCompanies, getCompanyByTickerComplete, getLatestMarketSnapshot } from "../repositories/companyRepository.js";
 import { fmpGet, FMP_TTL } from "../../fmpClient.js";
 import { callModel, getProviderStatus } from "../services/modelGateway.js";
+import { cnTicker } from "../../market.js";
 
 // 主板交易所优先级（越小越优先）。FMP 搜索会混进 OTC / 海外同名小票，按这个排序挑主板。
 const US_EXCHANGE_RANK = { NASDAQ: 0, NYSE: 0, AMEX: 1, BATS: 2, CBOE: 2 };
@@ -195,6 +196,14 @@ function normalizeHkTicker(raw = "") {
   return m ? `${m[1].padStart(4, "0")}.HK` : "";
 }
 
+// A 股代码标准化：600519 / 600519.SS / 600519.SH → 600519.SS（后缀按交易所规则推断，
+// 模型没给后缀或给错时以规则为准）。识别不出返回 ""。
+function normalizeCnTicker(raw = "") {
+  const m = String(raw).toUpperCase().match(/(\d{6})/);
+  if (!m) return "";
+  return cnTicker(m[1]);
+}
+
 // 从模型输出里抠出第一个 JSON 对象（容忍 ```json 包裹和前后解释）。
 function parseModelJson(text = "") {
   const fenced = String(text).replace(/```json|```/gi, " ");
@@ -242,7 +251,9 @@ async function llmResolveCompany(query) {
     return { company: { ticker, nameZh, industry: "港股" } };
   }
   if (market === "CN") {
-    return { reason: "cn_unsupported", name: nameZh }; // Luvio 目前只做港股+美股
+    const ticker = normalizeCnTicker(parsed.ticker);
+    if (!ticker) return { reason: "unknown" };
+    return { company: { ticker, nameZh, industry: "A股" } };
   }
   return { reason: "unknown" };
 }
@@ -322,14 +333,14 @@ export async function handleCompanyVerify(req, res) {
  *   2. 中文名（FMP 不认中文）→ LLM 解析出代码（如 泛林集团→LRCX、商汤→0020.HK），
  *      美股代码再用 FMP 校验存在性，防止模型 hallucinate 张冠李戴。
  * 返回：
- *   { company }                         成功
+ *   { company }                         成功（含 A 股：market === "CN" 走 normalizeCnTicker）
  *   { company: null }                   识别不出
- *   { company: null, reason, name }     特殊情况（如 A 股暂不支持 cn_unsupported）
+ *   { company: null, reason, name }     特殊情况（如 LLM 解析失败 unknown）
  */
 // 解析主体（HTTP handler 与对话内多实体抽取共用）。同样的 alias→FMP→Finnhub→LLM 四级，
 // 这样"对话里提到的第二只股"走的是与【新建研究】入口完全一致的解析（含 SpaceX→SPCX 别名
 // 与新上市自愈），不再绕过解析、凭模型旧知识硬答。返回：
-//   { company } 成功 ｜ { company: null } 识别不出 ｜ { company: null, reason, name } 特殊（cn_unsupported）
+//   { company } 成功 ｜ { company: null } 识别不出 ｜ { company: null, reason, name } 特殊（如 unknown）
 export async function resolveCompanyFromQuery(query = "") {
   const q = String(query || "").trim();
   if (q.length < 2) return { company: null };

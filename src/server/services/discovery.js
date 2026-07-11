@@ -137,10 +137,10 @@ export function parseScreenerQuery(question = "") {
 }
 
 // 本地已研究画像池：sector/industry/名称 命中筛选行业词的已研究公司（任何市场）。
-function researchedPool(filters) {
+function researchedPool(filters, userId = "local") {
   let profiles;
   try {
-    profiles = listCompanyProfiles(60) || [];
+    profiles = listCompanyProfiles(60, userId) || [];
   } catch {
     return [];
   }
@@ -250,7 +250,7 @@ async function rankByQuality(rows) {
 }
 
 /** 跑筛选：FMP screener（美股）/ 细分赛道龙头名单 / 本地池（港股）+ 已研究画像池 + 条件过滤 + 可解释排序。 */
-export async function runScreener(question) {
+export async function runScreener(question, userId = "local") {
   const filters = parseScreenerQuery(question);
   const notes = [...filters.ignored];
   let rows = [];
@@ -306,7 +306,7 @@ export async function runScreener(question) {
   }
 
   // 已研究池：标记/补充（去重，researched 优先展示在前）。
-  const researched = researchedPool(filters);
+  const researched = researchedPool(filters, userId);
   const seen = new Set(rows.map((r) => r.ticker));
   for (const r of rows) {
     if (researched.some((p) => p.ticker === r.ticker)) r.researched = true;

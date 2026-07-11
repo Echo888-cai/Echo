@@ -243,8 +243,6 @@ export async function resolveCompany(query, opts = {}) {
       try {
         const data = await api(`/api/companies/resolve?q=${encodeURIComponent(residual)}`);
         if (data.company?.ticker) return data.company;
-        // A 股（沪深）：目前只做港股+美股，给一个专门的提示而不是泛泛"没识别"。
-        if (data.reason === "cn_unsupported") return { unsupported: true, market: "CN", name: data.name || residual };
       } catch { /* 兜底失败就走下面的"未识别"分支 */ }
     }
   }

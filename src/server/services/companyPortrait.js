@@ -41,8 +41,8 @@ function asList(value, limit = 6) {
 }
 
 /** 把已有画像渲染成注入提示词的简短上下文；无画像返回空串。 */
-export function loadPortraitContext(ticker) {
-  const profile = getCompanyProfile(ticker);
+export function loadPortraitContext(ticker, userId = "local") {
+  const profile = getCompanyProfile(ticker, userId);
   if (!profile || (!profile.thesis && !profile.events.length)) return "";
   const lines = [`## 已有长期画像（上次研究沉淀，本轮请保持判断连贯，若有变化要说明并更新）`];
   if (profile.thesis) lines.push(`- 投资主线：${profile.thesis}`);
@@ -200,12 +200,12 @@ function ruleSignature(rules) {
  * - 已有画像且判断变化 → 改正文 + 追加一条变更事件（带理由与证据链接，未来复盘用）。
  * - 证伪价格线（量化规则）变化 → 追加一条"证伪线演进"事件。
  * - 已有画像但判断未变 → 只 bump turn_count，不写流水账。
- * @param {{ticker?: string, panel?: Object, valuation?: import("../types.js").Valuation|null, question?: string, answerContent?: string, sessionId?: string|null, structuredFalsifiers?: Array<{kind: string, metric: string, threshold: number, label: string}>}} [args]
+ * @param {{ticker?: string, panel?: Object, valuation?: import("../types.js").Valuation|null, question?: string, answerContent?: string, sessionId?: string|null, structuredFalsifiers?: Array<{kind: string, metric: string, threshold: number, label: string}>, userId?: string}} [args]
  */
-export function updatePortraitFromPanel({ ticker, panel, valuation = null, question = "", answerContent = "", sessionId = null, structuredFalsifiers = [] } = {}) {
+export function updatePortraitFromPanel({ ticker, panel, valuation = null, question = "", answerContent = "", sessionId = null, structuredFalsifiers = [], userId = "local" } = {}) {
   if (!ticker || !panel) return { created: false, changed: false, profile: null };
   const localProfile = companyByTicker(ticker) || {};
-  const prev = getCompanyProfile(ticker);
+  const prev = getCompanyProfile(ticker, userId);
   const view = distillView(panel, localProfile, valuation);
   // 回答正文里有具体的证伪条件（模型按纪律给的量化阈值/价格线）时，优先沉淀它们。
   const fromAnswer = extractFalsifiersFromAnswer(answerContent);
@@ -248,7 +248,7 @@ export function updatePortraitFromPanel({ ticker, panel, valuation = null, quest
   // 证伪线演进：量化规则指纹（kind+metric+threshold 集合）变了才记，措辞微调不记——时间线只留判断变化。
   // F-3：nextRules 现在是价格线（文本解析）+ 基本面线（模型结构化输出）的合集；上一轮的基本面
   // 规则不存在文本里，只能从 watch_rules 现存的活跃规则里取（在 replaceFalsifierRules 覆盖之前）。
-  const prevFundamentalRules = ticker ? listRules(ticker).filter((r) => r.kind.startsWith("fundamental_")) : [];
+  const prevFundamentalRules = ticker ? listRules(ticker, userId).filter((r) => r.kind.startsWith("fundamental_")) : [];
   const nextRules = [...parseFalsifierRules(view.falsifiers), ...structuredFalsifiers];
   const prevRules = [...parseFalsifierRules(prev?.falsifiers), ...prevFundamentalRules];
   if (prev && nextRules.length && ruleSignature(prevRules) !== ruleSignature(nextRules)) {
@@ -266,7 +266,7 @@ export function updatePortraitFromPanel({ ticker, panel, valuation = null, quest
     ...view,
     events,
     bumpTurn: true
-  });
+  }, userId);
 
   // R7 Phase A：判断快照——只在"建档/判断变化"这两个跟 profile_events 同源的触发点落一行，
   // 不做流水账（跟时间线的沉淀节奏保持一致）。价格优先取估值引擎算出的 currentPrice
@@ -284,14 +284,15 @@ export function updatePortraitFromPanel({ ticker, panel, valuation = null, quest
       valuationCurrency: fallback.currency,
       priceAtSnapshot: view.valuation?.currentPrice ?? fallback.price,
       falsifiers: view.falsifiers,
-      sessionId
+      sessionId,
+      userId
     });
   }
 
   // UX-7 研究→监控闭环：证伪条件里"明确的价格条件"落成 watch_rules，
   // 看盘状态机 + 定时巡检据此自动盯盘、命中推通知。解析失败不影响画像主流程。
   try {
-    replaceFalsifierRules(ticker, nextRules);
+    replaceFalsifierRules(ticker, nextRules, { sessionId, userId });
   } catch (err) {
     console.error("[companyPortrait] 证伪规则同步失败：", err?.message || err);
   }

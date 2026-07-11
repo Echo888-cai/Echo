@@ -17,10 +17,13 @@ import { computePortfolioReview } from "../services/portfolioReview.js";
 import { enrichPosition } from "../services/portfolioEnrich.js";
 import { getPortfolioSnapshots } from "../services/portfolioSnapshot.js";
 
+const userId = (req) => req.echoUser?.id || "local";
+
 export async function handlePortfolioList(req, res) {
   try {
-    const positions = listPositions();
-    const enriched = await Promise.all(positions.map(enrichPosition));
+    const uid = userId(req);
+    const positions = listPositions(uid);
+    const enriched = await Promise.all(positions.map((p) => enrichPosition(p, uid)));
     sendOk(res, { positions: enriched });
   } catch (error) {
     sendError(res, 500, error.message || "获取持仓失败");
@@ -30,8 +33,9 @@ export async function handlePortfolioList(req, res) {
 /** GET /api/portfolio/review → 组合体检（复用 enrich 的现价/盈亏，纯函数计算）。 */
 export async function handlePortfolioReview(req, res) {
   try {
-    const positions = listPositions();
-    const enriched = await Promise.all(positions.map(enrichPosition));
+    const uid = userId(req);
+    const positions = listPositions(uid);
+    const enriched = await Promise.all(positions.map((p) => enrichPosition(p, uid)));
     sendOk(res, { review: computePortfolioReview(enriched) });
   } catch (error) {
     sendError(res, 500, error.message || "组合体检失败");
@@ -41,7 +45,7 @@ export async function handlePortfolioReview(req, res) {
 /** GET /api/portfolio/snapshots → 每日组合快照（M-1 净值曲线数据源，E9 每日 scheduler 任务落库）。 */
 export async function handlePortfolioSnapshots(req, res) {
   try {
-    sendOk(res, { snapshots: getPortfolioSnapshots(180) });
+    sendOk(res, { snapshots: getPortfolioSnapshots(180, userId(req)) });
   } catch (error) {
     sendError(res, 500, error.message || "获取组合快照失败");
   }
@@ -58,6 +62,7 @@ export async function handlePortfolioUpsert(req, res) {
     const body = await readJsonBody(req);
     const ticker = (body.ticker || "").trim();
     if (!ticker) { sendError(res, 400, "缺少 ticker"); return; }
+    const uid = userId(req);
     const position = upsertPosition(ticker, {
       companyName: body.companyName,
       shares: toNum(body.shares),
@@ -65,8 +70,8 @@ export async function handlePortfolioUpsert(req, res) {
       stopLoss: toNum(body.stopLoss),
       takeProfit: toNum(body.takeProfit),
       note: body.note
-    });
-    sendOk(res, { position: await enrichPosition(position) });
+    }, uid);
+    sendOk(res, { position: await enrichPosition(position, uid) });
   } catch (error) {
     sendError(res, 500, error.message || "保存持仓失败");
   }
@@ -77,7 +82,7 @@ export async function handlePortfolioDelete(req, res) {
     const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
     const ticker = url.searchParams.get("ticker");
     if (!ticker) { sendError(res, 400, "缺少 ticker"); return; }
-    const deleted = deletePosition(ticker);
+    const deleted = deletePosition(ticker, userId(req));
     if (!deleted) { sendError(res, 404, "未找到该持仓"); return; }
     sendOk(res, { deleted: true, ticker });
   } catch (error) {

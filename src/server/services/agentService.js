@@ -178,7 +178,8 @@ export async function runAgent(input, options = {}) {
     documents = [],
     sessionId = null,
     sessionTitle = "",
-    conversationId = null
+    conversationId = null,
+    userId = "local"
   } = input || {};
   if (!company?.ticker) {
     /** @type {Error & {statusCode?: number}} */
@@ -210,7 +211,7 @@ export async function runAgent(input, options = {}) {
       financialsData: data.financialsData, filingsData: data.filingsData, estimatesData: data.estimatesData,
       documents, memory: effectiveMemory, userContext,
       mode: providerStatus.configured ? "local_panel" : "model_key_missing", dataSources: data,
-      history, sessionId, sessionTitle, conversationId, persist
+      history, sessionId, sessionTitle, conversationId, userId, persist
     });
   }
 
@@ -266,7 +267,7 @@ export async function runAgent(input, options = {}) {
       marketSnapshot: data.marketSnapshot, newsSnapshot: data.newsSnapshot,
       financialsData: data.financialsData, filingsData: data.filingsData, estimatesData: data.estimatesData,
       documents, memory: effectiveMemory, userContext, mode: "repair_failed", dataSources: data,
-      history, sessionId, sessionTitle, conversationId, persist
+      history, sessionId, sessionTitle, conversationId, userId, persist
     });
   }
 
@@ -302,12 +303,12 @@ export async function runAgent(input, options = {}) {
   };
 
   result.sessionId = persist
-    ? persistSession(result, profile, { question, userContext, repaired, sessionId, sessionTitle, conversationId, history })
+    ? persistSession(result, profile, { question, userContext, repaired, sessionId, sessionTitle, conversationId, history, userId })
     : (sessionId || null);
   return result;
 }
 
-function assembleLocal({ question, company, filings, marketSnapshot, newsSnapshot, financialsData, filingsData, estimatesData, documents, memory, userContext, mode, dataSources, history = [], sessionId = null, sessionTitle = "", conversationId = null, persist = true }) {
+function assembleLocal({ question, company, filings, marketSnapshot, newsSnapshot, financialsData, filingsData, estimatesData, documents, memory, userContext, mode, dataSources, history = [], sessionId = null, sessionTitle = "", conversationId = null, userId = "local", persist = true }) {
   const profile = companyByTicker(company.ticker) || company;
   const localContent = buildLocalContent({
     question, company: profile, filings,
@@ -330,7 +331,7 @@ function assembleLocal({ question, company, filings, marketSnapshot, newsSnapsho
   };
 
   result.sessionId = persist
-    ? persistSession(result, profile, { question, userContext, repaired: false, sessionId, sessionTitle, conversationId, history })
+    ? persistSession(result, profile, { question, userContext, repaired: false, sessionId, sessionTitle, conversationId, history, userId })
     : (sessionId || null);
   return result;
 }
@@ -355,7 +356,7 @@ function sessionThread(history = [], question = "", content = "") {
   return thread;
 }
 
-function persistSession(result, profile, { question, userContext, repaired, sessionId, sessionTitle, conversationId, history }) {
+function persistSession(result, profile, { question, userContext, repaired, sessionId, sessionTitle, conversationId, history, userId = "local" }) {
   try {
     const saved = saveResearchSession({
       id: sessionId || undefined,
@@ -371,7 +372,7 @@ function persistSession(result, profile, { question, userContext, repaired, sess
       researchStatus: result.decisionPanel?.researchStatus,
       confidence: result.decisionPanel?.confidence,
       thread: sessionThread(history, question, result.content)
-    });
+    }, userId);
     return saved.id;
   } catch (err) {
     // Persistence is best-effort. Don't break the response.

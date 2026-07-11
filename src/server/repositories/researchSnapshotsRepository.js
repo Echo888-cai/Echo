@@ -11,16 +11,16 @@ import { getDb } from "../../db/index.js";
 export function insertResearchSnapshot({
   ticker, snapshotDate, thesis = null, valuationPosition = null,
   valuationBear = null, valuationBase = null, valuationBull = null, valuationCurrency = null,
-  priceAtSnapshot = null, falsifiers = [], sessionId = null
+  priceAtSnapshot = null, falsifiers = [], sessionId = null, userId = "local"
 }) {
   try {
     getDb().prepare(`
       INSERT INTO research_snapshots
-        (ticker, snapshot_date, thesis, valuation_position, valuation_bear, valuation_base, valuation_bull,
+        (user_id, ticker, snapshot_date, thesis, valuation_position, valuation_bear, valuation_base, valuation_bull,
          valuation_currency, price_at_snapshot, falsifiers_json, session_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      String(ticker || "").toUpperCase(), snapshotDate, thesis, valuationPosition,
+      userId, String(ticker || "").toUpperCase(), snapshotDate, thesis, valuationPosition,
       valuationBear, valuationBase, valuationBull, valuationCurrency,
       priceAtSnapshot, JSON.stringify(Array.isArray(falsifiers) ? falsifiers.slice(0, 6) : []),
       sessionId
@@ -51,23 +51,24 @@ function hydrate(row) {
 }
 
 /** 某 ticker 的全部快照，按时间正序（最早在前，复盘时间线用）。 */
-export function listSnapshots(ticker) {
+export function listSnapshots(ticker, userId = "local") {
   return getDb()
-    .prepare("SELECT * FROM research_snapshots WHERE ticker = ? ORDER BY id ASC")
-    .all(String(ticker || "").toUpperCase())
+    .prepare("SELECT * FROM research_snapshots WHERE user_id = ? AND ticker = ? ORDER BY id ASC")
+    .all(userId, String(ticker || "").toUpperCase())
     .map(hydrate);
 }
 
 /** 有快照的全部 ticker + 最早/最新快照时间（供全局记分卡与 Phase C 复盘提醒用）。 */
-export function listSnapshotTickers() {
+export function listSnapshotTickers(userId = "local") {
   return getDb()
     .prepare(`
       SELECT ticker, MIN(created_at) AS first_snapshot_at, MAX(created_at) AS last_snapshot_at, COUNT(*) AS snapshot_count
       FROM research_snapshots
+      WHERE user_id = ?
       GROUP BY ticker
       ORDER BY ticker
     `)
-    .all()
+    .all(userId)
     .map((r) => ({
       ticker: r.ticker,
       firstSnapshotAt: r.first_snapshot_at,

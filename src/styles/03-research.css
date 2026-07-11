@@ -549,6 +549,7 @@
 }
 .pr-exp-hk { background: #b26a00; display: flex; align-items: center; padding-left: 8px; white-space: nowrap; }
 .pr-exp-us { background: var(--blue-ink); display: flex; align-items: center; padding-left: 8px; white-space: nowrap; }
+.pr-exp-cn { background: var(--ink-2); display: flex; align-items: center; padding-left: 8px; white-space: nowrap; }
 .pr-weights {
   display: flex;
   flex-wrap: wrap;

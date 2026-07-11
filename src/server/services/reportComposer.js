@@ -49,7 +49,7 @@ function sourceLines(panel) {
   if (!lines.length) {
     const price = panel?.price?.value && panel.price.value !== "暂不可用" ? panel.price.value : "公开行情";
     lines.push(`- 行情：${panel?.price?.source || "公开行情"}（${price}）`);
-    lines.push("- 公司档案：Luvio 本地研究档案");
+    lines.push("- 公司档案：Echo Research 本地研究档案");
   }
   return lines;
 }

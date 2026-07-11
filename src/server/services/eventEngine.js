@@ -108,7 +108,7 @@ const DEFAULT_PREFS = {
  * 产出提醒事件；临近且该 ticker 有活跃证伪规则时，标注"N 条证伪条件将被检验"。
  * @returns {Promise<{ event: object|null, status: "ok"|"empty"|"error", reason?: string, earnings: object|null }>}
  */
-async function fetchEarningsEvent(company) {
+async function fetchEarningsEvent(company, userId = "local") {
   let info;
   try {
     info = await getNextEarnings(company.ticker);
@@ -123,7 +123,7 @@ async function fetchEarningsEvent(company) {
   const days = Math.round((new Date(info.nextDate).getTime() - new Date(today).getTime()) / 86400000);
   if (days > 14) return { event: null, status: "empty", earnings: info }; // 事件流只在 T-14 内提醒，earnings 字段本身不受此限制
 
-  const activeRules = listRules(company.ticker).length;
+  const activeRules = listRules(company.ticker, userId).length;
   const rulesNote = activeRules ? `，${activeRules} 条证伪条件将被检验` : "";
   return {
     status: "ok",
@@ -172,8 +172,8 @@ async function fetchNewsEvents(company) {
 }
 
 /** 持仓纪律提醒：现价触及止损/止盈线，或相对成本大幅回撤时产出事件。 */
-async function fetchPositionAlert(company) {
-  const pos = getPosition(company.ticker);
+async function fetchPositionAlert(company, userId = "local") {
+  const pos = getPosition(company.ticker, userId);
   if (!pos || (!pos.stopLoss && !pos.takeProfit && !pos.avgCost)) return null;
   let price;
   try {
@@ -207,10 +207,10 @@ async function fetchPositionAlert(company) {
  * 只拉行情核对止损/止盈/回撤，不碰新闻/财报日历（那是盘前 digest 的事）。
  * @returns {Promise<object[]>} 命中的 position_alert 事件列表（带 line: stop|take|drawdown）
  */
-export async function buildPositionAlerts(positions = []) {
+export async function buildPositionAlerts(positions = [], userId = "local") {
   const alerts = await Promise.all(
     positions.map((pos) =>
-      fetchPositionAlert({ ticker: pos.ticker, nameZh: pos.companyName }).catch(() => null)
+      fetchPositionAlert({ ticker: pos.ticker, nameZh: pos.companyName }, userId).catch(() => null)
     )
   );
   return alerts.filter(Boolean);
@@ -318,16 +318,16 @@ export function dedupeSimilarNews(events) {
  * 为单家公司收集事件，并返回明确状态（错误不再被静默吞掉）。
  * @returns {Promise<{ ticker: string, companyName: string, market: string, status: "ok"|"empty"|"error", reasons: string[], events: object[], earnings: object|null }>}
  */
-async function collectCompanyEvents(company, cfg) {
+async function collectCompanyEvents(company, cfg, userId = "local") {
   const ticker = company.ticker;
   const companyName = company.nameZh || ticker;
   const market = detectMarket(ticker);
   const reasons = [];
 
   const [earnings, news, positionAlert] = await Promise.all([
-    fetchEarningsEvent(company),
+    fetchEarningsEvent(company, userId),
     fetchNewsEvents(company),
-    fetchPositionAlert(company).catch(() => null)
+    fetchPositionAlert(company, userId).catch(() => null)
   ]);
 
   const events = [];
@@ -369,13 +369,13 @@ async function collectCompanyEvents(company, cfg) {
  * 为一组公司构建 digest。
  * @param {Array<{ticker: string, nameZh?: string}>} companies
  * @param {{blockedKinds?: string[], highDailyCap?: number, lowPerCompany?: number}} [prefs]
- * @param {{slot?: string}} [opts]
+ * @param {{slot?: string, userId?: string}} [opts]
  * @returns {Promise<{generatedAt: string, slot: string, counts: Object, events: object[], groups: object[], failures: object[], summary: string, severityLabel: Object}>}
  */
-export async function buildDigest(companies = [], prefs = {}, { slot = "premarket" } = {}) {
+export async function buildDigest(companies = [], prefs = {}, { slot = "premarket", userId = "local" } = {}) {
   const cfg = { ...DEFAULT_PREFS, ...prefs };
   const groups = await Promise.all(
-    companies.slice(0, 30).map((company) => collectCompanyEvents(company, cfg))
+    companies.slice(0, 30).map((company) => collectCompanyEvents(company, cfg, userId))
   );
 
   // 全局 High 日上限：跨公司限制 high 总量（避免整体刷屏）。

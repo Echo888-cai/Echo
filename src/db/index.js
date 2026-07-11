@@ -40,7 +40,11 @@ export function getAllCompanies() {
 export function getCompanyByTicker(ticker) {
   const db2 = getDb();
   const normalized = normalizeTicker(ticker);
-  const row = db2.prepare("SELECT c.*, d.* FROM companies c LEFT JOIN company_details d ON c.ticker = d.ticker WHERE c.ticker = ?").get(normalized);
+  // d.* 放前面、c.* 放后面：两表都有 ticker 列，重名列后者覆盖前者——company_details
+  // 没有该 ticker 的行时 d.ticker 是 NULL，若 c.* 在前会被这个 NULL 覆盖掉真实 ticker
+  // （实测：任何从未被研究过、没有 company_details 行的公司都会中招，返回 ticker:null，
+  // 不是 CN 专属问题，只是被新种子的 A 股率先撞到）。
+  const row = db2.prepare("SELECT d.*, c.* FROM companies c LEFT JOIN company_details d ON c.ticker = d.ticker WHERE c.ticker = ?").get(normalized);
   if (!row) return null;
   return hydrateCompany(row);
 }
@@ -102,24 +106,25 @@ export function saveMarketSnapshot(data) {
 
 // ─── Research sessions ──────────────────────────────────────
 
-export function saveSession(session) {
+export function saveSession(session, userId = "local") {
   const db2 = getDb();
   const stmt = db2.prepare(`
-    INSERT OR REPLACE INTO research_sessions (id, ticker, question, status, report_markdown, rating, confidence, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    INSERT OR REPLACE INTO research_sessions (id, user_id, ticker, question, status, report_markdown, rating, confidence, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
   `);
-  stmt.run(session.id, session.ticker, session.question, session.status || "draft", session.reportMarkdown || null, session.rating || null, session.confidence || null);
+  stmt.run(session.id, userId, session.ticker, session.question, session.status || "draft", session.reportMarkdown || null, session.rating || null, session.confidence || null);
 }
 
-export function getRecentSessions(limit = 20) {
+export function getRecentSessions(limit = 20, userId = "local") {
   const db2 = getDb();
   return db2.prepare(`
     SELECT s.*, c.name_zh as company_name
     FROM research_sessions s
     LEFT JOIN companies c ON s.ticker = c.ticker
+    WHERE s.user_id = ?
     ORDER BY s.updated_at DESC
     LIMIT ?
-  `).all(limit);
+  `).all(userId, limit);
 }
 
 // ─── Helpers ────────────────────────────────────────────────

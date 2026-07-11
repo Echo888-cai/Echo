@@ -14,6 +14,8 @@
  * 到 llm_audit（`insertLlmAudit`，失败不抛错），取代此前纯 console 的运维盲区。
  */
 import { insertLlmAudit } from "../repositories/llmAuditRepository.js";
+import { currentUserId } from "./requestContext.js";
+import { estimateModelCost } from "./quotaService.js";
 
 const PROVIDER_TIMEOUT_MS = 45000;
 
@@ -76,6 +78,15 @@ function buildRequestBody(providerId, model, messages) {
   return body;
 }
 
+function usageOf(raw) {
+  const inputTokens = Number(raw?.prompt_tokens ?? raw?.input_tokens);
+  const outputTokens = Number(raw?.completion_tokens ?? raw?.output_tokens);
+  return {
+    inputTokens: Number.isFinite(inputTokens) ? inputTokens : null,
+    outputTokens: Number.isFinite(outputTokens) ? outputTokens : null
+  };
+}
+
 /** Get the list of configured providers, sorted by priority. */
 function configuredProviders() {
   const configured = PROVIDERS
@@ -118,12 +129,14 @@ async function tryProvider(provider) {
 
     const result = await response.json();
     const latencyMs = Date.now() - start;
+    const usage = usageOf(result.usage);
     return {
       provider: provider.id,
       model,
       content: result.choices?.[0]?.message?.content || result.output_text || result.output?.[0]?.content || "",
       latencyMs,
-      label: provider.label
+      label: provider.label,
+      ...usage
     };
   } catch (error) {
     clearTimeout(timer);
@@ -155,16 +168,17 @@ export async function callModel({ system, user }) {
   for (const p of providers) p.cachedMessages = messages;
 
   const errors = [];
+  const userId = currentUserId();
   for (const provider of providers) {
     const attemptStart = Date.now();
     try {
       const result = await tryProvider(provider);
-      insertLlmAudit({ provider: provider.id, model: result.model, kind: "chat", status: "ok", latencyMs: result.latencyMs });
+      insertLlmAudit({ provider: provider.id, model: result.model, kind: "chat", status: "ok", latencyMs: result.latencyMs, userId, inputTokens: result.inputTokens, outputTokens: result.outputTokens, estimatedCostUsd: estimateModelCost(result.inputTokens, result.outputTokens) });
       // Clean up
       for (const p of providers) delete p.cachedMessages;
       return result;
     } catch (err) {
-      insertLlmAudit({ provider: provider.id, model: process.env[provider.envModel] || provider.defaultModel, kind: "chat", status: "error", latencyMs: Date.now() - attemptStart, errorDetail: err.message });
+      insertLlmAudit({ provider: provider.id, model: process.env[provider.envModel] || provider.defaultModel, kind: "chat", status: "error", latencyMs: Date.now() - attemptStart, errorDetail: err.message, userId });
       errors.push(`${provider.label}: ${err.message}`);
     }
   }
@@ -194,14 +208,15 @@ export async function callModelStream({ system, user, onToken, onReasoning }) {
     { role: "user", content: user }
   ];
   const errors = [];
+  const userId = currentUserId();
   for (const provider of providers) {
     const attemptStart = Date.now();
     try {
       const result = await streamProvider(provider, messages, onToken, onReasoning);
-      insertLlmAudit({ provider: provider.id, model: result.model, kind: "stream", status: "ok", latencyMs: result.latencyMs });
+      insertLlmAudit({ provider: provider.id, model: result.model, kind: "stream", status: "ok", latencyMs: result.latencyMs, userId, inputTokens: result.inputTokens, outputTokens: result.outputTokens, estimatedCostUsd: estimateModelCost(result.inputTokens, result.outputTokens) });
       return result;
     } catch (err) {
-      insertLlmAudit({ provider: provider.id, model: process.env[provider.envModel] || provider.defaultModel, kind: "stream", status: "error", latencyMs: Date.now() - attemptStart, errorDetail: err.message });
+      insertLlmAudit({ provider: provider.id, model: process.env[provider.envModel] || provider.defaultModel, kind: "stream", status: "error", latencyMs: Date.now() - attemptStart, errorDetail: err.message, userId });
       errors.push(`${provider.label}: ${err.message}`);
     }
   }
@@ -231,6 +246,7 @@ async function streamProvider(provider, messages, onToken, onReasoning) {
     }
 
     let full = "";
+    let usage = { inputTokens: null, outputTokens: null };
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -248,6 +264,7 @@ async function streamProvider(provider, messages, onToken, onReasoning) {
         if (data === "[DONE]") { buffer = ""; break; }
         try {
           const json = JSON.parse(data);
+          if (json.usage) usage = usageOf(json.usage);
           const delta = json.choices?.[0]?.delta || {};
           // 思考型模型（deepseek-v4）先吐 reasoning_content（思考过程），content 才是最终
           // 答案。reasoning 期不进 full、只回调 onReasoning，让前端显示"正在推理"而非空白。
@@ -258,7 +275,7 @@ async function streamProvider(provider, messages, onToken, onReasoning) {
     }
     clearTimeout(timer);
     if (!full) throw new Error("流式返回空内容");
-    return { provider: provider.id, model, content: full, latencyMs: Date.now() - start, label: provider.label };
+    return { provider: provider.id, model, content: full, latencyMs: Date.now() - start, label: provider.label, ...usage };
   } catch (error) {
     clearTimeout(timer);
     if (error.name === "AbortError") throw new Error(`${provider.label} 流式请求超时 (${STREAM_TIMEOUT_MS}ms)`, { cause: error });

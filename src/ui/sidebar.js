@@ -5,7 +5,7 @@ import { esc, marketLabelOf, isNum, fmtSigned, dirClass, fmtPct, pnlDir } from "
 
 // desk-head 副标题：永远给可读信息，绝不显示占位的"待补充"。优先市场标签，
 // 再补真实行业（排除"美股/港股/待补充"这类占位）。
-const PLACEHOLDER_INDUSTRY = new Set(["美股", "港股", "待补充", "待定", ""]);
+const PLACEHOLDER_INDUSTRY = new Set(["美股", "港股", "A股", "待补充", "待定", ""]);
 function companySubtitle(company) {
   if (!company) return "问一句就开始，复杂研究再沉到底层。";
   const mkt = marketLabelOf(company.ticker);

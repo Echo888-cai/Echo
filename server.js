@@ -12,6 +12,8 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadEnvFile } from "./src/server/utils/env.js";
+import { isAllowedStaticPath, rateLimitCheck, generalBucket, heavyBucket } from "./src/server/utils/httpGuard.js";
+import { sendError } from "./src/server/utils/async.js";
 
 // Routes
 import { handleStatusApi } from "./src/server/routes/status.js";
@@ -28,7 +30,11 @@ import { handleWatchDesk, handleWatchStock, handleWatchTrack, handleWatchUntrack
 import { handlePortfolioList, handlePortfolioUpsert, handlePortfolioDelete, handlePortfolioReview, handlePortfolioSnapshots } from "./src/server/routes/portfolio.js";
 import { handleNotificationsList, handleNotificationsUnread, handleNotificationsRead, handleNotificationsTest, handleSchedulerStatus } from "./src/server/routes/notifications.js";
 import { handleHkFinancialsList, handleHkFinancialsIngest } from "./src/server/routes/hkFinancials.js";
+import { handleAuthLogin, handleAuthRegister, handleAuthLogout, handleAuthMe, handleAuthInvite } from "./src/server/routes/auth.js";
+import { handlePreferencesGet, handlePreferencesUpdate, handleFeedbackCreate } from "./src/server/routes/preferences.js";
+import { resolveRequestUser } from "./src/server/services/authService.js";
 import { startScheduler } from "./src/server/services/scheduler.js";
+import { enterRequestUser } from "./src/server/services/requestContext.js";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 loadEnvFile(root);
@@ -53,9 +59,45 @@ function resolvePath(urlPath) {
   return join(root, normalized);
 }
 
+/** E11：白名单判定用的规范化 pathname（与 resolvePath 同一套 decode+normalize）。 */
+function normalizedPathname(urlPath) {
+  try {
+    return normalize(decodeURIComponent(urlPath.split("?")[0]));
+  } catch {
+    return "/"; // 畸形编码一律当根路径处理（回 SPA 壳）
+  }
+}
+
 const server = createServer(async (req, res) => {
   const url = req.url || "/";
   const method = req.method || "GET";
+
+  // ── E11 限速：API 才计数（静态资源不算），重型端点单独更紧的桶 ──
+  if (url.startsWith("/api/")) {
+    const limited = rateLimitCheck(req, normalizedPathname(url));
+    if (limited) return sendError(res, limited.status, limited.message);
+
+    // ── U-1 CSRF：非 GET 一律要求自定义头（跨站表单/图片发不出自定义头；
+    //    前端 fetch 统一带 X-Echo-Auth: 1）。SameSite=Lax 是第二道锁。──
+    if (method !== "GET" && method !== "HEAD" && req.headers["x-echo-auth"] !== "1") {
+      return sendError(res, 403, "缺少校验请求头（请从 Echo Research 页面发起请求）");
+    }
+
+    // ── U-1 鉴权：/api/auth/* 公开；其余端点需要身份。
+    //    users 表为空 = 单用户 legacy 模式（恒为 owner 'local'，与今天行为一致），
+    //    建 owner 账号后自动进入多用户模式（PLAN v5 E12）。──
+    if (method === "POST" && url.startsWith("/api/auth/login")) return handleAuthLogin(req, res);
+    if (method === "POST" && url.startsWith("/api/auth/register")) return handleAuthRegister(req, res);
+    if (method === "POST" && url.startsWith("/api/auth/logout")) return handleAuthLogout(req, res);
+    if (method === "POST" && url.startsWith("/api/auth/invite")) return handleAuthInvite(req, res);
+    if (method === "GET" && url.startsWith("/api/auth/me")) return handleAuthMe(req, res);
+    const user = resolveRequestUser(req);
+    if (!user) return sendError(res, 401, "请先登录");
+    // 后续路由从 req 上取当前用户（U-2 起私有数据全部按它过滤，红线 18）。
+    /** @type {any} */ (req).echoUser = user;
+    // U-4：让本请求内的所有模型调用自动归属当前用户，不在几十层 service 之间传全局单例。
+    enterRequestUser(user.id);
+  }
 
   // ── Company search ─────────────────────────────────────
   if (method === "GET" && url.startsWith("/api/companies/verify")) return handleCompanyVerify(req, res);
@@ -64,6 +106,9 @@ const server = createServer(async (req, res) => {
 
   // ── Status ─────────────────────────────────────────────
   if (method === "GET" && url.startsWith("/api/status")) return handleStatusApi(req, res);
+  if (method === "GET" && url.startsWith("/api/preferences")) return handlePreferencesGet(req, res);
+  if (method === "PATCH" && url.startsWith("/api/preferences")) return handlePreferencesUpdate(req, res);
+  if (method === "POST" && url.startsWith("/api/feedback")) return handleFeedbackCreate(req, res);
 
   // ── Documents (upload parsing for the composer) ────────
   if (method === "POST" && url.startsWith("/api/parse-document")) return handleDocumentParseApi(req, res);
@@ -128,23 +173,33 @@ const server = createServer(async (req, res) => {
     return handleSessionDelete(req, res, id);
   }
 
-  // ── Static file fallback ───────────────────────────────
-  try {
-    const filePath = resolvePath(url);
-    const body = await readFile(filePath);
-    res.writeHead(200, { "Content-Type": mimeTypes[extname(filePath)] || "application/octet-stream" });
-    res.end(body);
-  } catch {
+  // ── Static files（E11 白名单，红线 19）────────────────────
+  // 名单内的真实文件才发；名单外（含 /.env、/luvio.db、docs/、src/server/**）与
+  // 不存在的路径一律回 SPA 壳——对外不区分"被拒"和"不存在"，不泄露文件布局。
+  if (method === "GET" || method === "HEAD") {
+    const pathname = normalizedPathname(url);
+    if (isAllowedStaticPath(pathname)) {
+      try {
+        const filePath = resolvePath(url);
+        const body = await readFile(filePath);
+        res.writeHead(200, { "Content-Type": mimeTypes[extname(filePath)] || "application/octet-stream" });
+        res.end(body);
+        return;
+      } catch { /* 名单内但文件缺失：落到下面的 SPA 壳 */ }
+    }
     try {
       const body = await readFile(join(root, "index.html"));
       res.writeHead(200, { "Content-Type": mimeTypes[".html"] });
       res.end(body);
-    } catch {
-      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-      res.end("Not found");
-    }
+      return;
+    } catch { /* index.html 都读不到：落到 404 */ }
   }
+  res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+  res.end("Not found");
 });
+
+// E11：限速桶按小时清理闲置 key，防止长期运行下 Map 膨胀。
+setInterval(() => { generalBucket.prune(); heavyBucket.prune(); }, 3600_000).unref();
 
 // 全局兜底：单用户本地研究工具，保活 >> 崩溃。任何漏网的 unhandled rejection / uncaught
 // exception 只记日志，绝不让 Node 24 据此杀进程（A-P0.1：一条坏请求曾掀翻整个后台）。

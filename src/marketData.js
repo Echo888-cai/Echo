@@ -2,7 +2,8 @@ import { normalizeTicker } from "./data.js";
 import {
   detectMarket,
   marketCurrency,
-  tencentSymbol as toTencentHongKongSymbol,
+  tencentSymbol as toTencentSymbol,
+  sinaSymbol as toSinaSymbol,
   finnhubSymbol,
   alphaVantageSymbol as toAlphaVantageSymbol,
   twelveDataSymbol as toTwelveDataSymbol,
@@ -58,7 +59,7 @@ async function fetchJson(url, options = {}) {
       ...options,
       signal: controller.signal,
       headers: {
-        "User-Agent": "Luvio/0.1 research data adapter",
+        "User-Agent": "EchoResearch/1.0 research data adapter",
         Accept: "application/json",
         ...(options.headers || {})
       }
@@ -81,7 +82,7 @@ async function fetchText(url, options = {}) {
       ...options,
       signal: controller.signal,
       headers: {
-        "User-Agent": "Mozilla/5.0 Luvio/0.1",
+        "User-Agent": "Mozilla/5.0 EchoResearch/1.0",
         Accept: "text/plain,*/*",
         ...(options.headers || {})
       }
@@ -97,7 +98,7 @@ async function fetchText(url, options = {}) {
 }
 
 async function fetchTencentQuote(ticker) {
-  const symbol = toTencentHongKongSymbol(ticker);
+  const symbol = toTencentSymbol(ticker);
   const text = await fetchText(`https://qt.gtimg.cn/q=${symbol}`);
   const match = text.match(/="(.+)";?\s*$/);
   if (!match) throw new Error("Tencent quote 没有返回报价");
@@ -105,7 +106,7 @@ async function fetchTencentQuote(ticker) {
   const price = numberOrNull(fields[3]);
   if (!price) throw new Error("Tencent quote 缺少价格");
   return buildSnapshot("Tencent Finance", ticker, {
-    currency: "HKD",
+    currency: marketCurrency(ticker),
     price,
     previousClose: fields[4],
     open: fields[5],
@@ -119,6 +120,34 @@ async function fetchTencentQuote(ticker) {
     week52High: fields[48],
     week52Low: fields[49],
     asOf: fields[30] ? `${fields[30].replaceAll("/", "-").replace(" ", "T")}+08:00` : undefined
+  });
+}
+
+// 新浪财经 A 股行情：免费无 key，但非官方接口，必须带 Referer 否则拒绝；格式可能漂移，
+// 仅作 A 股的第二行情源（腾讯为主），不用于港股/美股。
+async function fetchSinaQuote(ticker) {
+  if (detectMarket(ticker) !== "CN") throw new Error("Sina quote 仅支持 A 股");
+  const symbol = toSinaSymbol(ticker);
+  const text = await fetchText(`https://hq.sinajs.cn/list=${symbol}`, {
+    headers: { Referer: "https://finance.sina.com.cn/" }
+  });
+  const match = text.match(/="(.*)";?\s*$/);
+  if (!match || !match[1]) throw new Error("Sina quote 没有返回报价");
+  const fields = match[1].split(",");
+  const price = numberOrNull(fields[3]);
+  if (!price) throw new Error("Sina quote 缺少价格");
+  const previousClose = numberOrNull(fields[2]);
+  return buildSnapshot("Sina Finance", ticker, {
+    currency: "CNY",
+    price,
+    previousClose,
+    open: fields[1],
+    high: fields[4],
+    low: fields[5],
+    volume: fields[8],
+    change: previousClose ? price - previousClose : null,
+    changePercent: previousClose ? ((price - previousClose) / previousClose) * 100 : null,
+    asOf: fields[30] && fields[31] ? `${fields[30]}T${fields[31]}+08:00` : undefined
   });
 }
 
@@ -210,10 +239,16 @@ export async function getMarketSnapshot(ticker) {
   // (company-news 大包) / 评级同时抢占，一慢就拖到 5s+ 撞上游超时 → 行情槽经常 missing。
   // 竞速把延迟压到最快源即可返回。只让额度宽裕的源参与竞速（Finnhub 60/min、
   // TwelveData 8/min、腾讯免费）；AlphaVantage 免费仅 25/天，留作兜底不参与竞速。
-  const isUS = detectMarket(ticker) === "US";
-  const fast = isUS ? [fetchFinnhub, fetchTwelveData] : [fetchTencentQuote, fetchFinnhub];
-  const fallback = isUS
-    ? [fetchAlphaVantage, fetchYahooChart]
+  // A 股：Finnhub/AlphaVantage/TwelveData 免费档基本不覆盖，主力是腾讯+新浪两个免费源；
+  // 其余国际源仍保留在兜底链尾部（万一某天覆盖到了，白拿；拿不到就诚实报错，不额外处理）。
+  const market = detectMarket(ticker);
+  const fast =
+    market === "US" ? [fetchFinnhub, fetchTwelveData]
+    : market === "CN" ? [fetchTencentQuote, fetchSinaQuote]
+    : [fetchTencentQuote, fetchFinnhub];
+  const fallback =
+    market === "US" ? [fetchAlphaVantage, fetchYahooChart]
+    : market === "CN" ? [fetchTwelveData, fetchYahooChart]
     : [fetchTwelveData, fetchAlphaVantage, fetchYahooChart];
   const errors = [];
   try {
@@ -231,7 +266,7 @@ export async function getMarketSnapshot(ticker) {
   return {
     source: "未接入",
     ticker: normalizeTicker(ticker),
-    currency: "HKD",
+    currency: marketCurrency(ticker),
     price: null,
     previousClose: null,
     change: null,
@@ -315,7 +350,7 @@ export async function getRangeReturns(ticker) {
 // oldest-first。用户明确"港股不付费，免费有啥用啥"，所以走这条免费腿，拿不到就诚实留空。
 async function fetchTencentDailyCloses(ticker) {
   if (detectMarket(ticker) === "US") return [];
-  const symbol = toTencentHongKongSymbol(ticker); // 0700.HK → hk00700
+  const symbol = toTencentSymbol(ticker); // 0700.HK → hk00700
   if (!symbol) return [];
   try {
     const data = await fetchJson(

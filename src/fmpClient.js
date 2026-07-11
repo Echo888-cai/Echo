@@ -73,7 +73,7 @@ async function rawFetch(url, timeoutMs) {
   try {
     const response = await fetch(url, {
       signal: controller.signal,
-      headers: { "User-Agent": "Luvio/0.1 fmp client", Accept: "application/json" }
+      headers: { "User-Agent": "EchoResearch/1.0 fmp client", Accept: "application/json" }
     });
     const text = await response.text();
     return { ok: response.ok, status: response.status, text };

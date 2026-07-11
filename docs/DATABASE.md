@@ -1,6 +1,6 @@
-# Luvio Database Guide
+# Echo Research Database Guide
 
-Luvio uses **SQLite** (via `better-sqlite3`) as its local database for company data,
+Echo Research uses **SQLite** (via `better-sqlite3`) as its local database for company data,
 market snapshots, and research sessions. The DB file is `luvio.db` at the project root.
 
 ## Why SQLite

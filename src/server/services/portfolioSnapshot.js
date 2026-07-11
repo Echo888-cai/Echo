@@ -44,16 +44,16 @@ export function computeSnapshotTotals(enriched = []) {
 }
 
 /** scheduler 每日任务：拉现价 → 丰富化 → 算总量 → upsert 当天一行（幂等）。 */
-export async function recordDailySnapshot() {
-  const positions = listPositions();
+export async function recordDailySnapshot(userId = "local") {
+  const positions = listPositions(userId);
   if (!positions.length) return "无持仓，跳过快照";
-  const enriched = await Promise.all(positions.map(enrichPosition));
+  const enriched = await Promise.all(positions.map((p) => enrichPosition(p, userId)));
   const totals = computeSnapshotTotals(enriched);
   const date = beijingDate();
-  upsertSnapshot({ date, ...totals });
+  upsertSnapshot({ date, ...totals }, userId);
   return `${date} 组合快照已记录（${totals.positionCount} 笔持仓${totals.totalValueUsd != null ? `，≈$${totals.totalValueUsd}` : "，现价未核到"}）`;
 }
 
-export function getPortfolioSnapshots(limit = 180) {
-  return listSnapshots(limit);
+export function getPortfolioSnapshots(limit = 180, userId = "local") {
+  return listSnapshots(limit, userId);
 }

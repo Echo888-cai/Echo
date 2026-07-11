@@ -1,7 +1,9 @@
 // ── 页面外壳：顶栏（品牌 / 导航 / 通知铃 / 主题切换）+ 全局侧栏 ─────────
 import { S, currentRoute, getTheme } from "./state.js";
+import { esc } from "./format.js";
 import { renderNotifPanel } from "./notifications.js";
 import { renderGlobalSidebar } from "./sidebar.js";
+import { renderOnboarding, renderFeedback } from "./beta.js";
 
 const app = document.querySelector("#app");
 
@@ -27,9 +29,11 @@ export function shell(content, { sidebar = true } = {}) {
             ${S.notifOpen ? renderNotifPanel() : ""}
           </span>
           <button class="theme-toggle" type="button" data-action="toggle-theme" aria-label="切换深色 / 浅色" title="切换深色 / 浅色">${themeIcon()}</button>
+          ${S.multiUser && S.authUser ? `<button class="auth-chip" type="button" data-action="logout" title="退出登录（当前：${esc(S.authUser.displayName)}）"><span>${esc(S.authUser.displayName)}</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></button>` : ""}
         </nav>
       </header>
-      <main>${main}</main>
+      <main>${renderOnboarding()}${main}</main>
+      ${renderFeedback()}
     </div>`;
 }
 

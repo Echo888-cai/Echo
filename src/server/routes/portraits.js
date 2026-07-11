@@ -15,11 +15,13 @@ import { computeTickerScorecard, computeGlobalScorecard } from "../services/rese
 import { getMarketSnapshot } from "../../marketData.js";
 import { getEarningsCalendarRow } from "../repositories/earningsCalendarRepository.js";
 
+const userId = (req) => req.echoUser?.id || "local";
+
 export async function handleProfileList(req, res) {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
     const limit = Math.min(100, parseInt(url.searchParams.get("limit") || "50", 10));
-    const profiles = listCompanyProfiles(limit);
+    const profiles = listCompanyProfiles(limit, userId(req));
     sendOk(res, { profiles, count: profiles.length });
   } catch (error) {
     sendError(res, 500, error.message || "获取画像列表失败");
@@ -31,7 +33,7 @@ export async function handleProfileGet(req, res) {
     const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
     const ticker = url.searchParams.get("ticker");
     if (!ticker) { sendError(res, 400, "缺少 ticker"); return; }
-    const profile = getCompanyProfile(ticker);
+    const profile = getCompanyProfile(ticker, userId(req));
     if (!profile) { sendError(res, 404, "未找到该公司画像"); return; }
     // 总是现渲染：老库存的 profile_md 是旧格式，且时间线可能有 upsert 之外追加的事件。
     const markdown = renderProfileMarkdown(profile.ticker, profile, profile.events);
@@ -46,7 +48,7 @@ export async function handleProfileDelete(req, res) {
     const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
     const ticker = url.searchParams.get("ticker");
     if (!ticker) { sendError(res, 400, "缺少 ticker"); return; }
-    const deleted = deleteCompanyProfile(ticker);
+    const deleted = deleteCompanyProfile(ticker, userId(req));
     if (!deleted) { sendError(res, 404, "未找到该公司画像"); return; }
     sendOk(res, { deleted: true, ticker });
   } catch (error) {
@@ -60,7 +62,7 @@ export async function handleProfileReview(req, res) {
     const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
     const ticker = url.searchParams.get("ticker");
     if (!ticker) { sendError(res, 400, "缺少 ticker"); return; }
-    const snapshots = listSnapshots(ticker);
+    const snapshots = listSnapshots(ticker, userId(req));
     let current = { price: null };
     try {
       const snap = await getMarketSnapshot(ticker);
@@ -80,10 +82,11 @@ export async function handleProfileReview(req, res) {
 /** R7 Phase B：全局研究记分卡——跨全部有快照的公司汇总（设置页用）。 */
 export async function handleResearchScorecard(req, res) {
   try {
-    const tickers = listSnapshotTickers();
+    const uid = userId(req);
+    const tickers = listSnapshotTickers(uid);
     const perTicker = await Promise.all(
       tickers.map(async ({ ticker }) => {
-        const snapshots = listSnapshots(ticker);
+        const snapshots = listSnapshots(ticker, uid);
         let current = { price: null };
         try {
           const snap = await getMarketSnapshot(ticker);

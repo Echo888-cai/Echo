@@ -1,25 +1,27 @@
 /**
- * Seed script — populates luvio.db with 500+ HK companies + detail overrides.
+ * Seed script — populates luvio.db with HK + CN companies + detail overrides.
  *
  * Usage: node scripts/seed-db.js
  *   - Creates/resets the companies and company_details tables
- *   - Imports the 500+ stock universe from src/data/hkStocks.js
+ *   - Imports the HK stock universe from src/data/hkStocks.js
+ *   - Imports the staged CN (A股) core universe from src/data/cnStocks.js
  *   - Merges detail overrides from src/data.js
- *   - Safe to re-run (idempotent via INSERT OR REPLACE)
+ *   - Safe to re-run (idempotent via INSERT OR REPLACE, upsert-only — never deletes rows,
+ *     since companies is FK-referenced by portfolio_positions/watch_rules/research_sessions
+ *     on a live DB; a prior DELETE-then-reinsert here corrupted company_details in production)
  */
 import { getDb } from "../src/db/index.js";
-import stocks from "../src/data/hkStocks.js";
+import hkStocks from "../src/data/hkStocks.js";
+import cnStocks from "../src/data/cnStocks.js";
 import { companies } from "../src/data.js";
+import { detectMarket } from "../src/market.js";
 
 const db = getDb();
-
-// Clear existing data for clean reseed
-db.exec("DELETE FROM company_details");
-db.exec("DELETE FROM companies");
+const stocks = [...hkStocks, ...cnStocks];
 
 const insertCompany = db.prepare(`
   INSERT OR REPLACE INTO companies (ticker, name_zh, name_en, sector, industry, listing_status, exchange, currency, is_hsi, market_cap_category, updated_at)
-  VALUES (?, ?, ?, ?, ?, 'active', 'HKEX', 'HKD', ?, ?, datetime('now'))
+  VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, datetime('now'))
 `);
 
 const insertDetails = db.prepare(`
@@ -32,16 +34,20 @@ let count = 0;
 
 console.log(`Seeding ${stocks.length} stocks...`);
 
-for (const [ticker, nameZh, nameEn, sector, industry, isHsi] of stocks) {
+for (const [ticker, nameZh, nameEn, sector, industry, isIndexFlag] of stocks) {
   if (seen.has(ticker)) continue;
   seen.add(ticker);
 
   // Determine market cap category roughly by sector/name
   let mcapCat = "mid";
-  if (isHsi) mcapCat = "large";
+  if (isIndexFlag) mcapCat = "large";
   else if (sector === "科技互联网" || sector === "金融与保险") mcapCat = "mid-large";
 
-  insertCompany.run(ticker, nameZh, nameEn, sector, industry, isHsi ? 1 : 0, mcapCat);
+  const market = detectMarket(ticker);
+  const exchange = market === "CN" ? (ticker.endsWith(".SS") ? "SSE" : "SZSE") : "HKEX";
+  const currency = market === "CN" ? "CNY" : "HKD";
+
+  insertCompany.run(ticker, nameZh, nameEn, sector, industry, exchange, currency, isIndexFlag ? 1 : 0, mcapCat);
   count++;
 }
 

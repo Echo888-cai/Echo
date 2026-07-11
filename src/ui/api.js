@@ -7,11 +7,19 @@ export async function api(path, options = {}) {
     ...options,
     headers: {
       "Content-Type": "application/json",
+      "X-Echo-Auth": "1", // U-1 CSRF：服务端要求所有非 GET 带此自定义头
       ...(options.headers || {})
     }
   });
+  // U-1：多用户模式下会话失效 → 整页切到登录卡（/api/auth/* 自身除外，避免登录失败也触发）。
+  if (response.status === 401 && !path.startsWith("/api/auth/")) {
+    S.authRequired = true;
+    S.authUser = null;
+    render();
+    throw new Error("请先登录");
+  }
   const json = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(json.error || json?.error?.message || `请求失败 ${response.status}`);
+  if (!response.ok) throw new Error(json?.error?.message || json.error || `请求失败 ${response.status}`);
   return json?.ok && json.data ? json.data : json;
 }
 
@@ -25,9 +33,15 @@ export async function chatStream(body, key) {
   try {
     const resp = await fetch("/api/ask", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-Echo-Auth": "1" },
       body: JSON.stringify({ ...body, stream: true })
     });
+    if (resp.status === 401) {
+      S.authRequired = true;
+      S.authUser = null;
+      render();
+      throw new Error("请先登录");
+    }
     const ctype = resp.headers.get("content-type") || "";
     if (!resp.ok || !resp.body || !ctype.includes("text/event-stream")) throw new Error("no-stream");
 

@@ -1,4 +1,5 @@
-// ── 纯格式化工具（无依赖，被所有 UI 模块共享）──────────────
+// ── 纯格式化工具（被所有 UI 模块共享）──────────────
+import { marketLabel } from "../market.js";
 
 export function esc(value = "") {
   return String(value)
@@ -30,10 +31,10 @@ export function hostFromUrl(url = "") {
   }
 }
 
-// 市场标签：港股（数字/.HK）/ 美股（其余）。代码缺省返回空串。
+// 市场标签：港股 / 美股 / A股，三路判断（复用 market.js 的 detectMarket）。代码缺省返回空串。
 export function marketLabelOf(ticker = "") {
   if (!ticker) return "";
-  return /\.HK$|^\d/.test(ticker) ? "港股" : "美股";
+  return marketLabel(ticker);
 }
 
 // SQLite datetime('now') 是 UTC，转相对时间显示。

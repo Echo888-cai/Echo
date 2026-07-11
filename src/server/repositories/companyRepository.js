@@ -36,8 +36,11 @@ export function searchCompanies(query, { limit = 20 } = {}) {
 export function getCompanyByTickerComplete(ticker) {
   const db = getDb();
   const normalized = normalizeTicker(ticker);
+  // d.* 放前面、c.* 放后面：两表都有 ticker 列，company_details 没有该 ticker 的行时
+  // d.ticker 是 NULL，若 c.* 在前会被这个 NULL 覆盖掉真实 ticker（同 db/index.js 的
+  // getCompanyByTicker 同一个 bug，一并修）。
   const row = db.prepare(`
-    SELECT c.*, d.* FROM companies c
+    SELECT d.*, c.* FROM companies c
     LEFT JOIN company_details d ON c.ticker = d.ticker
     WHERE c.ticker = ?
   `).get(normalized);

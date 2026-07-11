@@ -19,7 +19,7 @@
  */
 import { getMarketSnapshot } from "../../marketData.js";
 import { getFinancials } from "../../financialData.js";
-import { adrOrBareSymbol, isUS, bareSymbol, hkCode } from "../../market.js";
+import { adrOrBareSymbol, isUS, bareSymbol, hkCode, detectMarket } from "../../market.js";
 import { classifyAssetStage } from "./valuationEngine.js";
 import { withTimeout } from "../utils/async.js";
 import { getCompPeersRow, upsertCompPeers } from "../repositories/compPeersRepository.js";
@@ -42,7 +42,7 @@ async function fetchJson(url, timeoutMs = 6000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "Luvio/0.1 comp peers", Accept: "application/json" } });
+    const response = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "EchoResearch/1.0 comp peers", Accept: "application/json" } });
     const text = await response.text();
     if (!response.ok) throw new Error(`${response.status} ${text.slice(0, 160)}`);
     return JSON.parse(text);
@@ -63,7 +63,10 @@ const STAGE_LABEL = { profitable: "盈利", loss: "亏损", loss_growth: "亏损
 /** Finnhub 同业清单 → 过滤成本管道能定价的 symbol（美股 bare ticker / 港股 NNNN.HK），排除自身。 */
 async function fetchPeerSymbols(ticker) {
   const symbol = adrOrBareSymbol(ticker);
-  if (!symbol) return { symbols: [], detail: "港股无美股 ADR 映射，Finnhub 免费档无法核到同业" };
+  if (!symbol) {
+    const marketName = detectMarket(ticker) === "CN" ? "A 股" : "港股";
+    return { symbols: [], detail: `${marketName}无美股 ADR 映射，Finnhub 免费档无法核到同业` };
+  }
   const apiKey = env("FINNHUB_API_KEY");
   if (!apiKey) throw new Error("missing FINNHUB_API_KEY");
 

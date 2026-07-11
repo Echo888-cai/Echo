@@ -1,5 +1,5 @@
 /**
- * Luvio 环境自检（npm run doctor）。
+ * Echo Research 环境自检（npm run doctor）。
  *
  * 逐能力检查 API key 配置，回答三个问题：
  *   1. 哪些能力现在可用 / 降级 / 不可用？
@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { loadEnvFile } from "../src/server/utils/env.js";
+import { productionReadiness } from "../src/server/services/productionReadiness.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -21,6 +22,7 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 loadEnvFile(root);
 
 const LIVE = process.argv.includes("--live");
+const PRODUCTION = process.argv.includes("--production");
 const has = (k) => Boolean(process.env[k] && process.env[k].trim());
 const firstFmpKey = () =>
   (process.env.FMP_API_KEYS || process.env.FMP_API_KEY || "").split(",")[0]?.trim() || "";
@@ -161,7 +163,7 @@ const CHECKS = [
 
 const timeout = (ms) => new Promise((resolve) => setTimeout(() => resolve("探活超时 ✗"), ms));
 
-console.log(`\nLuvio doctor — 环境自检${LIVE ? "（含连通性探活）" : "（仅配置检查，加 --live 做连通性探活）"}\n`);
+console.log(`\nEcho Research doctor — 环境自检${LIVE ? "（含连通性探活）" : "（仅配置检查，加 --live 做连通性探活）"}\n`);
 
 let degraded = 0;
 for (const item of CHECKS) {
@@ -181,3 +183,17 @@ for (const item of CHECKS) {
 
 console.log(`\n结论：${degraded === 0 ? "全部能力就绪。" : `${degraded} 项降级/缺失（见上）。核心研究至少需要：一个模型 key + FINNHUB_API_KEY。`}`);
 console.log("提示：key 写进项目根目录 .env（参考 .env.example）；改完重启 node 进程生效。\n");
+
+if (PRODUCTION) {
+  const [{ countUsers }, { getDb }] = await Promise.all([
+    import("../src/server/repositories/authRepository.js"),
+    import("../src/db/index.js")
+  ]);
+  let dbIntegrity = "error";
+  try { dbIntegrity = getDb().pragma("integrity_check", { simple: true }); } catch {}
+  const readiness = productionReadiness({ env: process.env, userCount: countUsers(), dbIntegrity });
+  console.log("生产门禁：");
+  for (const check of readiness.checks) console.log(`  ${check.ok ? OK : MISSING} ${check.detail}`);
+  console.log(readiness.ready ? "\n生产门禁通过。\n" : `\n生产门禁未通过：${readiness.blockers.map((b) => b.id).join(", ")}\n`);
+  if (!readiness.ready) process.exitCode = 1;
+}

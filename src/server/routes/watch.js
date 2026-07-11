@@ -13,11 +13,14 @@ import { sendOk, sendError, readJsonBody } from "../utils/async.js";
 import { buildWatchDesk, buildStockView, trackedUniverse } from "../services/watchDesk.js";
 import { addToWatch, removeFromWatch } from "../repositories/watchlist.js";
 
+const userId = (req) => req.echoUser?.id || "local";
+
 export async function handleWatchDesk(req, res) {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
     const slot = url.searchParams.get("slot") === "afterhours" ? "afterhours" : "premarket";
-    const companies = trackedUniverse(url.searchParams.get("tickers"));
+    const uid = userId(req);
+    const companies = trackedUniverse(url.searchParams.get("tickers"), uid);
 
     if (!companies.length) {
       sendOk(res, {
@@ -27,7 +30,7 @@ export async function handleWatchDesk(req, res) {
     }
 
     const withEvents = url.searchParams.get("events") !== "0";
-    const desk = await buildWatchDesk(companies, { slot, events: withEvents });
+    const desk = await buildWatchDesk(companies, { slot, events: withEvents, userId: uid });
     sendOk(res, { desk: { ...desk, partial: !withEvents } });
   } catch (error) {
     sendError(res, 500, error.message || "生成盯盘台失败");
@@ -39,7 +42,7 @@ export async function handleWatchTrack(req, res) {
     const body = await readJsonBody(req);
     const ticker = (body.ticker || "").trim();
     if (!ticker) { sendError(res, 400, "缺少 ticker"); return; }
-    addToWatch(ticker, body.name);
+    addToWatch(ticker, body.name, userId(req));
     sendOk(res, { tracked: true, ticker });
   } catch (error) {
     sendError(res, 500, error.message || "添加关注失败");
@@ -51,7 +54,7 @@ export async function handleWatchUntrack(req, res) {
     const body = await readJsonBody(req);
     const ticker = (body.ticker || "").trim();
     if (!ticker) { sendError(res, 400, "缺少 ticker"); return; }
-    removeFromWatch(ticker);
+    removeFromWatch(ticker, userId(req));
     sendOk(res, { untracked: true, ticker });
   } catch (error) {
     sendError(res, 500, error.message || "移除关注失败");
@@ -63,7 +66,7 @@ export async function handleWatchStock(req, res) {
     const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
     const ticker = url.searchParams.get("ticker");
     if (!ticker) { sendError(res, 400, "缺少 ticker"); return; }
-    const stock = await buildStockView(ticker);
+    const stock = await buildStockView(ticker, userId(req));
     sendOk(res, { stock });
   } catch (error) {
     sendError(res, 500, error.message || "生成个股看盘数据失败");

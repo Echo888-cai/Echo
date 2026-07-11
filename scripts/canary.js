@@ -1,9 +1,9 @@
 /**
  * `npm run canary` — 真实数据 canary（G-1/E1）。
  *
- * 对一小撮真实 ticker（0700.HK / 9988.HK / 9868.HK + AAPL / NVDA）跑一遍真实数据管道
- * 的每一段（行情/财报/新闻/公告/网页证据/港股一手 filing/估值链路），落库到
- * canary_runs，供设置页的数据源健康面板查询。
+ * 对一小撮真实 ticker（0700.HK / 9988.HK / 9868.HK + AAPL / NVDA + 600519.SS / 000001.SZ）
+ * 跑一遍真实数据管道的每一段（行情/财报/新闻/公告/网页证据/港股或 A 股一手 filing/
+ * 估值链路），落库到 canary_runs，供设置页的数据源健康面板查询。
  *
  * 不进 CI（见 docs/PLAN.md §4 第 8 条）：CI 无 key、不该烧配额，真实探测是本机/scheduler
  * 的职责。退出码恒为 0——canary 是体检报告，不是门禁；哪些源挂了直接看输出/面板。
@@ -21,13 +21,14 @@ const { getRecentFilings } = await import("../src/filingData.js");
 const { researchWebEvidence } = await import("../src/server/services/webEvidenceService.js");
 const { computeValuation } = await import("../src/server/services/valuationEngine.js");
 const { ingestHkFinancials } = await import("../src/server/services/hkFilingsPipeline.js");
+const { ingestCnFinancials } = await import("../src/server/services/cnFilingsPipeline.js");
 const { getNextEarnings } = await import("../src/server/services/earningsCalendar.js");
 const { getComparableCompanies } = await import("../src/server/services/compPeers.js");
 const { getCompanyByTicker } = await import("../src/db/index.js");
-const { isUS } = await import("../src/market.js");
+const { detectMarket } = await import("../src/market.js");
 const { insertCanaryResult } = await import("../src/server/repositories/canaryRepository.js");
 
-const TICKERS = ["0700.HK", "9988.HK", "9868.HK", "AAPL", "NVDA"];
+const TICKERS = ["0700.HK", "9988.HK", "9868.HK", "AAPL", "NVDA", "600519.SS", "000001.SZ"];
 const batchId = new Date().toISOString();
 
 function companyFor(ticker) {
@@ -86,6 +87,12 @@ async function probeHkFiling(ticker) {
   return { status: "missing", detail: result.errors[0] || "HKEX 未搜到业绩公告" };
 }
 
+async function probeCnFiling(ticker) {
+  const result = await ingestCnFinancials(ticker, { limit: 1, force: false });
+  if (result.ingested.length || result.skipped.length) return { status: "ok", detail: result.ingested[0]?.period || "已有一手数据" };
+  return { status: "missing", detail: result.errors[0] || "巨潮资讯网未搜到定期报告" };
+}
+
 async function probeEarnings(ticker) {
   const result = await getNextEarnings(ticker);
   if (result.providerStatus === "error") return { status: "error", detail: result.detail };
@@ -128,7 +135,9 @@ for (const ticker of TICKERS) {
     return probeValuation(ticker, marketSnap, fin);
   });
   const results = [market, financials, news, filings, earnings, compPeers, webEvidence, valuation];
-  if (!isUS(ticker)) results.push(await probe("hk_filing", ticker, () => probeHkFiling(ticker)));
+  const tickerMarket = detectMarket(ticker);
+  if (tickerMarket === "HK") results.push(await probe("hk_filing", ticker, () => probeHkFiling(ticker)));
+  else if (tickerMarket === "CN") results.push(await probe("cn_filing", ticker, () => probeCnFiling(ticker)));
   rows.push(...results);
 
   console.log(`${ticker}`);

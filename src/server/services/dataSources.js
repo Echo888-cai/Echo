@@ -13,10 +13,12 @@ import { getNewsSnapshot } from "../../newsData.js";
 import { getFinancials, getAnalystEstimates, getCompanyProfile, getDividendHistory, getRevenueSegments } from "../../financialData.js";
 import { getRecentFilings } from "../../filingData.js";
 import { enrich8K } from "../../secFilings.js";
-import { isUS } from "../../market.js";
+import { isUS, detectMarket } from "../../market.js";
 import { saveMarketSnapshot } from "../../db/index.js";
 import { getHkFinancials } from "../repositories/hkFinancialsRepository.js";
 import { hkRowToFinancials, refreshHkFinancialsInBackground, refreshHkBuybacksInBackground } from "./hkFilingsPipeline.js";
+import { getCnFinancials } from "../repositories/cnFinancialsRepository.js";
+import { cnRowToFinancials, refreshCnFinancialsInBackground } from "./cnFilingsPipeline.js";
 import { listRecentHkBuybacks, getLatestHkBuybackFetchedAt } from "../repositories/hkBuybackRepository.js";
 import { getInsiderActivity } from "./insiderActivity.js";
 import { getHistoricalValuationSeries, computeHistoricalValuationPercentile } from "./historicalValuation.js";
@@ -55,6 +57,27 @@ export function mergeHkFinancialGaps(target, hkFinancials) {
   if (target.revenueTrend == null && hkFinancials.revenueTrend != null) target.revenueTrend = hkFinancials.revenueTrend;
   if (target.profitTrend == null && hkFinancials.profitTrend != null) target.profitTrend = hkFinancials.profitTrend;
   if (target.period == null || target.period === "") target.period = hkFinancials.period;
+  target.firstPartySupplement = true;
+}
+
+// A 股一手（巨潮资讯网定期报告）字段补空，同 mergeHkFinancialGaps 的角色——
+// A 股财报几乎全是 CNY 原币种，不需要港股那套 CNY→HKD 换算层。
+const CN_MONEY_FIELDS = [
+  "revenue", "grossProfit", "operatingIncome", "netIncome",
+  "cashAndEquivalents", "netCash", "operatingCashFlow"
+];
+const CN_RATIO_FIELDS = ["revenueGrowth", "grossMargin", "operatingMargin", "netMargin", "profitGrowth"];
+
+export function mergeCnFinancialGaps(target, cnFinancials) {
+  for (const key of CN_MONEY_FIELDS) {
+    if (target[key] != null) continue;
+    if (cnFinancials[key] == null) continue;
+    target[key] = cnFinancials[key];
+  }
+  for (const key of CN_RATIO_FIELDS) {
+    if (target[key] == null && cnFinancials[key] != null) target[key] = cnFinancials[key];
+  }
+  if (target.period == null || target.period === "") target.period = cnFinancials.period;
   target.firstPartySupplement = true;
 }
 
@@ -189,7 +212,11 @@ export async function collectDataSources({ company, suppliedMarketSnapshot = nul
   // P7 港股一手财报：hk_financials 已落库则同步附挂（零延迟）；第三方全挂时提升为主数据，
   // 第三方部分成功（腾讯只给行情）时按字段补空（B-5，见 mergeHkFinancialGaps）。
   // 无数据或最新一期已过一个业绩季（>135 天）→ 后台摄取，不阻塞本次研究。
-  if (!isUS(company.ticker)) {
+  // 三路市场判断：US 两个一手管道都不适用；HK/CN 各走自己的一手管道，互不相通
+  // （此前用 `!isUS()` 二元判断，会把 A 股误当港股塞进 HKEX 管道，白打一次注定失败的
+  // 网络请求——三路判断修正这个问题，见 P-CN-2 计划）。
+  const tickerMarket = detectMarket(company.ticker);
+  if (tickerMarket === "HK") {
     try {
       const hkRows = getHkFinancials(company.ticker, 4);
       if (hkRows.length) {
@@ -216,6 +243,25 @@ export async function collectDataSources({ company, suppliedMarketSnapshot = nul
       const latestFetched = Date.parse(`${getLatestHkBuybackFetchedAt(company.ticker) || ""}Z`) || 0;
       if (Date.now() - latestFetched > 24 * 3600 * 1000) refreshHkBuybacksInBackground(company.ticker);
     } catch { /* 港股回购读取失败不阻塞研究 */ }
+  } else if (tickerMarket === "CN") {
+    // P-CN-2 A 股一手财报：cn_financials 已落库则同步附挂；第三方（东财/新浪/腾讯）
+    // 全挂时提升为主数据，部分成功时按字段补空（mergeCnFinancialGaps，无需 FX 换算）。
+    try {
+      const cnRows = getCnFinancials(company.ticker, 4);
+      if (cnRows.length) {
+        financialsData.cnFilings = cnRows;
+        const cnFinancials = cnRowToFinancials(cnRows[0]);
+        if (financialsData.providerStatus !== "ok") {
+          Object.assign(financialsData, cnFinancials);
+        } else {
+          mergeCnFinancialGaps(financialsData, cnFinancials);
+        }
+        const latest = Date.parse(cnRows[0].published_at || "") || 0;
+        if (Date.now() - latest > 135 * 24 * 3600 * 1000) refreshCnFinancialsInBackground(company.ticker);
+      } else {
+        refreshCnFinancialsInBackground(company.ticker);
+      }
+    } catch { /* 一手财报读取失败不阻塞研究 */ }
   }
   return {
     marketSnapshot, // 已含 ranges（区间回报）

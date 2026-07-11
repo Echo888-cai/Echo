@@ -13,6 +13,7 @@
  */
 
 import { insertNotification } from "../repositories/notifications.js";
+import { notificationEnabled } from "../repositories/userPreferences.js";
 
 const TG_TIMEOUT_MS = 8000;
 
@@ -48,13 +49,16 @@ export async function sendTelegram(text) {
 
 /**
  * 发出一条通知：落库 + 尽力 Telegram。
- * @param {{kind: string, title: string, body?: string, ticker?: string|null, payload?: Object|null, dedupeKey?: string|null, dedupeWindowHours?: number}} args
- * @returns {Promise<{ ok:true, id?:number, deduped?:boolean, telegram:string }>}
+ * @param {{kind: string, title: string, body?: string, ticker?: string|null, payload?: Object|null, dedupeKey?: string|null, dedupeWindowHours?: number, userId?: string}} args
+ * @returns {Promise<{ ok:true, id?:number, deduped?:boolean, skipped?:boolean, preference?:string, telegram:string }>}
  */
-export async function notify({ kind, title, body = "", ticker = null, payload = null, dedupeKey = null, dedupeWindowHours = 12 }) {
-  const inserted = insertNotification({ kind, title, body, ticker, payload, dedupeKey, dedupeWindowHours });
+export async function notify({ kind, title, body = "", ticker = null, payload = null, dedupeKey = null, dedupeWindowHours = 12, userId = "local" }) {
+  if (!notificationEnabled(userId, kind)) return { ok: true, skipped: true, preference: "disabled", telegram: "skipped" };
+  const inserted = insertNotification({ kind, title, body, ticker, payload, dedupeKey, dedupeWindowHours, userId });
   if (!inserted) return { ok: true, deduped: true, telegram: "skipped" };
-  const telegram = await sendTelegram(body ? `${title}\n\n${body}` : title);
+  // Telegram 当前是实例级单通道，只服务 owner。把成员通知推到 owner 的聊天会泄露私有资产；
+  // 成员先使用应用内通知，未来接入每用户通道时再显式扩展。
+  const telegram = userId === "local" ? await sendTelegram(body ? `${title}\n\n${body}` : title) : "skipped";
   if (telegram.startsWith("failed")) console.error(`[notifier] Telegram 推送失败：${telegram}（通知已落库 #${inserted.id}）`);
   return { ok: true, id: inserted.id, telegram };
 }

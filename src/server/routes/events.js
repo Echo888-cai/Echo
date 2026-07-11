@@ -14,6 +14,8 @@ import { listCompanyProfiles } from "../repositories/companyProfiles.js";
 import { listPositions } from "../repositories/portfolio.js";
 import { companyByTicker } from "../../data.js";
 
+const userId = (req) => req.echoUser?.id || "local";
+
 export async function handleEventsDigest(req, res) {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
@@ -29,8 +31,9 @@ export async function handleEventsDigest(req, res) {
     } else {
       // Default audience: companies the user researches (portrait) or holds (portfolio).
       const byTicker = new Map();
-      for (const p of listCompanyProfiles(30)) byTicker.set(p.ticker, { ticker: p.ticker, nameZh: p.companyName });
-      for (const pos of listPositions()) if (!byTicker.has(pos.ticker)) byTicker.set(pos.ticker, { ticker: pos.ticker, nameZh: pos.companyName });
+      const uid = userId(req);
+      for (const p of listCompanyProfiles(30, uid)) byTicker.set(p.ticker, { ticker: p.ticker, nameZh: p.companyName });
+      for (const pos of listPositions(uid)) if (!byTicker.has(pos.ticker)) byTicker.set(pos.ticker, { ticker: pos.ticker, nameZh: pos.companyName });
       companies = [...byTicker.values()];
     }
 
@@ -39,7 +42,7 @@ export async function handleEventsDigest(req, res) {
       return;
     }
 
-    const digest = await buildDigest(companies, {}, { slot });
+    const digest = await buildDigest(companies, {}, { slot, userId: userId(req) });
     sendOk(res, { digest, tracked: companies.length });
   } catch (error) {
     sendError(res, 500, error.message || "生成事件 digest 失败");

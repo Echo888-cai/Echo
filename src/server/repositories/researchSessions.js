@@ -29,10 +29,10 @@ function ensureCompanyRow(db, ticker, name) {
 }
 
 /**
- * @param {import("../types.js").ResearchSession & {sessionId?: string, sessionTitle?: string, turnCount?: number}} payload
+ * @param {import("../types.js").ResearchSession & {sessionId?: string, sessionTitle?: string, turnCount?: number, userId?: string}} payload
  * @returns {{id: string}}
  */
-export function saveResearchSession(payload) {
+export function saveResearchSession(payload, userId = payload?.userId || "local") {
   if (!payload?.ticker) throw new Error("research_sessions 需要 ticker");
   const db = getDb();
   ensureCompanyRow(db, payload.ticker, payload.companyName || payload.title);
@@ -43,9 +43,9 @@ export function saveResearchSession(payload) {
   // 行不会被后续更新覆盖分组（COALESCE 保底），换句话说分组一旦落定就不会被悄悄改写。
   const stmt = db.prepare(`
     INSERT INTO research_sessions
-      (id, ticker, title, question, conversation_id, status, report_markdown, rating, confidence, decision_panel, full_research, data_sources, thread_json, turn_count, updated_at)
+      (id, user_id, ticker, title, question, conversation_id, status, report_markdown, rating, confidence, decision_panel, full_research, data_sources, thread_json, turn_count, updated_at)
     VALUES
-      (@id, @ticker, @title, @question, @conversationId, @status, @reportMarkdown, @rating, @confidence, @decisionPanel, @fullResearch, @dataSources, @threadJson, @turnCount, datetime('now'))
+      (@id, @userId, @ticker, @title, @question, @conversationId, @status, @reportMarkdown, @rating, @confidence, @decisionPanel, @fullResearch, @dataSources, @threadJson, @turnCount, datetime('now'))
     ON CONFLICT(id) DO UPDATE SET
       ticker = excluded.ticker,
       title = COALESCE(NULLIF(excluded.title, ''), research_sessions.title, excluded.question),
@@ -61,9 +61,11 @@ export function saveResearchSession(payload) {
       thread_json = COALESCE(excluded.thread_json, research_sessions.thread_json),
       turn_count = COALESCE(excluded.turn_count, research_sessions.turn_count),
       updated_at = datetime('now')
+    WHERE research_sessions.user_id = excluded.user_id
   `);
   stmt.run({
     id,
+    userId,
     ticker: payload.ticker,
     title: payload.title || payload.sessionTitle || payload.question || "",
     question: payload.question || "",
@@ -86,9 +88,9 @@ export function saveResearchSession(payload) {
 }
 
 /** @returns {import("../types.js").ResearchSession|null} */
-export function getResearchSession(id) {
+export function getResearchSession(id, userId = "local") {
   const db = getDb();
-  const row = db.prepare("SELECT * FROM research_sessions WHERE id = ?").get(id);
+  const row = db.prepare("SELECT * FROM research_sessions WHERE user_id = ? AND id = ?").get(userId, id);
   if (!row) return null;
   return {
     id: row.id,
@@ -110,8 +112,8 @@ export function getResearchSession(id) {
   };
 }
 
-/** @param {{limit?: number, ticker?: string}} [opts] */
-export function listResearchSessions({ limit = 20, ticker } = {}) {
+/** @param {{limit?: number, ticker?: string, userId?: string}} [opts] */
+export function listResearchSessions({ limit = 20, ticker, userId = "local" } = {}) {
   const db = getDb();
   const rows = ticker
     ? db.prepare(`
@@ -119,18 +121,19 @@ export function listResearchSessions({ limit = 20, ticker } = {}) {
                s.turn_count, s.created_at, s.updated_at, c.name_zh AS company_name
         FROM research_sessions s
         LEFT JOIN companies c ON c.ticker = s.ticker
-        WHERE s.ticker = ?
+        WHERE s.user_id = ? AND s.ticker = ?
         ORDER BY s.updated_at DESC
         LIMIT ?
-      `).all(ticker, limit)
+      `).all(userId, ticker, limit)
     : db.prepare(`
         SELECT s.id, s.ticker, s.title, s.question, s.conversation_id, s.status, s.rating, s.confidence,
                s.turn_count, s.created_at, s.updated_at, c.name_zh AS company_name
         FROM research_sessions s
         LEFT JOIN companies c ON c.ticker = s.ticker
+        WHERE s.user_id = ?
         ORDER BY s.updated_at DESC
         LIMIT ?
-      `).all(limit);
+      `).all(userId, limit);
   return rows;
 }
 
@@ -142,7 +145,7 @@ export function listResearchSessions({ limit = 20, ticker } = {}) {
  * 旧数据没有 conversation_id（迁移前的行）→ COALESCE 退化成自身 id，等价于"自成一组"，
  * 和分组前的历史列表行为完全一致，不需要回填迁移。
  */
-export function listConversations({ limit = 20 } = {}) {
+export function listConversations({ limit = 20, userId = "local" } = {}) {
   const db = getDb();
   // 拉取比目标分组数更多的原始行，保证同一分组的历史成员不会因为行数上限被切掉。
   // 按 rowid（sqlite 隐式插入序）排序，而非 created_at：datetime('now') 只到秒级精度，
@@ -154,8 +157,9 @@ export function listConversations({ limit = 20 } = {}) {
            c.name_zh AS company_name
     FROM research_sessions s
     LEFT JOIN companies c ON c.ticker = s.ticker
+    WHERE s.user_id = ?
     ORDER BY s.rowid ASC
-  `).all();
+  `).all(userId);
 
   const groups = new Map();
   for (const row of rows) {
@@ -205,7 +209,7 @@ const SNIPPET_CLOSE = "\u0002";
  * snippet() 从 report_markdown 里截取命中片段，report_markdown 为空时退化到 question
  * 字段，避免空标题的会话搜中了却看不出匹配在哪。
  */
-export function searchResearchSessions(query, { limit = 20 } = {}) {
+export function searchResearchSessions(query, { limit = 20, userId = "local" } = {}) {
   const q = String(query || "").trim();
   if (q.length < 3) return [];
   const db = getDb();
@@ -218,25 +222,25 @@ export function searchResearchSessions(query, { limit = 20 } = {}) {
       FROM research_sessions_fts fts
       JOIN research_sessions s ON s.rowid = fts.rowid
       LEFT JOIN companies c ON c.ticker = s.ticker
-      WHERE research_sessions_fts MATCH ?
+      WHERE research_sessions_fts MATCH ? AND s.user_id = ?
       ORDER BY rank
       LIMIT ?
-    `).all(SNIPPET_OPEN, SNIPPET_CLOSE, SNIPPET_OPEN, SNIPPET_CLOSE, q, limit);
+    `).all(SNIPPET_OPEN, SNIPPET_CLOSE, SNIPPET_OPEN, SNIPPET_CLOSE, q, userId, limit);
   } catch {
     // trigram 对形如纯标点/超长查询串可能抛"fts5: syntax error"——诚实返回空结果，不让搜索崩前端。
     return [];
   }
 }
 
-export function deleteResearchSession(id) {
+export function deleteResearchSession(id, userId = "local") {
   const db = getDb();
-  const result = db.prepare("DELETE FROM research_sessions WHERE id = ?").run(id);
+  const result = db.prepare("DELETE FROM research_sessions WHERE user_id = ? AND id = ?").run(userId, id);
   return result.changes > 0;
 }
 
-export function clearResearchSessions() {
+export function clearResearchSessions(userId = "local") {
   const db = getDb();
-  const result = db.prepare("DELETE FROM research_sessions").run();
+  const result = db.prepare("DELETE FROM research_sessions WHERE user_id = ?").run(userId);
   return result.changes;
 }
 

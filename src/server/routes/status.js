@@ -4,6 +4,7 @@ import { getSourceHealthSummary, getLatestBatchId } from "../repositories/canary
 import { getHkFilingCoverage } from "../repositories/hkFinancialsRepository.js";
 import { getProviderCallStats } from "../repositories/llmAuditRepository.js";
 import { getFactGuardStats } from "../repositories/factGuardRepository.js";
+import { quotaStatus } from "../services/quotaService.js";
 
 const fmpKey = () => process.env.FMP_API_KEY;
 const finnhubKey = () => process.env.FINNHUB_API_KEY;
@@ -18,6 +19,7 @@ const CANARY_SOURCE_LABELS = {
 };
 
 export function handleStatusApi(req, res) {
+  const userId = req.echoUser?.id || "local";
   const hasFmp = fmpKey();
   const hasNews = finnhubKey() || newsApiKey();
   const hasWebSearch = webSearchKey();
@@ -48,12 +50,15 @@ export function handleStatusApi(req, res) {
   // E4：模型网关调用留痕汇总——谁在接、各自延迟/失败率、最近一次失败原因。
   let llmAudit = [];
   try {
-    llmAudit = getProviderCallStats({ days: 7 }).map((row) => ({
+    llmAudit = getProviderCallStats({ days: 7, userId }).map((row) => ({
       provider: row.provider,
       attempts: row.attempts,
       successes: row.successes,
       failures: row.failures,
       avgLatencyMs: row.avgLatencyMs,
+      inputTokens: row.inputTokens,
+      outputTokens: row.outputTokens,
+      estimatedCostUsd: row.estimatedCostUsd,
       lastSuccessAt: row.lastSuccessAt,
       lastFailureDetail: row.lastFailureDetail,
       lastFailureAt: row.lastFailureAt
@@ -87,6 +92,7 @@ export function handleStatusApi(req, res) {
     canary: { batchId: canaryBatchId, sources: canaryHealth },
     hkFilingCoverage,
     llmAudit,
+    usage: quotaStatus(userId),
     factGuard,
     updatedAt: new Date().toISOString()
   });

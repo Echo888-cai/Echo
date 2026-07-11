@@ -34,6 +34,19 @@ applyTheme(getTheme());
 
 export const S = {
   apiStatus: null,
+  // U-1 鉴权：authRequired=true 时整页渲染登录卡（多用户模式且无有效会话）。
+  // 单用户 legacy 模式（服务端没建 owner）下 multiUser=false，一切与从前一致。
+  authUser: null,       // {id, username, displayName, role} | null
+  authRequired: false,
+  multiUser: false,
+  authMode: "login",    // 登录卡的形态：login | register
+  authError: "",
+  authBusy: false,
+  // P14：新用户引导、通知偏好与应用内反馈。
+  preferences: null,
+  preferencesLoaded: false,
+  feedbackOpen: false,
+  feedbackBusy: false,
   recentSessions: [],
   conversationGroups: [],
   sessionsLoaded: false,

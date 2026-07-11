@@ -33,6 +33,7 @@ import { getNextEarnings } from "./earningsCalendar.js";
 import { listWithLastReported } from "../repositories/earningsCalendarRepository.js";
 import { compactNumberServer } from "../utils/format.js";
 import { recordDailySnapshot } from "./portfolioSnapshot.js";
+import { listUsers } from "../repositories/authRepository.js";
 
 // ── 时间判定（纯函数，可测） ──────────────────────────────────
 
@@ -84,25 +85,25 @@ export function isDue(schedule, lastRunAtIso, now = new Date()) {
 // ── 任务实现 ─────────────────────────────────────────────────
 
 /** digest 受众 = 画像 ∪ 持仓 ∪ 看盘手动关注 − 手动隐藏，再按市场过滤。 */
-function digestAudience(market /* "HK" | "US" */) {
+function digestAudience(market /* "HK" | "US" */, userId = "local") {
   const byTicker = new Map();
-  for (const p of listCompanyProfiles(30)) byTicker.set(p.ticker, { ticker: p.ticker, nameZh: p.companyName });
-  for (const pos of listPositions()) if (!byTicker.has(pos.ticker)) byTicker.set(pos.ticker, { ticker: pos.ticker, nameZh: pos.companyName });
-  for (const w of listWatchAdds()) if (!byTicker.has(w.ticker)) byTicker.set(w.ticker, { ticker: w.ticker, nameZh: w.nameZh });
-  const hidden = getHiddenTickers();
+  for (const p of listCompanyProfiles(30, userId)) byTicker.set(p.ticker, { ticker: p.ticker, nameZh: p.companyName });
+  for (const pos of listPositions(userId)) if (!byTicker.has(pos.ticker)) byTicker.set(pos.ticker, { ticker: pos.ticker, nameZh: pos.companyName });
+  for (const w of listWatchAdds(userId)) if (!byTicker.has(w.ticker)) byTicker.set(w.ticker, { ticker: w.ticker, nameZh: w.nameZh });
+  const hidden = getHiddenTickers(userId);
   const isHk = (t) => /\.HK$/i.test(t) || /^\d{4,5}$/.test(t);
   return [...byTicker.values()].filter((c) => !hidden.has(c.ticker) && (market === "HK" ? isHk(c.ticker) : !isHk(c.ticker)));
 }
 
 /** 盘前速报：跑事件引擎，有高/中级事件才通知（没事不打扰）。 */
-async function runDigestJob(market, marketLabel) {
-  const companies = digestAudience(market);
+async function runDigestJob(market, marketLabel, userId = "local") {
+  const companies = digestAudience(market, userId);
   if (!companies.length) return `无${marketLabel}关注公司，跳过`;
-  const digest = await buildDigest(companies, {}, { slot: "premarket" });
+  const digest = await buildDigest(companies, {}, { slot: "premarket", userId });
   const notable = (digest.events || []).filter((e) => e.severity === "high" || e.severity === "medium");
   if (!notable.length) return `${companies.length} 家公司无值得提醒的事件`;
   const lines = notable.slice(0, 6).map((e) => `${e.severity === "high" ? "🔴" : "🟡"} ${e.title}`);
-  if (notable.length > 6) lines.push(`…还有 ${notable.length - 6} 条，打开 Luvio 查看`);
+  if (notable.length > 6) lines.push(`…还有 ${notable.length - 6} 条，打开 Echo Research 查看`);
   const day = beijingDate();
   await notify({
     kind: "digest",
@@ -110,16 +111,17 @@ async function runDigestJob(market, marketLabel) {
     body: `${digest.summary}\n\n${lines.join("\n")}`,
     payload: { slot: "premarket", market, counts: digest.counts },
     dedupeKey: `digest:${market}:${day}`,
-    dedupeWindowHours: 20
+    dedupeWindowHours: 20,
+    userId
   });
   return `${notable.length} 条重要/关注事件已通知`;
 }
 
 /** 盘中触线巡检：只核对止损/止盈/回撤，逐条通知（同一根线 12h 内不重复）。 */
-async function runPositionLinesJob() {
-  const positions = listPositions();
+async function runPositionLinesJob(userId = "local") {
+  const positions = listPositions(userId);
   if (!positions.length) return "无持仓，跳过";
-  const alerts = await buildPositionAlerts(positions);
+  const alerts = await buildPositionAlerts(positions, userId);
   if (!alerts.length) return `${positions.length} 笔持仓未触线`;
   for (const a of alerts) {
     await notify({
@@ -128,15 +130,16 @@ async function runPositionLinesJob() {
       ticker: a.ticker,
       payload: { line: a.line, severity: a.severity },
       dedupeKey: `position:${a.ticker}:${a.line}`,
-      dedupeWindowHours: 12
+      dedupeWindowHours: 12,
+      userId
     });
   }
   return `${alerts.length} 条触线提醒已通知`;
 }
 
 /** 证伪监控巡检：核对研究沉淀下来的价格类证伪条件，命中 → 通知（同规则 24h 一次）。 */
-async function runFalsifyWatchJob() {
-  const rules = listAllActiveRules();
+async function runFalsifyWatchJob(userId = "local") {
+  const rules = listAllActiveRules(userId);
   if (!rules.length) return "无证伪监控规则，跳过";
   // 按 ticker 归组，一只票只拉一次行情（走缓存，成本低）。
   const byTicker = new Map();
@@ -156,7 +159,7 @@ async function runFalsifyWatchJob() {
       const { triggered } = evaluateRule(rule, price);
       if (!triggered) continue;
       hits += 1;
-      markTriggered(rule.id);
+      markTriggered(rule.id, userId);
       await notify({
         kind: "falsify_alert",
         title: `${ticker} 证伪条件命中：${rule.label}`,
@@ -164,7 +167,8 @@ async function runFalsifyWatchJob() {
         ticker,
         payload: { ruleId: rule.id, price, threshold: rule.threshold, kind: rule.kind, sessionId: rule.sessionId || null },
         dedupeKey: `falsify:${ticker}:${rule.id}`,
-        dedupeWindowHours: 24
+        dedupeWindowHours: 24,
+        userId
       });
     }
   }
@@ -175,8 +179,8 @@ async function runFalsifyWatchJob() {
 const REVIEW_REMINDER_DAYS = 30;
 
 /** 研究复盘提醒：某票最近一次判断快照超过 30 天没更新，提醒回顾当时的主线是否仍成立。 */
-async function runReviewReminderJob() {
-  const tickers = listSnapshotTickers();
+async function runReviewReminderJob(userId = "local") {
+  const tickers = listSnapshotTickers(userId);
   if (!tickers.length) return "无研究快照，跳过";
   const today = beijingDate();
   let reminded = 0;
@@ -185,7 +189,7 @@ async function runReviewReminderJob() {
     if (!lastDate) continue;
     const days = Math.round((new Date(today).getTime() - new Date(lastDate).getTime()) / 86400000);
     if (!(days >= REVIEW_REMINDER_DAYS)) continue;
-    const profile = getCompanyProfile(t.ticker);
+    const profile = getCompanyProfile(t.ticker, userId);
     const name = profile?.companyName || t.ticker;
     await notify({
       kind: "review_reminder",
@@ -194,7 +198,8 @@ async function runReviewReminderJob() {
       ticker: t.ticker,
       payload: { lastSnapshotAt: t.lastSnapshotAt, daysSinceSnapshot: days },
       dedupeKey: `review:${t.ticker}:${lastDate}`,
-      dedupeWindowHours: 24 * 29
+      dedupeWindowHours: 24 * 29,
+      userId
     });
     reminded += 1;
   }
@@ -220,8 +225,8 @@ function surpriseLabel(pct) {
  * 让通知重复出现，只会让 appendProfileEvent 多写一行相同事件——可接受，时间线本来就
  * 允许同一天出现多条记录，前端渲染上不会造成误导）。
  */
-async function runEarningsReviewJob() {
-  const tickers = listSnapshotTickers();
+async function runEarningsReviewJob(userId = "local") {
+  const tickers = listSnapshotTickers(userId);
   if (!tickers.length) return "无研究快照，跳过";
   for (const t of tickers) {
     try { await getNextEarnings(t.ticker); } catch { /* 单只票刷新失败不影响其它票 */ }
@@ -237,7 +242,7 @@ async function runEarningsReviewJob() {
   let notified = 0;
   let fundamentalHits = 0;
   for (const r of reported) {
-    const profile = getCompanyProfile(r.ticker);
+    const profile = getCompanyProfile(r.ticker, userId);
     const name = profile?.companyName || r.ticker;
     const period = r.last_year && r.last_quarter ? `${r.last_year}Q${r.last_quarter}` : "最近一期";
     const epsLine = `EPS 实际 ${r.last_eps_actual}${r.last_eps_estimate != null ? ` vs 预期 ${r.last_eps_estimate}` : ""}（${surpriseLabel(r.last_eps_surprise_pct)}）`;
@@ -251,7 +256,8 @@ async function runEarningsReviewJob() {
       ticker: r.ticker,
       payload: { lastDate: r.last_date, epsSurprisePct: r.last_eps_surprise_pct, revenueSurprisePct: r.last_revenue_surprise_pct },
       dedupeKey: `earnings_review:${r.ticker}:${period}`,
-      dedupeWindowHours: 24 * 100
+      dedupeWindowHours: 24 * 100,
+      userId
     });
     if (!result?.deduped) {
       if (profile) {
@@ -260,7 +266,7 @@ async function runEarningsReviewJob() {
           kind: "earnings_report",
           summary: `${period} 财报：${epsLine}；${revLine}`,
           rationale: "F-2 业绩后自动核对（Finnhub 实际值 vs 预期，非模型推断）"
-        });
+        }, userId);
       }
       notified += 1;
     }
@@ -268,14 +274,14 @@ async function runEarningsReviewJob() {
     // F-3：基本面证伪条件核对——只在这只票真的设了这类规则时才拉一次财务数据（免得给
     // 没设规则的票也发一次多余请求）。跟"这期报告是否已经提醒过"无关：只要设了规则，
     // 每天都该看一眼当前财务是否已经踩线（命中通知本身有 24h dedupe，不会重复打扰）。
-    const fundamentalRules = listRules(r.ticker).filter((rule) => rule.kind.startsWith("fundamental_"));
+    const fundamentalRules = listRules(r.ticker, userId).filter((rule) => rule.kind.startsWith("fundamental_"));
     if (fundamentalRules.length) {
       try {
         const financials = await getFinancials(r.ticker);
         for (const rule of fundamentalRules) {
           const { triggered, sane, currentValue } = evaluateFundamentalRule(rule, financials);
           if (!sane || !triggered) continue;
-          markTriggered(rule.id);
+          markTriggered(rule.id, userId);
           const metricLabel = FUNDAMENTAL_METRIC_LABELS[rule.metric] || rule.metric;
           const isAmount = rule.metric === "freeCashFlow";
           const valueLabel = isAmount ? compactNumberServer(currentValue) : `${currentValue}%`;
@@ -287,7 +293,8 @@ async function runEarningsReviewJob() {
             ticker: r.ticker,
             payload: { ruleId: rule.id, currentValue, threshold: rule.threshold, kind: rule.kind, metric: rule.metric, sessionId: rule.sessionId || null },
             dedupeKey: `falsify:${r.ticker}:${rule.id}`,
-            dedupeWindowHours: 24
+            dedupeWindowHours: 24,
+            userId
           });
           if (!fundamentalResult?.deduped) fundamentalHits += 1;
         }
@@ -297,18 +304,30 @@ async function runEarningsReviewJob() {
   return `${tickers.length} 只票检查完成，${notified} 条业绩后提醒已通知` + (fundamentalHits ? `，${fundamentalHits} 条基本面证伪命中` : "");
 }
 
+function schedulerUserIds() {
+  const ids = listUsers().map((user) => user.id);
+  return ids.length ? ids : ["local"];
+}
+
+async function runForUsers(job) {
+  const ids = schedulerUserIds();
+  const details = [];
+  for (const userId of ids) details.push(await job(userId));
+  return ids.length === 1 ? details[0] : `${ids.length} 位用户：${details.join("；")}`;
+}
+
 /** 内置任务注册表（代码即配置，可版本管理）。 */
 export const JOBS = [
-  { id: "digest_hk", label: "港股盘前速报", schedule: { kind: "daily", at: "09:00" }, run: () => runDigestJob("HK", "港股") },
-  { id: "digest_us", label: "美股盘前速报", schedule: { kind: "daily", at: "21:15" }, run: () => runDigestJob("US", "美股") },
-  { id: "position_lines", label: "持仓触线巡检", schedule: { kind: "interval", everyMinutes: 30, tradingHoursOnly: true }, run: runPositionLinesJob },
-  { id: "falsify_watch", label: "证伪监控巡检", schedule: { kind: "interval", everyMinutes: 30, tradingHoursOnly: true }, run: runFalsifyWatchJob },
-  { id: "review_reminder", label: "研究复盘提醒", schedule: { kind: "daily", at: "08:00" }, run: runReviewReminderJob },
+  { id: "digest_hk", label: "港股盘前速报", schedule: { kind: "daily", at: "09:00" }, run: () => runForUsers((userId) => runDigestJob("HK", "港股", userId)) },
+  { id: "digest_us", label: "美股盘前速报", schedule: { kind: "daily", at: "21:15" }, run: () => runForUsers((userId) => runDigestJob("US", "美股", userId)) },
+  { id: "position_lines", label: "持仓触线巡检", schedule: { kind: "interval", everyMinutes: 30, tradingHoursOnly: true }, run: () => runForUsers(runPositionLinesJob) },
+  { id: "falsify_watch", label: "证伪监控巡检", schedule: { kind: "interval", everyMinutes: 30, tradingHoursOnly: true }, run: () => runForUsers(runFalsifyWatchJob) },
+  { id: "review_reminder", label: "研究复盘提醒", schedule: { kind: "daily", at: "08:00" }, run: () => runForUsers(runReviewReminderJob) },
   { id: "db_backup", label: "研究库每日备份", schedule: { kind: "daily", at: "03:30" }, run: runDbBackupJob },
-  { id: "earnings_review", label: "业绩后复核", schedule: { kind: "daily", at: "07:30" }, run: runEarningsReviewJob },
+  { id: "earnings_review", label: "业绩后复核", schedule: { kind: "daily", at: "07:30" }, run: () => runForUsers(runEarningsReviewJob) },
   // M-1（PLAN v4 E9）：08:05 时两市均已收盘（港股 16:00 HKT 收盘、美股最晚 04:10 北京时间收盘），
   // 各用最近收盘价折一份近似 USD 快照，喂持仓页净值曲线，也是数据护城河的自沉淀序列。
-  { id: "portfolio_snapshot", label: "组合每日快照", schedule: { kind: "daily", at: "08:05" }, run: recordDailySnapshot }
+  { id: "portfolio_snapshot", label: "组合每日快照", schedule: { kind: "daily", at: "08:05" }, run: () => runForUsers(recordDailySnapshot) }
 ];
 
 // ── 引擎 ─────────────────────────────────────────────────────

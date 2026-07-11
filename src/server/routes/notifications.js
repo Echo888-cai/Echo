@@ -13,11 +13,14 @@ import { notify, telegramConfigured } from "../services/notifier.js";
 import { schedulerStatus } from "../services/scheduler.js";
 import { beijingMinute } from "../utils/time.js";
 
+const userId = (req) => req.echoUser?.id || "local";
+
 export function handleNotificationsList(req, res) {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
     const limit = Number(url.searchParams.get("limit")) || 20;
-    sendOk(res, { notifications: listNotifications(limit), unread: unreadCount(), telegram: telegramConfigured() });
+    const uid = userId(req);
+    sendOk(res, { notifications: listNotifications(limit, uid), unread: unreadCount(uid), telegram: telegramConfigured() });
   } catch (error) {
     sendError(res, 500, error.message || "读取通知失败");
   }
@@ -25,7 +28,7 @@ export function handleNotificationsList(req, res) {
 
 export function handleNotificationsUnread(req, res) {
   try {
-    sendOk(res, { unread: unreadCount() });
+    sendOk(res, { unread: unreadCount(userId(req)) });
   } catch (error) {
     sendError(res, 500, error.message || "读取未读数失败");
   }
@@ -34,10 +37,11 @@ export function handleNotificationsUnread(req, res) {
 export async function handleNotificationsRead(req, res) {
   try {
     const body = await readJsonBody(req);
-    if (body?.all) markAllRead();
-    else if (body?.id) markRead(body.id);
+    const uid = userId(req);
+    if (body?.all) markAllRead(uid);
+    else if (body?.id) markRead(body.id, uid);
     else return sendError(res, 400, "需要 {id} 或 {all:true}");
-    sendOk(res, { unread: unreadCount() });
+    sendOk(res, { unread: unreadCount(uid) });
   } catch (error) {
     sendError(res, 500, error.message || "标记已读失败");
   }
@@ -48,7 +52,8 @@ export async function handleNotificationsTest(req, res) {
     const result = await notify({
       kind: "system",
       title: "测试通知",
-      body: `这是一条来自 Luvio 的测试通知（${beijingMinute()} 北京时间）。看到即链路正常。`
+      body: `这是一条来自 Echo Research 的测试通知（${beijingMinute()} 北京时间）。看到即链路正常。`,
+      userId: userId(req)
       // 刻意不带 dedupeKey：测试要每次都发
     });
     sendOk(res, { ...result, telegramConfigured: telegramConfigured() });

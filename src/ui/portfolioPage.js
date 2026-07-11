@@ -11,7 +11,7 @@ import { buildChartPaths } from "./watch.js";
 
 // 展示级近似汇率——跟服务端 portfolioReview.js/portfolioSnapshot.js 的 FX_TO_USD 同一常量，
 // 三处折算数字才不会互相打架（PLAN v4 红线 11）。
-const FX_TO_USD = { USD: 1, HKD: 1 / 7.8 };
+const FX_TO_USD = { USD: 1, HKD: 1 / 7.8, CNY: 1 / 7.2 };
 
 export async function loadPortfolioPage() {
   if (S.portfolioPageLoading) return;

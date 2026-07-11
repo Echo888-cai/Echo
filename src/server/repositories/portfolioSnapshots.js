@@ -23,18 +23,19 @@ function hydrate(row) {
  * @param {{date: string, totalValueUsd: number|null, totalCostUsd: number|null,
  *   totalPnlUsd: number|null, positionCount: number, totals: Array<{currency: string, marketValue: number}>}} snapshot
  */
-export function upsertSnapshot(snapshot) {
+export function upsertSnapshot(snapshot, userId = "local") {
   const db = getDb();
   db.prepare(`
-    INSERT INTO portfolio_snapshots (snapshot_date, total_value_usd, total_cost_usd, total_pnl_usd, position_count, totals_json)
-    VALUES (@date, @totalValueUsd, @totalCostUsd, @totalPnlUsd, @positionCount, @totalsJson)
-    ON CONFLICT(snapshot_date) DO UPDATE SET
+    INSERT INTO portfolio_snapshots (user_id, snapshot_date, total_value_usd, total_cost_usd, total_pnl_usd, position_count, totals_json)
+    VALUES (@userId, @date, @totalValueUsd, @totalCostUsd, @totalPnlUsd, @positionCount, @totalsJson)
+    ON CONFLICT(user_id, snapshot_date) DO UPDATE SET
       total_value_usd = excluded.total_value_usd,
       total_cost_usd = excluded.total_cost_usd,
       total_pnl_usd = excluded.total_pnl_usd,
       position_count = excluded.position_count,
       totals_json = excluded.totals_json
   `).run({
+    userId,
     date: snapshot.date,
     totalValueUsd: snapshot.totalValueUsd ?? null,
     totalCostUsd: snapshot.totalCostUsd ?? null,
@@ -45,10 +46,10 @@ export function upsertSnapshot(snapshot) {
 }
 
 /** 最近 N 天快照，按日期升序（图表从旧到新绘制）。 */
-export function listSnapshots(limit = 180) {
+export function listSnapshots(limit = 180, userId = "local") {
   const db = getDb();
   const rows = db.prepare(
-    "SELECT * FROM (SELECT * FROM portfolio_snapshots ORDER BY snapshot_date DESC LIMIT ?) sub ORDER BY snapshot_date ASC"
-  ).all(limit);
+    "SELECT * FROM (SELECT * FROM portfolio_snapshots WHERE user_id = ? ORDER BY snapshot_date DESC LIMIT ?) sub ORDER BY snapshot_date ASC"
+  ).all(userId, limit);
   return rows.map(hydrate);
 }

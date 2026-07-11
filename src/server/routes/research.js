@@ -13,12 +13,14 @@ import { readJsonBody, sendOk, sendError } from "../utils/async.js";
 import { listResearchSessions, listConversations, getResearchSession, saveResearchSession, deleteResearchSession, clearResearchSessions, searchResearchSessions } from "../repositories/researchSessions.js";
 import { composeReport } from "../services/reportComposer.js";
 
+const userId = (req) => req.echoUser?.id || "local";
+
 export async function handleSessionList(req, res) {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
     const ticker = url.searchParams.get("ticker") || null;
     const limit = Math.min(50, parseInt(url.searchParams.get("limit") || "20", 10));
-    const sessions = listResearchSessions({ ticker, limit });
+    const sessions = listResearchSessions({ ticker, limit, userId: userId(req) });
     const withPreview = sessions.map(s => ({
       ...s,
       title: s.title || s.question || s.company_name || s.ticker,
@@ -42,7 +44,7 @@ export async function handleConversationList(req, res) {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
     const limit = Math.min(50, parseInt(url.searchParams.get("limit") || "20", 10));
-    const conversations = listConversations({ limit });
+    const conversations = listConversations({ limit, userId: userId(req) });
     sendOk(res, { conversations, count: conversations.length });
   } catch (error) {
     sendError(res, 500, error.message || "获取对话列表失败");
@@ -60,7 +62,7 @@ export async function handleSessionSearch(req, res) {
     const q = (url.searchParams.get("q") || "").trim();
     const limit = Math.min(50, parseInt(url.searchParams.get("limit") || "20", 10));
     if (q.length < 3) { sendOk(res, { results: [], count: 0, tooShort: true }); return; }
-    const results = searchResearchSessions(q, { limit }).map((r) => ({
+    const results = searchResearchSessions(q, { limit, userId: userId(req) }).map((r) => ({
       id: r.id,
       ticker: r.ticker,
       title: r.title || r.question || r.company_name || r.ticker,
@@ -84,7 +86,7 @@ export async function handleSessionSearch(req, res) {
 
 export async function handleSessionClear(req, res) {
   try {
-    const deleted = clearResearchSessions();
+    const deleted = clearResearchSessions(userId(req));
     sendOk(res, { deleted, cleared: true });
   } catch (error) {
     sendError(res, 500, error.message || "清空研究历史失败");
@@ -94,7 +96,7 @@ export async function handleSessionClear(req, res) {
 export async function handleSessionGet(req, res, id) {
   try {
     if (!id) { sendError(res, 400, "缺少 id"); return; }
-    const session = getResearchSession(id);
+    const session = getResearchSession(id, userId(req));
     if (!session) { sendError(res, 404, "未找到研究会话"); return; }
     // Build report
     let report = null;
@@ -110,7 +112,7 @@ export async function handleSessionGet(req, res, id) {
 export async function handleSessionDelete(req, res, id) {
   try {
     if (!id) { sendError(res, 400, "缺少 id"); return; }
-    const deleted = deleteResearchSession(id);
+    const deleted = deleteResearchSession(id, userId(req));
     if (!deleted) { sendError(res, 404, "未找到研究会话"); return; }
     sendOk(res, { deleted: true, sessionId: id });
   } catch (error) {
@@ -121,7 +123,7 @@ export async function handleSessionDelete(req, res, id) {
 export async function handleSessionMemo(req, res, id) {
   try {
     if (!id) { sendError(res, 400, "缺少 id"); return; }
-    const session = getResearchSession(id);
+    const session = getResearchSession(id, userId(req));
     if (!session) { sendError(res, 404, "未找到研究会话"); return; }
 
     const body = await readJsonBody(req);
@@ -139,7 +141,7 @@ export async function handleSessionMemo(req, res, id) {
       decisionPanel: session.decisionPanel,
       fullResearch: `${session.fullResearch || ""}\n\n## AI 助手备注\n> ${memoText}`,
       reportMarkdown: `${session.reportMarkdown || ""}\n\n---\n*用户备注 (${new Date().toISOString().slice(0, 10)}):*\n${memoText}`,
-    });
+    }, userId(req));
 
     sendOk(res, { memo: memoText, sessionId: id });
   } catch (error) {

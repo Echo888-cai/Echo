@@ -16,40 +16,40 @@
 import { getDb } from "../../db/index.js";
 
 /** 某 ticker 的活跃规则。 */
-export function listRules(ticker) {
+export function listRules(ticker, userId = "local") {
   return getDb()
-    .prepare("SELECT * FROM watch_rules WHERE ticker = ? AND active = 1 ORDER BY id")
-    .all(String(ticker || "").toUpperCase())
+    .prepare("SELECT * FROM watch_rules WHERE user_id = ? AND ticker = ? AND active = 1 ORDER BY id")
+    .all(userId, String(ticker || "").toUpperCase())
     .map(hydrate);
 }
 
 /** 全部活跃规则（巡检任务用）。 */
-export function listAllActiveRules() {
-  return getDb().prepare("SELECT * FROM watch_rules WHERE active = 1 ORDER BY ticker, id").all().map(hydrate);
+export function listAllActiveRules(userId = "local") {
+  return getDb().prepare("SELECT * FROM watch_rules WHERE user_id = ? AND active = 1 ORDER BY ticker, id").all(userId).map(hydrate);
 }
 
 /**
  * 用最新一轮解析结果整组重建该 ticker 的 falsifier 规则（幂等：先删后插）。
  * 只动 source='falsifier'，不碰未来的手动规则。
  */
-export function replaceFalsifierRules(ticker, rules = [], { sessionId = null } = {}) {
+export function replaceFalsifierRules(ticker, rules = [], { sessionId = null, userId = "local" } = {}) {
   const t = String(ticker || "").toUpperCase();
   if (!t) return 0;
   const db = getDb();
   const run = db.transaction(() => {
-    db.prepare("DELETE FROM watch_rules WHERE ticker = ? AND source = 'falsifier'").run(t);
+    db.prepare("DELETE FROM watch_rules WHERE user_id = ? AND ticker = ? AND source = 'falsifier'").run(userId, t);
     const ins = db.prepare(`
-      INSERT INTO watch_rules (ticker, kind, threshold, label, metric, source, session_id)
-      VALUES (?, ?, ?, ?, ?, 'falsifier', ?)
+      INSERT INTO watch_rules (user_id, ticker, kind, threshold, label, metric, source, session_id)
+      VALUES (?, ?, ?, ?, ?, ?, 'falsifier', ?)
     `);
-    for (const r of rules) ins.run(t, r.kind, r.threshold, String(r.label || "").slice(0, 300), r.metric || null, sessionId);
+    for (const r of rules) ins.run(userId, t, r.kind, r.threshold, String(r.label || "").slice(0, 300), r.metric || null, sessionId);
     return rules.length;
   });
   return run();
 }
 
-export function markTriggered(id) {
-  getDb().prepare("UPDATE watch_rules SET last_triggered_at = datetime('now') WHERE id = ?").run(Number(id));
+export function markTriggered(id, userId = "local") {
+  getDb().prepare("UPDATE watch_rules SET last_triggered_at = datetime('now') WHERE user_id = ? AND id = ?").run(userId, Number(id));
 }
 
 function hydrate(row) {

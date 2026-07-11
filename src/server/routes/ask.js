@@ -16,6 +16,7 @@ import { runChat } from "../services/chatOrchestrator.js";
 import { runDiscover } from "./discover.js";
 import { classifyDiscoveryIntent } from "../services/intentClassifier.js";
 import { planCompare } from "../services/agentPlanner.js";
+import { quotaGuard } from "../services/quotaService.js";
 
 /**
  * 决定一条 /api/ask 请求走哪条路由。纯函数，可单测。
@@ -39,6 +40,7 @@ export async function handleAskApi(req, res) {
   } catch {
     return sendJson(res, 400, { error: "请求体解析失败" });
   }
+  payload.userId = req.echoUser?.id || "local";
 
   // EA-2：规则优先的受控规划——命中"两标的对比"句式（如"英伟达和 AMD 谁赔率好"）就
   // 自动补上 compareWith，复用既有公司管道；命中不了原样落回下面的既有路由，零行为变更。
@@ -61,7 +63,11 @@ export async function handleAskApi(req, res) {
   const route = routeAsk(payload);
 
   // 公司路由：交给 runChat，它自己写 JSON 或 SSE 流式响应（含自身的错误收尾）。
-  if (route === "company") return runChat(payload, res);
+  if (route === "company") {
+    const limited = quotaGuard(payload.userId);
+    if (limited) return sendJson(res, limited.status, { error: limited.message, code: "QUOTA_EXCEEDED", usage: limited.usage });
+    return runChat(payload, res);
+  }
 
   // 发现层路由：把服务端决定的 kind 注入 payload，复用 runDiscover。结果对象已带 .kind，
   // 前端 runDiscovery 按 result.kind 渲染 screener/macro，与直连 /api/discover 完全一致。

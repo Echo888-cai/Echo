@@ -1,7 +1,8 @@
 import { normalizeTicker } from "./data.js";
-import { isUS } from "./market.js";
+import { detectMarket } from "./market.js";
 import { getUsFilings } from "./secFilings.js";
 import { searchHkexAllAnnouncements } from "./server/services/hkFilingsPipeline.js";
+import { searchCninfoReportsAnnouncements } from "./server/services/cnFilingsPipeline.js";
 
 /**
  * 统一出口：获取最近公告。
@@ -12,10 +13,37 @@ import { searchHkexAllAnnouncements } from "./server/services/hkFilingsPipeline.
  * 也总是"两条路都失败"，因为壳页面本来就是空的。现在改用 hkFilingsPipeline.js 里
  * 已验证有效的 titleSearchServlet 真实端点（与港股一手财报管道同源，真实数据不是
  * mock 出来的）。
+ *
+ * P-CN-2：三路市场判断（此前是 isUS ? SEC : HKEX 二元，会把 A 股也错送去 HKEX）——
+ * A 股走巨潮资讯网（cnFilingsPipeline.js），返回定期报告列表（年报/季报/半年报）。
  */
 export async function getRecentFilings(ticker) {
-  // US tickers go to SEC EDGAR (8-K / 10-Q / 10-K); HK stays on HKEX 披露易.
-  if (isUS(ticker)) return getUsFilings(ticker);
+  const market = detectMarket(ticker);
+  if (market === "US") return getUsFilings(ticker);
+
+  if (market === "CN") {
+    try {
+      const rows = await searchCninfoReportsAnnouncements(ticker);
+      if (!rows.length) throw new Error("巨潮资讯网近两年没有定期报告记录（可能停牌/新上市/代码有误）");
+      return {
+        ticker: normalizeTicker(ticker),
+        providerStatus: "ok",
+        source: "巨潮资讯网",
+        filings: rows.map((r) => ({ title: r.title, filingType: r.period?.periodLabel || "", publishedAt: r.publishedAt, url: r.url, source: "巨潮资讯网" })),
+        asOf: new Date().toISOString(),
+        errors: []
+      };
+    } catch (error) {
+      return {
+        ticker: normalizeTicker(ticker),
+        providerStatus: "missing",
+        source: "未接入",
+        filings: [],
+        asOf: new Date().toISOString(),
+        errors: [error.message]
+      };
+    }
+  }
 
   try {
     const rows = await searchHkexAllAnnouncements(ticker);
@@ -45,7 +73,7 @@ export async function getRecentFilings(ticker) {
  */
 export function filingsToMarkdown(filingsData) {
   if (!filingsData || filingsData.providerStatus !== "ok") {
-    return "公告（HKEX 披露易 / SEC EDGAR）：暂未取得可用公告。模型不能编造公告内容。";
+    return "公告（HKEX 披露易 / SEC EDGAR / 巨潮资讯网）：暂未取得可用公告。模型不能编造公告内容。";
   }
 
   const items = filingsData.filings

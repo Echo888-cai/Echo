@@ -302,12 +302,13 @@ export function watchCandidatesFrom({ portraitTicker, decisionPanel, companyName
 // EA-0：/api/chat 与统一入口 /api/ask 共用的可复用核心；也是 EA-1 工具层
 // researchCompany()/compareCompanies() 的落点。payload 已解析，res 用于 JSON 或 SSE 流式。
 /**
- * @param {{question?: string, company?: Object, compareWith?: Object, history?: Array<Object>, stream?: boolean, sessionId?: string, conversationId?: string, sessionTitle?: string, plan?: Array<Object>}} payload
+ * @param {{question?: string, company?: Object, compareWith?: Object, history?: Array<Object>, stream?: boolean, sessionId?: string, conversationId?: string, sessionTitle?: string, plan?: Array<Object>, userId?: string}} payload
  * @param {import("node:http").ServerResponse} res
  * @returns {Promise<void>} 非流式路径通过 sendJson 写入 res；流式路径写 SSE，不 return 数据
  */
 export async function runChat(payload, res) {
   try {
+    const userId = payload.userId || "local";
     const question = payload.question || "";
     const intent = classifyResearchIntent(question);
     const companyForEvidence = companyByTicker(payload.company?.ticker) || payload.company || {};
@@ -355,7 +356,7 @@ export async function runChat(payload, res) {
       financialsData: result.financialsData,
       marketSnapshot: result.marketSnapshot,
       valuation: valuation.cannotValueReason ? null : valuation,
-      portraitContext: portraitTicker ? loadPortraitContext(portraitTicker) : "",
+      portraitContext: portraitTicker ? loadPortraitContext(portraitTicker, userId) : "",
       // 最近几轮对话，注入作答 prompt 让追问能承接上文（连续对话能力）。
       history: Array.isArray(payload.history) ? payload.history : [],
       // 港美双重上市口径：基本面/估值走 ADR，盈亏按用户问的那一边——让作答明确口径、不算错币种盈亏。
@@ -375,7 +376,7 @@ export async function runChat(payload, res) {
     let content = fallback;
     let chatModel = null;
     // R3：本地持仓记录（不是自由文本 userContext）——数字级校验持仓盈亏时的事实源。
-    const position = payload.company?.ticker ? getPosition(payload.company.ticker) : null;
+    const position = payload.company?.ticker ? getPosition(payload.company.ticker, userId) : null;
 
     // ── 流式（SSE）：阶段2 答案逐字推送，收尾再发一个 final 事件携带完整面板/估值/接地 ──
     if (wantStream) {
@@ -457,6 +458,7 @@ function lightHoldings(otherHoldings = []) {
 /** @returns {Promise<import("../types.js").ChatFinalResponse>} */
 async function finalizeChat({ payload, result, webEvidence, valuation, analyst, portraitTicker, intent, content, chatModel, compareData, otherHoldings, dualQuote, compPeers, earnings, position, fallback }) {
   const question = payload.question || "";
+  const userId = payload.userId || "local";
   content = normalizeResearchAnswer(content, result.decisionPanel, result.dataSources);
 
   // F-3：模型在正文末尾按纪律附带的结构化基本面证伪条件（FALSIFIERS_JSON: [...]）——
@@ -504,7 +506,7 @@ async function finalizeChat({ payload, result, webEvidence, valuation, analyst, 
         avgCost: uc.cost != null ? Number(uc.cost) : undefined,
         stopLoss: uc.stopLoss != null ? Number(uc.stopLoss) : undefined,
         takeProfit: uc.takeProfit != null ? Number(uc.takeProfit) : undefined
-      });
+      }, userId);
       positionSaved = true;
     } catch (err) {
       console.warn("portfolio 记账失败:", err?.message || err);
@@ -519,7 +521,7 @@ async function finalizeChat({ payload, result, webEvidence, valuation, analyst, 
         companyName: h.company.nameZh || h.summary?.name,
         shares: h.shares != null ? Number(h.shares) : undefined,
         avgCost: h.cost != null ? Number(h.cost) : undefined
-      });
+      }, userId);
       positionSaved = true;
     } catch (err) {
       console.warn("portfolio 多笔记账失败:", err?.message || err);
@@ -552,7 +554,8 @@ async function finalizeChat({ payload, result, webEvidence, valuation, analyst, 
         question,
         answerContent: content, // 证伪段落里的价格线条件从这里抽取沉淀
         sessionId,
-        structuredFalsifiers // F-3：基本面条件走模型结构化输出，不再靠事后文本解析
+        structuredFalsifiers, // F-3：基本面条件走模型结构化输出，不再靠事后文本解析
+        userId
       });
     } catch (err) {
       console.warn("company_profile 回写失败:", err?.message || err);
@@ -564,7 +567,7 @@ async function finalizeChat({ payload, result, webEvidence, valuation, analyst, 
   // summary 的，壳记录不算）都一起进看盘，不再只有主公司会出现在看盘里。
   // watchRestored 只跟踪主公司（前端已有的"重新关注"文案专属于它）；newlyWatched 是
   // 这一轮真正新增的（之前不在看盘里的），供前端判断要不要提示 + 刷新看盘数据。
-  const alreadyWatched = new Set(listWatchAdds().map((w) => w.ticker));
+  const alreadyWatched = new Set(listWatchAdds(userId).map((w) => w.ticker));
   const watchCandidates = watchCandidatesFrom({
     portraitTicker,
     decisionPanel: result.decisionPanel,
@@ -577,9 +580,9 @@ async function finalizeChat({ payload, result, webEvidence, valuation, analyst, 
   const newlyWatched = [];
   for (const candidate of watchCandidates) {
     try {
-      const wasHidden = getHiddenTickers().has(candidate.ticker);
+      const wasHidden = getHiddenTickers(userId).has(candidate.ticker);
       if (candidate.ticker === portraitTicker) watchRestored = wasHidden;
-      addToWatch(candidate.ticker, candidate.name);
+      addToWatch(candidate.ticker, candidate.name, userId);
       if (!alreadyWatched.has(candidate.ticker)) newlyWatched.push({ ticker: candidate.ticker, name: candidate.name });
     } catch (err) {
       if (candidate.ticker === portraitTicker) watchRestored = false;
@@ -678,7 +681,7 @@ function persistFinalChatSession(payload, result, content, extra = {}) {
       researchStatus: panel?.researchStatus,
       confidence: panel?.confidence,
       thread
-    });
+    }, payload.userId || "local");
     return saved.id;
   } catch (error) {
     console.warn("chat session 持久化失败:", error?.message || error);

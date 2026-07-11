@@ -14,45 +14,45 @@ import { normalizeTicker } from "../../data.js";
  * 手动加入的（最近加的在前）。
  * @returns {import("../types.js").WatchlistEntry[]}
  */
-export function listWatchAdds() {
+export function listWatchAdds(userId = "local") {
   return getDb()
-    .prepare("SELECT ticker, company_name FROM watchlist_prefs WHERE mode = 'add' ORDER BY created_at DESC")
-    .all()
+    .prepare("SELECT ticker, company_name FROM watchlist_prefs WHERE user_id = ? AND mode = 'add' ORDER BY created_at DESC")
+    .all(userId)
     .map((r) => ({ ticker: r.ticker, nameZh: r.company_name || r.ticker }));
 }
 
 /** 被手动隐藏的 ticker 集合。 */
-export function getHiddenTickers() {
-  return new Set(getDb().prepare("SELECT ticker FROM watchlist_prefs WHERE mode = 'hide'").all().map((r) => r.ticker));
+export function getHiddenTickers(userId = "local") {
+  return new Set(getDb().prepare("SELECT ticker FROM watchlist_prefs WHERE user_id = ? AND mode = 'hide'").all(userId).map((r) => r.ticker));
 }
 
 /** 加入关注：写 add（覆盖可能存在的 hide）。 */
-export function addToWatch(ticker, name) {
+export function addToWatch(ticker, name, userId = "local") {
   const t = normalizeTicker(ticker);
   if (!t) return false;
   getDb()
     .prepare(`
-      INSERT INTO watchlist_prefs (ticker, company_name, mode, created_at)
-      VALUES (?, ?, 'add', datetime('now'))
-      ON CONFLICT(ticker) DO UPDATE SET
+      INSERT INTO watchlist_prefs (user_id, ticker, company_name, mode, created_at)
+      VALUES (?, ?, ?, 'add', datetime('now'))
+      ON CONFLICT(user_id, ticker) DO UPDATE SET
         mode = 'add',
         company_name = COALESCE(excluded.company_name, watchlist_prefs.company_name),
         created_at = datetime('now')
     `)
-    .run(t, name || null);
+    .run(userId, t, name || null);
   return true;
 }
 
 /** 移出关注：写 hide（连"自动来源"也一起挡掉，覆盖可能存在的 add）。 */
-export function removeFromWatch(ticker) {
+export function removeFromWatch(ticker, userId = "local") {
   const t = normalizeTicker(ticker);
   if (!t) return false;
   getDb()
     .prepare(`
-      INSERT INTO watchlist_prefs (ticker, company_name, mode, created_at)
-      VALUES (?, NULL, 'hide', datetime('now'))
-      ON CONFLICT(ticker) DO UPDATE SET mode = 'hide', created_at = datetime('now')
+      INSERT INTO watchlist_prefs (user_id, ticker, company_name, mode, created_at)
+      VALUES (?, ?, NULL, 'hide', datetime('now'))
+      ON CONFLICT(user_id, ticker) DO UPDATE SET mode = 'hide', created_at = datetime('now')
     `)
-    .run(t);
+    .run(userId, t);
   return true;
 }

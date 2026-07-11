@@ -1,4 +1,4 @@
-# Luvio Data Pipeline
+# Echo Research Data Pipeline
 
 How real-time and reference data flows through the system.
 

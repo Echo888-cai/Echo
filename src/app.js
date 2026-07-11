@@ -12,12 +12,17 @@ import {
   searchSessionHistory, clearSessionHistorySearch
 } from "./ui/research.js";
 import {
-  renderWatchPage, refreshWatchDesk, addWatch, removeWatch, exportPortrait
+  renderWatchPage, refreshWatchDesk, addWatch, removeWatch, exportPortrait, exportPortraitImage
 } from "./ui/watch.js";
 import { renderSettings, refreshStatus, loadSchedulerStatus, loadResearchScorecard } from "./ui/settings.js";
 import { renderPortfolioPage, deletePortfolioPosition } from "./ui/portfolioPage.js";
+import { renderLogin, submitAuth, logout } from "./ui/login.js";
+import { api } from "./ui/api.js";
+import { loadPreferences, completeOnboarding, submitFeedback, setPreference } from "./ui/beta.js";
 
 function render() {
+  // U-1：多用户模式且未登录 → 整页登录卡，不渲染任何研究内容。
+  if (S.authRequired) { renderLogin(); return; }
   // 后台会话完成会触发 render() 重建视图——若用户正在 composer 里打字，full innerHTML 会清掉
   // 输入。渲染前抓住 textarea 内容/光标，渲染后还原，避免并行场景下"打字打一半被清空"。
   const ta = /** @type {HTMLTextAreaElement|null} */ (document.querySelector(".composer textarea"));
@@ -83,6 +88,21 @@ document.addEventListener("submit", (event) => {
   void addWatch(/** @type {HTMLInputElement} */ (/** @type {any} */ (form.elements).q).value.trim());
 });
 
+document.addEventListener("submit", (event) => {
+  const form = /** @type {HTMLFormElement|null} */ (/** @type {Element} */ (event.target).closest("[data-form='feedback']"));
+  if (!form) return;
+  event.preventDefault();
+  void submitFeedback(form);
+});
+
+// U-1：登录 / 邀请注册表单。
+document.addEventListener("submit", (event) => {
+  const form = /** @type {HTMLFormElement|null} */ (/** @type {Element} */ (event.target).closest("[data-form='auth']"));
+  if (!form) return;
+  event.preventDefault();
+  void submitAuth(form);
+});
+
 document.addEventListener("click", async (event) => {
   // 通知面板：点面板外任意处收起（含点别的按钮——先收起再继续处理该按钮）。
   if (S.notifOpen && !(/** @type {Element} */ (event.target).closest(".notif-wrap"))) {
@@ -98,6 +118,14 @@ document.addEventListener("click", async (event) => {
   if (action === "notif-test") { void sendTestNotification(); return; }
   if (action === "new") clearResearch();
   if (action === "toggle-theme") { toggleTheme(); return; }
+  if (action === "auth-mode") { S.authMode = target.dataset.mode || "login"; S.authError = ""; render(); return; }
+  if (action === "logout") { void logout(); return; }
+  if (action === "feedback-open") { S.feedbackOpen = true; render(); return; }
+  if (action === "feedback-card") return;
+  if (action === "feedback-close") {
+    S.feedbackOpen = false; render(); return;
+  }
+  if (action === "onboarding-complete") { void completeOnboarding(); return; }
   if (action === "export") exportResearch();
   if (action === "open-stock") { location.hash = `#/watch/${target.dataset.ticker}`; render(); return; }
   if (action === "watch-filter") { S.watchFilter = target.dataset.v || "all"; render(); return; }
@@ -109,6 +137,7 @@ document.addEventListener("click", async (event) => {
   if (action === "chart-range") { S.chartRange = target.dataset.range || "3m"; render(); return; }
   if (action === "stock-tab") { S.stockTab = target.dataset.tab || "overview"; render(); return; }
   if (action === "export-portrait") { exportPortrait(); return; }
+  if (action === "export-portrait-image") { exportPortraitImage(); return; }
   if (action === "watch-add-open") { S.watchAddOpen = true; S.watchAddError = ""; render(); setTimeout(() => /** @type {HTMLElement|null} */ (document.querySelector(".wl-add input"))?.focus(), 0); return; }
   if (action === "watch-add-close") { S.watchAddOpen = false; S.watchAddError = ""; render(); return; }
   if (action === "untrack-stock") { void removeWatch(target.dataset.ticker); return; }
@@ -165,6 +194,8 @@ document.addEventListener("click", async (event) => {
 });
 
 document.addEventListener("change", (event) => {
+  const pref = /** @type {HTMLInputElement|null} */ (/** @type {Element} */ (event.target).closest(".pref-toggle[data-pref]"));
+  if (pref) { void setPreference(pref.dataset.pref, pref.checked); return; }
   const input = /** @type {HTMLInputElement|null} */ (/** @type {Element} */ (event.target).closest("input[type='file'][name='documents']"));
   if (input) void parseFiles(input);
 });
@@ -204,10 +235,23 @@ window.addEventListener("hashchange", () => {
   render();
 });
 
-// 首绘只等轻资源（状态/会话/未读数，各 <300ms）；看盘聚合是重活，后台跑，
-// 落在 /watch 时由 refreshWatchDesk 内部分段 render（fast 先到先画）。
-await Promise.all([refreshStatus(), refreshSessions(), refreshNotifUnread()]);
-render();
-void refreshWatchDesk();
+// U-1：先问一次身份——多用户模式且未登录时直接渲染登录卡，别的都不拉
+// （拉了也全是 401）。单用户 legacy 模式（服务端没建 owner）行为与从前完全一致。
+try {
+  const me = await api("/api/auth/me");
+  S.multiUser = !!me.multiUser;
+  S.authUser = me.user || null;
+  if (S.multiUser && !S.authUser) S.authRequired = true;
+} catch { /* 身份接口失败按单用户处理，后续 401 拦截器会兜底 */ }
+if (S.authRequired) {
+  render();
+} else {
+  // 首绘只等轻资源（状态/会话/未读数，各 <300ms）；看盘聚合是重活，后台跑，
+  // 落在 /watch 时由 refreshWatchDesk 内部分段 render（fast 先到先画）。
+  await Promise.all([refreshStatus(), refreshSessions(), refreshNotifUnread(), loadPreferences()]);
+  render();
+  void refreshWatchDesk();
+}
 // 未读通知轮询：60s 一次，只做角标局部更新（renderNotifBadge），不打扰输入/滚动。
-setInterval(() => void refreshNotifUnread(), 60_000);
+// 登录卡状态下不轮询（每次都是 401，白打）。
+setInterval(() => { if (!S.authRequired) void refreshNotifUnread(); }, 60_000);

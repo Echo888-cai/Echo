@@ -19,14 +19,24 @@ export function withTimeout(promise, ms, fallback = null) {
 }
 
 /** Parse a JSON request body. Throws on parse error or oversized payload. */
-export function readJsonBody(req, { maxBytes = 8_000_000 } = {}) {
+export function readJsonBody(req, { maxBytes = 256_000 } = {}) {
   return new Promise((resolve, reject) => {
     let raw = "";
+    let bytes = 0;
+    let rejected = false;
     req.on("data", (chunk) => {
+      if (rejected) return;
+      bytes += Buffer.byteLength(chunk);
+      if (bytes > maxBytes) {
+        rejected = true;
+        raw = "";
+        reject(new Error("请求体过大"));
+        return;
+      }
       raw += chunk;
-      if (raw.length > maxBytes) reject(new Error("请求体过大"));
     });
     req.on("end", () => {
+      if (rejected) return;
       try {
         resolve(raw ? JSON.parse(raw) : {});
       } catch (error) {

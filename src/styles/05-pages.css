@@ -138,6 +138,7 @@
 
 .ex-badge.hk { color: #b26a00; background: rgba(217, 154, 43, 0.14); }
 .ex-badge.us { color: var(--blue-ink); background: var(--blue-soft); }
+.ex-badge.cn { color: var(--ink-2); background: rgba(61, 59, 53, 0.1); }
 
 .ex-ticker {
   font-size: 11.5px;

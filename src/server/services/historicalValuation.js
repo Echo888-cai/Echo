@@ -14,7 +14,7 @@
  * 样本不足（<5 年）诚实返回 missing，不用两三个点硬算百分位。亏损年份（PE<=0）不计入
  * 分布——跟当前正 PE 比较没有意义。
  */
-import { adrOrBareSymbol } from "../../market.js";
+import { adrOrBareSymbol, detectMarket } from "../../market.js";
 import { getHistoricalValuationRow, upsertHistoricalValuationSeries } from "../repositories/historicalValuationRepository.js";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
@@ -29,7 +29,7 @@ async function fetchJson(url, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "Luvio/0.1 historical valuation", Accept: "application/json" } });
+    const response = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "EchoResearch/1.0 historical valuation", Accept: "application/json" } });
     const text = await response.text();
     if (!response.ok) throw new Error(`${response.status} ${text.slice(0, 160)}`);
     return JSON.parse(text);
@@ -78,7 +78,8 @@ export async function getHistoricalValuationSeries(ticker) {
 
   const symbol = adrOrBareSymbol(t);
   if (!symbol) {
-    const result = { series: [], providerStatus: "missing", detail: "港股无美股 ADR 映射，Finnhub 免费档无法核到历史估值序列" };
+    const marketName = detectMarket(t) === "CN" ? "A 股" : "港股";
+    const result = { series: [], providerStatus: "missing", detail: `${marketName}无美股 ADR 映射，Finnhub 免费档无法核到历史估值序列` };
     upsertHistoricalValuationSeries({ ticker: t, ...result });
     return { ...result, stale: false };
   }

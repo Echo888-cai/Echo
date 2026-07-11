@@ -198,7 +198,7 @@ export async function loadSession(id) {
     let company = null;
     if (session.ticker) {
       const resolved = await resolveCompany(session.ticker);
-      if (resolved && !resolved.unresolved && !resolved.unsupported) company = resolved;
+      if (resolved && !resolved.unresolved) company = resolved;
     }
     if (!company && panel?.ticker) company = { ticker: panel.ticker, nameZh: panel.companyName || panel.ticker };
     setSessionId(session.id);
@@ -526,15 +526,6 @@ export async function sendChat(question, preResolved = null) {
     // 而不是让用户对着"正在检索和思考"干等、以为卡住了。
     S.resolving = true; S.resolvingLabel = "正在识别公司"; render();
     const resolved = await resolveCompany(question, { verify: true });
-    // A 股（沪深）暂不支持：给专门提示，而不是泛泛的"没识别出"。
-    if (resolved?.unsupported) {
-      appendMessage(
-        "assistant",
-        `「${resolved.name}」是 A 股（沪深）。目前只覆盖**港股和美股**，这家暂时研究不了。\n\n` +
-        `如果它同时在港股或美股上市（很多中概股是双重上市），可以用对应代码再问我，比如港股 **xxxx.HK** 或美股代码。`
-      );
-      return;
-    }
     // 点名了一家公司却解析不出：明确说"没识别出"，绝不拿上一家公司硬答。
     if (resolved?.unresolved) {
       appendMessage(
@@ -821,7 +812,7 @@ function renderEmptyState() {
     <div class="hero-head">
       <p class="hero-eyebrow"><span class="hero-spark"></span>ECHO RESEARCH · 发现真正的价值</p>
       <h2>喧声之外，<br>见真知。<span class="hero-slogan-en">Seek signal. Ignore noise.</span></h2>
-      <p class="hero-sub">港美股与全球科技资产的 AI 价值研究。从财报、估值、新闻与行业趋势里提取真正有价值的信号，一句话就开始，复杂研究再沉到底层。</p>
+      <p class="hero-sub">A 股、港股、美股与全球科技资产的 AI 价值研究。从财报、估值、新闻与行业趋势里提取真正有价值的信号，一句话就开始，复杂研究再沉到底层。</p>
       <div class="hero-caps">${caps.map((c) => `<span class="cap-pill">${esc(c)}</span>`).join("")}</div>
     </div>
     <div class="example-grid">
