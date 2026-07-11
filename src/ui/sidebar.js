@@ -99,7 +99,7 @@ function renderSnapshotCard(company, panel, thread) {
       <div class="snapshot-id">
         <p>${focusLabel}</p>
         <h2>${esc(name)}</h2>
-        <span>${ticker ? `${esc(ticker)}${marketLabel ? ` · ${marketLabel}` : ""}` : "输入公司名、港股或美股代码"}</span>
+        <span>${ticker ? `${esc(ticker)}${marketLabel ? ` · ${marketLabel}` : ""}` : "输入公司名、A股、港股或美股代码"}</span>
       </div>
       ${confChip}
     </div>

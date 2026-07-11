@@ -748,10 +748,10 @@ function renderComposer(company) {
     ? `${esc(activeRun()?.label || S.resolvingLabel)} · 已等待 <b data-busy-seconds>${busyElapsedSeconds()}</b>s`
     : company
       ? `${esc(company.nameZh || company.ticker)} · ${esc(company.ticker)}`
-      : "先输入公司名、港股或美股代码";
+      : "先输入公司名、A股、港股或美股代码";
   return `<form class="composer" data-form="chat">
     <div class="composer-panel">
-      <textarea name="query" rows="2" maxlength="1200" placeholder="${company ? "继续追问：利润、护城河、估值或证伪条件" : "输入公司名、港股或美股代码，例如：阿里巴巴最近怎么样？AAPL 赚钱吗？"}"></textarea>
+      <textarea name="query" rows="2" maxlength="1200" placeholder="${company ? "继续追问：利润、护城河、估值或证伪条件" : "输入公司名、A股、港股或美股代码，例如：阿里巴巴最近怎么样？AAPL 赚钱吗？"}"></textarea>
       <div class="composer-footer">
         <div class="composer-left-tools">
           <label class="tool-chip icon-chip file-label" title="上传资料">+<input type="file" name="documents" multiple accept=".pdf,.txt,.md,.csv,.json,image/*"></label>
@@ -773,7 +773,7 @@ function renderEmptyState() {
     { name: "腾讯", ticker: "0700.HK", market: "港股", q: "腾讯最近怎么样？" },
     { name: "苹果", ticker: "AAPL", market: "美股", q: "苹果赚钱吗？" },
     { name: "英伟达", ticker: "NVDA", market: "美股", q: "英伟达的护城河在哪？" },
-    { name: "比亚迪", ticker: "1211.HK", market: "港股", q: "比亚迪靠什么赚钱？" }
+    { name: "贵州茅台", ticker: "600519.SS", market: "A股", q: "贵州茅台靠什么赚钱？" }
   ];
   const caps = ["赚钱机制", "护城河", "竞争格局", "估值赔率", "什么会证伪"];
   return `<div class="empty-chat">
