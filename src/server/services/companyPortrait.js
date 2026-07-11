@@ -121,6 +121,45 @@ export function extractFalsifiersFromAnswer(content = "") {
 }
 
 /**
+ * F1（架构审查修复）：从回答正文抽"一句话投资主线"。
+ *
+ * 根因：distillView 原本读 panel.oneLineView（模型结构化面板字段），但 runAgent 的三个
+ * 调用点全部传 useModelPanel:false，这个字段永远是空字符串——是条死路，不是偶发 bug。
+ * 模型的真实判断只存在于回答正文的"我的判断"段落里（chat/report 各答题模板的固定段落，
+ * 见 answerComposer.js 的段落顺序约定），这里跟 extractFalsifiersFromAnswer 同思路，从正文
+ * 里把它抽出来，而不是等一个永远不会被请求的字段。
+ */
+const THESIS_HEAD_RE = /^#{0,3}\s*(?:\d+[.、]\s*)?我的判断\s*[：:]?\s*(.*)$/;
+export function extractThesisFromAnswer(content = "") {
+  const lines = String(content || "").split(/\r?\n/);
+  const clean = (s) => s.replace(/[*_`#]/g, "").trim();
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const m = THESIS_HEAD_RE.exec(line);
+    if (!m) continue;
+    let text = clean(m[1] || "");
+    if (!text) {
+      // 标题单独一行：往下收正文段落，直到撞到下一个段落边界。
+      const collected = [];
+      for (let j = i + 1; j < lines.length; j++) {
+        const next = lines[j].trim();
+        if (!next) { if (collected.length) break; continue; }
+        if (SECTION_END_RE.test(next)) break;
+        collected.push(clean(next));
+      }
+      text = collected.join("");
+    }
+    if (!text) continue;
+    // 只取第一句，避免整段"我的判断"论述涌入本该是一句话的主线字段。
+    const firstSentence = (text.split(/(?<=[。！？])/)[0] || text).trim();
+    const result = firstSentence.slice(0, 120);
+    return result.length >= 6 ? result : null;
+  }
+  return null;
+}
+
+/**
  * R12（M-3）：thesis 碎片过滤——真实审计发现 6 只关注股里 5 只的"投资主线"存的是
  * "收入增速 -1.10%，毛利率 55.71%"这类数据碎片，不是一句判断。根因是旧版 distillView
  * 把 `panel.keyDrivers` 里"基本面"驱动因素的数据摘要当 oneLineView 的回落值——那是给
@@ -210,7 +249,11 @@ export function updatePortraitFromPanel({ ticker, panel, valuation = null, quest
   // 回答正文里有具体的证伪条件（模型按纪律给的量化阈值/价格线）时，优先沉淀它们。
   const fromAnswer = extractFalsifiersFromAnswer(answerContent);
   if (fromAnswer.length) view.falsifiers = fromAnswer.slice(0, 6);
-  // 本轮没形成新主线（如模型未给 oneLineView 的本地兜底路径）时保留已有主线——空值不覆盖真实判断。
+  // F1：panel.oneLineView 是死字段（见 extractThesisFromAnswer 顶部注释），一句话主线
+  // 改从回答正文的"我的判断"段落抽取；碎片过滤器兜底，防止抽到数据罗列。
+  const thesisFromAnswer = extractThesisFromAnswer(answerContent);
+  if (thesisFromAnswer && !isDataFragmentThesis(thesisFromAnswer)) view.thesis = thesisFromAnswer;
+  // 本轮没形成新主线（如模型未给判断段落的本地兜底路径）时保留已有主线——空值不覆盖真实判断。
   if (!view.thesis && prev?.thesis) view.thesis = prev.thesis;
   if (!view.thesis && !view.bull.length && !view.bear.length) {
     return { created: false, changed: false, profile: prev };

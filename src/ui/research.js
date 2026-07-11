@@ -46,43 +46,6 @@ export async function refreshSessions() {
   }
 }
 
-// P7：历史研究全文检索——debounce 由 app.js 的 input 监听器负责，这里只管请求本身。
-// 查询串短于 3 个字符（trigram 索引的固有限制）时不发请求，直接标记 tooShort，
-// 让侧栏提示"再多打几个字"而不是"没搜到"（两者对用户的含义完全不同）。
-export async function searchSessionHistory(query) {
-  const q = String(query || "").trim();
-  S.historySearchQuery = query;
-  if (q.length < 3) {
-    S.historySearchResults = [];
-    S.historySearchTooShort = q.length > 0;
-    S.historySearchLoading = false;
-    render();
-    return;
-  }
-  S.historySearchLoading = true;
-  S.historySearchTooShort = false;
-  render();
-  try {
-    const data = await api(`/api/research/search?q=${encodeURIComponent(q)}&limit=20`);
-    // 只有当前查询串仍等于发出请求时的查询串才落地结果——防止慢请求乱序回来
-    // 覆盖用户已经继续输入后的新结果（经典的搜索框竞态问题）。
-    if (S.historySearchQuery === query) S.historySearchResults = data.results || [];
-  } catch {
-    if (S.historySearchQuery === query) S.historySearchResults = [];
-  } finally {
-    if (S.historySearchQuery === query) S.historySearchLoading = false;
-    render();
-  }
-}
-
-export function clearSessionHistorySearch() {
-  S.historySearchQuery = "";
-  S.historySearchResults = [];
-  S.historySearchTooShort = false;
-  S.historySearchLoading = false;
-  render();
-}
-
 export async function copyMessage(id) {
   const message = getThread().find((item) => item.id === id);
   if (!message?.content) return;
@@ -641,6 +604,11 @@ export async function generateDeepResearch() {
       if (result.sessionId) setSessionId(result.sessionId);
       if (result.decisionPanel) setPanel(result.decisionPanel);
       appendMessage("assistant", result.markdown || "深度研究没有生成有效内容。", { type: "deep_research", mode: result.mode, model: result.model }, { keepScroll: true });
+      // F2：深度研究现在也会回写长期画像（此前只有普通问答会），给出同样的确认反馈。
+      const label = company.nameZh || company.ticker;
+      if (result.portrait?.created) toast(`已为 ${label} 建立长期画像，并加入看盘。`);
+      else if (result.portrait?.changed) toast(`已更新 ${label} 的长期画像（判断有变化）。`);
+      if (result.portrait && result.portrait.ticker === S.watchStockTicker) S.stockPortrait = null;
     } else {
       toast(`${company.nameZh || company.ticker} 的深度研究完成了，点左侧查看。`);
     }

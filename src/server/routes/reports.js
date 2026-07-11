@@ -10,6 +10,10 @@ import { getComparableCompanies } from "../services/compPeers.js";
 import { composeReport, reportPreview } from "../services/reportComposer.js";
 import { saveResearchSession } from "../repositories/researchSessions.js";
 import { quotaGuard } from "../services/quotaService.js";
+import { applyFactGuard } from "../services/chatOrchestrator.js";
+import { extractStructuredFalsifiers } from "../services/falsifyRules.js";
+import { updatePortraitFromPanel } from "../services/companyPortrait.js";
+import { summarizeVerdict } from "../services/factGuard.js";
 
 const DISCLAIMER =
   "\n\n---\n> 本报告仅供研究学习，不构成投资建议。请用公司原始公告核验关键数据，独立做出决定。";
@@ -60,16 +64,54 @@ export async function handleReportGenerateApi(req, res) {
         user: buildReportPrompt(question, panel, result.dataSources, context)
       }), 42000, null);
       if (model?.content && model.content.trim().length > 200) {
-        markdown = model.content.trim() + DISCLAIMER;
+        markdown = model.content.trim();
       }
     }
     if (!markdown) {
       markdown = composeReport(panel).markdown;
     }
 
+    // F2（架构审查修复）：深度研究此前完全绕开数字护栏和画像回写——"更正式"的报告反而
+    // 没人校验数字，生成完也从不反哺看盘画像（只存进研究历史，看盘页面永远看不到它）。
+    // 这里对齐 chatOrchestrator.finalizeChat 的同一套收口逻辑，不重新发明。
+    const { rules: structuredFalsifiers, cleanContent } = extractStructuredFalsifiers(markdown);
+    markdown = cleanContent;
+
+    let factGuardVerdict = null;
+    if (model?.content) {
+      const registrySources = {
+        ticker: panel?.ticker, marketSnapshot: result.marketSnapshot, financialsData: result.financialsData,
+        valuation: valuation?.cannotValueReason ? null : valuation, compPeers
+      };
+      const outcome = await applyFactGuard({ content: markdown, sources: registrySources, fallback: composeReport(panel).markdown });
+      markdown = outcome.content;
+      factGuardVerdict = outcome.verdict ? { ...summarizeVerdict(outcome.verdict), repaired: outcome.repaired, degraded: outcome.degraded } : null;
+    }
+    markdown += DISCLAIMER;
+
     result.webEvidence = webEvidence;
     mergeEvidenceIntoPanel(panel, webEvidence);
     const sessionId = persistFinalReportSession(payload, result, markdown);
+
+    // 回写长期画像：深度研究此前是唯一不写画像的入口，看盘上永远看不到它的产出。
+    let portrait = null;
+    if (panel?.ticker) {
+      try {
+        portrait = updatePortraitFromPanel({
+          ticker: panel.ticker,
+          panel,
+          valuation: valuation.cannotValueReason ? null : valuation,
+          question,
+          answerContent: markdown,
+          sessionId,
+          structuredFalsifiers,
+          userId: payload.userId
+        });
+      } catch (err) {
+        console.warn("company_profile 回写失败（深度研究）:", err?.message || err);
+      }
+    }
+
     sendJson(res, 200, {
       mode: model?.content ? "report_model" : "report_local",
       provider: model?.provider || result.provider,
@@ -81,7 +123,11 @@ export async function handleReportGenerateApi(req, res) {
       dataSources: result.dataSources,
       marketSnapshot: result.marketSnapshot,
       newsSnapshot: result.newsSnapshot,
-      webEvidence
+      webEvidence,
+      factGuard: factGuardVerdict,
+      portrait: portrait
+        ? { ticker: panel.ticker, created: portrait.created, changed: portrait.changed, turnCount: portrait.profile?.turnCount || 0 }
+        : null
     });
   } catch (error) {
     const status = error.statusCode || 500;
