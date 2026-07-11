@@ -8,7 +8,11 @@ export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PAT
 # 项目目录 = 本脚本所在目录的上一级（脚本在 scripts/ 里）。这样文件夹改名/移动也不会失灵。
 PROJECT_DIR="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)"
 PORT=4173
-URL="http://127.0.0.1:${PORT}"
+ENV_FILE="$(cd "$(dirname "$0")/.." && pwd)/.env"
+if [ -f "$ENV_FILE" ]; then
+  CONFIGURED_URL="$(sed -n 's/^ECHO_BASE_URL=//p' "$ENV_FILE" | head -n 1 | tr -d '"\047' | xargs)"
+fi
+URL="${CONFIGURED_URL:-http://127.0.0.1:${PORT}}"
 
 # 找 node：优先 PATH，其次常见安装位置（Intel /usr/local、Apple Silicon /opt/homebrew）。
 NODE_BIN="$(command -v node 2>/dev/null)"

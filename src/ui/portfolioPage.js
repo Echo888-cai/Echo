@@ -70,7 +70,10 @@ function renderOverviewBanner(positions, review) {
   for (const p of positions) {
     if (p.marketValue == null || typeof p.changePct !== "number") continue;
     hasDay = true;
-    dayPnlUsd += p.marketValue * (FX_TO_USD[p.currency] || 1) * (p.changePct / 100);
+    // marketValue 是“今日现价 × 股数”，不是昨日市值。日涨跌为 r 时，昨日市值应为
+    // marketValue / (1 + r)，所以今日损益 = marketValue × r / (1 + r)；直接乘 r 会系统性偏大。
+    const rate = p.changePct / 100;
+    if (rate > -1) dayPnlUsd += p.marketValue * (FX_TO_USD[p.currency] || 1) * (rate / (1 + rate));
   }
 
   const perCurrency = totals.map((t) =>

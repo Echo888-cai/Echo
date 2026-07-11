@@ -6,11 +6,10 @@
  * GET    /api/research/sessions/:id   → get one session (with data)
  * DELETE /api/research/sessions/:id   → delete one session
  * POST   /api/research/sessions/:id/memo → add a memo note
- * GET    /api/research/search?q=      → P7 全文检索历史研究
  */
 
 import { readJsonBody, sendOk, sendError } from "../utils/async.js";
-import { listResearchSessions, listConversations, getResearchSession, saveResearchSession, deleteResearchSession, clearResearchSessions, searchResearchSessions } from "../repositories/researchSessions.js";
+import { listResearchSessions, listConversations, getResearchSession, saveResearchSession, deleteResearchSession, clearResearchSessions } from "../repositories/researchSessions.js";
 import { composeReport } from "../services/reportComposer.js";
 
 const userId = (req) => req.echoUser?.id || "local";
@@ -48,39 +47,6 @@ export async function handleConversationList(req, res) {
     sendOk(res, { conversations, count: conversations.length });
   } catch (error) {
     sendError(res, 500, error.message || "获取对话列表失败");
-  }
-}
-
-/**
- * P7：GET /api/research/search?q=液冷&limit=20 —— 全文检索历史研究会话（标题/问题/
- * 报告正文/完整对话）。查询串短于 3 个字符时 trigram 索引匹配不到任何结果（子串索引
- * 的固有限制），这里显式告知前端 tooShort，而不是让前端把"没查到"误解成"真没有"。
- */
-export async function handleSessionSearch(req, res) {
-  try {
-    const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
-    const q = (url.searchParams.get("q") || "").trim();
-    const limit = Math.min(50, parseInt(url.searchParams.get("limit") || "20", 10));
-    if (q.length < 3) { sendOk(res, { results: [], count: 0, tooShort: true }); return; }
-    const results = searchResearchSessions(q, { limit, userId: userId(req) }).map((r) => ({
-      id: r.id,
-      ticker: r.ticker,
-      title: r.title || r.question || r.company_name || r.ticker,
-      companyName: r.company_name || r.ticker,
-      status: r.status,
-      rating: r.rating,
-      confidence: r.confidence,
-      turnCount: r.turn_count || 0,
-      createdAt: r.created_at,
-      updatedAt: r.updated_at,
-      // 命中片段用两个控制字符当高亮定界符占位符，不是字面 <b> 标签——前端负责
-      // 先转义整段文本、再把占位符换成真正的 <b>/</b>，避免命中片段里可能夹带的 HTML
-      // 字符被当成标签渲染（存储型 XSS）。
-      snippet: (r.snippet_report && r.snippet_report.includes("\u0001") ? r.snippet_report : r.snippet_question) || ""
-    }));
-    sendOk(res, { results, count: results.length, tooShort: false });
-  } catch (error) {
-    sendError(res, 500, error.message || "搜索研究历史失败");
   }
 }
 

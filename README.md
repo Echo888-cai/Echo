@@ -124,7 +124,7 @@ Each researched company accretes a **portrait document**: a Markdown master file
 
 ### Local research memory
 
-Sessions persist in SQLite (thread, company, decision panel, valuation, sources, generated content) — an iterative research notebook, not a disposable chat. Each turn's answer keeps its own meta (valuation bar, evidence cards, confidence chip), so reopening a past session **renders exactly like the live answer**. A full-text search box over the whole history (SQLite FTS5, trigram-tokenized so Chinese substrings work without word segmentation) answers "which of my past research touched liquid cooling?" directly from the sidebar — kept in sync automatically via DB triggers, no separate indexing step. The whole database is snapshotted daily with an integrity check on the backup itself, not just on write.
+Sessions persist in SQLite (thread, company, decision panel, valuation, sources, generated content) — an iterative research notebook, not a disposable chat. Each turn's answer keeps its own meta (valuation bar, evidence cards, confidence chip), so reopening a past session **renders exactly like the live answer**. The whole database is snapshotted daily with an integrity check on the backup itself, not just on write.
 
 ### Anti-hallucination guard (factGuard)
 
@@ -266,7 +266,7 @@ SERPAPI_API_KEY=
 
 ## Status
 
-**Working:** A/H/US research conversation · dual-listing routing · discovery layer (screener + macro) · market-aware quotes & first-party filings · evidence provenance · data-grounding and confidence · valuation range and odds · analyst consensus · structured streaming answers · event digest · scheduler and notification centre · earnings/falsification closed loops · factGuard shadow audit · research scorecard · portfolio and watch desk · company portraits · Markdown and branded PNG export · FTS5 history search · verified backups · responsive light/dark UI · invite-only authentication · per-user isolation, quotas and usage · onboarding, preferences and feedback · hardened single-VPS deployment assets.
+**Working:** A/H/US research conversation · dual-listing routing · discovery layer (screener + macro) · market-aware quotes & first-party filings · evidence provenance · data-grounding and confidence · valuation range and odds · analyst consensus · structured streaming answers · event digest · scheduler and notification centre · earnings/falsification closed loops · factGuard shadow audit · research scorecard · portfolio and watch desk · company portraits · Markdown and branded PNG export · verified backups · responsive light/dark UI · invite-only authentication · per-user isolation, quotas and usage · onboarding, preferences and feedback · hardened single-VPS deployment assets.
 
 **Next:** run the free invite-only beta on an actual HK/SG VPS · obtain commercial licenses for quote/news data before charging or public promotion · promote factGuard from `shadow` only after real misclassification metrics support it · prioritize P15/P16/R13–R16 and PWA from observed beta feedback. See the plan docs below.
 

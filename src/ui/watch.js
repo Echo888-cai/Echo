@@ -91,7 +91,9 @@ function renderWatchRow(c) {
   let price = `<span class="wl-price is-none">—</span>`;
   let chg = `<span class="wd-chg is-flat"></span>`;
   if (c.priceStatus === "ok" && c.price != null) {
-    price = `<span class="wl-price">${fmtNum(c.price)}</span>`;
+    // 三个市场同屏时，单独的数字没有意义：70 可能是 HKD、USD 或 CNY。
+    // 币种放在价格旁，避免用户把跨市场报价当成同一单位比较。
+    price = `<span class="wl-price">${fmtNum(c.price)}${c.currency ? `<small>${esc(c.currency)}</small>` : ""}</span>`;
     const d = wdChg(c.changePct);
     if (d) chg = `<span class="wd-chg ${d.dir}">${d.text}</span>`;
   } else if (c.priceStatus === "loading") {

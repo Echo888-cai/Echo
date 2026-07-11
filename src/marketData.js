@@ -151,6 +151,33 @@ async function fetchSinaQuote(ticker) {
   });
 }
 
+// EODHD 是有授权的 HTTPS 数据源。仅作公共行情源失效后的日终兜底，避免把 EOD 数据误标为实时。
+async function fetchEodhdQuote(ticker) {
+  const apiKey = env("EODHD_API_KEY");
+  if (!apiKey) throw new Error("missing EODHD_API_KEY");
+  const symbol = detectMarket(ticker) === "CN"
+    ? String(ticker).toUpperCase().replace(/\.SS$/, ".SHG").replace(/\.SZ$/, ".SHE")
+    : toYahooSymbol(ticker);
+  const rows = await fetchJson(
+    `https://eodhd.com/api/eod/${encodeURIComponent(symbol)}?api_token=${encodeURIComponent(apiKey)}&fmt=json&order=d`
+  );
+  const row = Array.isArray(rows) ? rows[0] : null;
+  const price = numberOrNull(row?.close);
+  if (!price) throw new Error("EODHD 没有返回收盘价");
+  const previousClose = numberOrNull(row?.previousClose);
+  return buildSnapshot("EODHD（收盘）", ticker, {
+    price,
+    previousClose,
+    open: row.open,
+    high: row.high,
+    low: row.low,
+    volume: row.volume,
+    change: previousClose ? price - previousClose : null,
+    changePercent: previousClose ? ((price - previousClose) / previousClose) * 100 : null,
+    asOf: row.date ? `${row.date}T15:00:00+08:00` : undefined
+  });
+}
+
 async function fetchAlphaVantage(ticker) {
   const apiKey = env("ALPHAVANTAGE_API_KEY");
   if (!apiKey) throw new Error("missing ALPHAVANTAGE_API_KEY");
@@ -247,9 +274,9 @@ export async function getMarketSnapshot(ticker) {
     : market === "CN" ? [fetchTencentQuote, fetchSinaQuote]
     : [fetchTencentQuote, fetchFinnhub];
   const fallback =
-    market === "US" ? [fetchAlphaVantage, fetchYahooChart]
-    : market === "CN" ? [fetchTwelveData, fetchYahooChart]
-    : [fetchTwelveData, fetchAlphaVantage, fetchYahooChart];
+    market === "US" ? [fetchEodhdQuote, fetchAlphaVantage, fetchYahooChart]
+    : market === "CN" ? [fetchEodhdQuote, fetchTwelveData, fetchYahooChart]
+    : [fetchEodhdQuote, fetchTwelveData, fetchAlphaVantage, fetchYahooChart];
   const errors = [];
   try {
     return await Promise.any(fast.map((provider) => provider(ticker)));

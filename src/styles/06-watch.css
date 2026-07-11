@@ -220,6 +220,7 @@
 .wl-spark.is-empty { align-items: center; justify-content: center; }
 .wl-spark.is-empty i { display: block; width: 60%; height: 1px; background: var(--hairline); }
 .wl-price { font-size: 14.5px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; text-align: right; }
+.wl-price small { display: block; margin-top: 1px; color: var(--muted-2); font-size: 9.5px; font-weight: 600; line-height: 1; }
 .wl-price.is-none { color: var(--muted-2); font-weight: 400; }
 .wl-row .wd-chg { text-align: right; }
 .wl-pnl { font-size: 12.5px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }

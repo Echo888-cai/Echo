@@ -49,13 +49,15 @@ sudo systemctl reload caddy
 ```bash
 cd /opt/echo-research
 sudo -u echo node scripts/manage-users.js create-owner arlan <你的密码>
-sudo -u echo node scripts/manage-users.js invite 给兄弟的
+sudo -u echo node scripts/manage-users.js invite-batch 10 beta-2026-07
 sudo -u echo node scripts/manage-users.js list
 sudo -u echo npm run doctor:prod   # 必须 0 退出后再开放域名
 ```
 
 建 owner 前站点是单用户 legacy 模式；建完的下一个请求起全站要求登录。owner 的 id 固定为
 `local`，本机迁移过去的历史数据自动归属 owner。朋友拿邀请码在登录页"注册新账号"。
+`invite-batch` 生成的是一次性注册码，不会替任何人设置或保存密码；若严格控制总人数为 10，
+owner 也算一人，请只发 9 枚邀请码。
 
 **红线 17**：beta 免费、邀请制、不公开宣传（Caddyfile 已带 `X-Robots-Tag: noindex`），
 直到拿到可商用行情授权。

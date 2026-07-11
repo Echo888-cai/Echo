@@ -8,8 +8,7 @@ import {
 import {
   renderResearch, refreshSessions, loadSession, deleteSession, clearAllSessions,
   clearResearch, exportResearch, copyMessage, generateDeepResearch, parseFiles,
-  sendChat, runComparison, switchAndResearch, researchSuggested, forceResearch, returnToCompany,
-  searchSessionHistory, clearSessionHistorySearch
+  sendChat, runComparison, switchAndResearch, researchSuggested, forceResearch, returnToCompany
 } from "./ui/research.js";
 import {
   renderWatchPage, refreshWatchDesk, addWatch, removeWatch, exportPortrait, exportPortraitImage
@@ -27,10 +26,6 @@ function render() {
   // 输入。渲染前抓住 textarea 内容/光标，渲染后还原，避免并行场景下"打字打一半被清空"。
   const ta = /** @type {HTMLTextAreaElement|null} */ (document.querySelector(".composer textarea"));
   const preserved = ta ? { value: ta.value, start: ta.selectionStart, end: ta.selectionEnd, focused: document.activeElement === ta } : null;
-  // P7：搜索结果异步回来时（用户可能已经在继续打字）同样要保住输入框的焦点/光标，
-  // 跟 composer textarea 同一个问题、同一个解法。
-  const hs = /** @type {HTMLInputElement|null} */ (document.querySelector(".history-search-input"));
-  const preservedSearch = hs ? { value: hs.value, start: hs.selectionStart, end: hs.selectionEnd, focused: document.activeElement === hs } : null;
   const route = currentRoute();
   if (route === "/settings") {
     if (!S.schedStatusLoaded && !S.schedStatusLoading) void loadSchedulerStatus();
@@ -48,13 +43,6 @@ function render() {
         next.focus();
         try { next.setSelectionRange(preserved.start, preserved.end); } catch { /* ignore */ }
       }
-    }
-  }
-  if (preservedSearch && preservedSearch.focused) {
-    const nextSearch = /** @type {HTMLInputElement|null} */ (document.querySelector(".history-search-input"));
-    if (nextSearch) {
-      nextSearch.focus();
-      try { nextSearch.setSelectionRange(preservedSearch.start, preservedSearch.end); } catch { /* ignore */ }
     }
   }
 }
@@ -155,7 +143,6 @@ document.addEventListener("click", async (event) => {
   if (action === "return-company") { await returnToCompany(target.dataset.ticker, target.dataset.name); return; }
   if (action === "delete-session") await deleteSession(target.dataset.id);
   if (action === "clear-sessions") await clearAllSessions();
-  if (action === "clear-history-search") { clearSessionHistorySearch(); return; }
   if (action === "toggle-history") {
     S.historyOpen = !S.historyOpen;
     render();
@@ -198,17 +185,6 @@ document.addEventListener("change", (event) => {
   if (pref) { void setPreference(pref.dataset.pref, pref.checked); return; }
   const input = /** @type {HTMLInputElement|null} */ (/** @type {Element} */ (event.target).closest("input[type='file'][name='documents']"));
   if (input) void parseFiles(input);
-});
-
-// P7：历史研究搜索框——300ms 防抖，避免每敲一个字就发一次请求；render() 里的焦点/光标
-// 保留逻辑（见上面 preservedSearch）保证防抖触发的重渲染不会打断正在输入。
-let historySearchTimer = null;
-document.addEventListener("input", (event) => {
-  const input = /** @type {HTMLInputElement|null} */ (/** @type {Element} */ (event.target).closest(".history-search-input"));
-  if (!input) return;
-  const value = input.value;
-  clearTimeout(historySearchTimer);
-  historySearchTimer = setTimeout(() => void searchSessionHistory(value), 300);
 });
 
 document.addEventListener("keydown", (event) => {

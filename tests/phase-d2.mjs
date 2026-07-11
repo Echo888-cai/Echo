@@ -19,7 +19,7 @@ const EXPECTED_TABLES = [
   "hk_financials", "scheduler_state", "web_evidence", "watchlist_prefs",
   "watch_rules", "documents", "canary_runs", "hk_filing_ingest_log", "earnings_calendar", "comp_peers", "llm_audit",
   "research_snapshots", "fact_guard_audit", "insider_activity", "historical_valuation", "hk_buybacks",
-  "research_sessions_fts", "cn_financials", "cn_filing_ingest_log",
+  "cn_financials", "cn_filing_ingest_log",
   "users", "invite_codes", "auth_sessions", "user_preferences", "feedback"
 ];
 
@@ -27,7 +27,7 @@ console.log("[1] 全新库：迁移到最新版本，全部表就位");
 {
   const db = getDb();
   const version = db.pragma("user_version", { simple: true });
-  check("user_version 推进到 20（含多租户、用户用量与 beta 体验）", version === 20, `实际 ${version}`);
+  check("user_version 推进到 21（含移除未使用的历史搜索索引）", version === 21, `实际 ${version}`);
 
   const tables = new Set(
     db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name)
@@ -35,6 +35,7 @@ console.log("[1] 全新库：迁移到最新版本，全部表就位");
   for (const name of EXPECTED_TABLES) {
     check(`表存在：${name}`, tables.has(name));
   }
+  check("已移除未使用的 research_sessions_fts 索引", !tables.has("research_sessions_fts"));
 }
 
 console.log("[2] 重复调用 runMigrations：幂等，不报错");
