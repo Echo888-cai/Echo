@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-router";
 import { LoginPage } from "./routes/login";
 import { PlaceholderPage } from "./routes/placeholder";
+import { SettingsPage } from "./routes/settings";
 
 const rootRoute = createRootRoute({
   component: () => <Outlet />
@@ -38,7 +39,7 @@ const portfolioRoute = createRoute({
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
-  component: () => <PlaceholderPage label="设置" />
+  component: SettingsPage
 });
 
 const routeTree = rootRoute.addChildren([

@@ -9,13 +9,30 @@ import {
   authRegisterResponseSchema,
   authLogoutResponseSchema,
   authMeResponseSchema,
-  type publicUserSchema
+  type publicUserSchema,
+  type statusResponseSchema,
+  type schedulerStatusResponseSchema,
+  type notificationsListResponseSchema,
+  type notificationsUnreadResponseSchema,
+  type notificationsTestResponseSchema,
+  type researchScorecardResponseSchema,
+  type userPreferencesSchema,
+  type preferencesUpdateRequestSchema
 } from "@echo/contracts";
 import { z } from "zod";
 
 export type PublicUser = z.infer<typeof publicUserSchema>;
 export type AuthLoginRequest = z.infer<typeof authLoginRequestSchema>;
 export type AuthRegisterRequest = z.infer<typeof authRegisterRequestSchema>;
+export type ApiStatus = z.infer<typeof statusResponseSchema>;
+export type SchedulerStatus = z.infer<typeof schedulerStatusResponseSchema>["data"];
+export type NotificationItem = z.infer<typeof notificationsListResponseSchema>["data"]["notifications"][number];
+export type NotificationsList = z.infer<typeof notificationsListResponseSchema>["data"];
+export type NotificationsUnread = z.infer<typeof notificationsUnreadResponseSchema>["data"];
+export type NotificationTestResult = z.infer<typeof notificationsTestResponseSchema>["data"];
+export type ResearchScorecard = z.infer<typeof researchScorecardResponseSchema>["data"];
+export type UserPreferences = z.infer<typeof userPreferencesSchema>;
+export type PreferencesUpdateRequest = z.infer<typeof preferencesUpdateRequestSchema>;
 
 /** Thrown for any non-2xx response; `.message` matches the legacy api.js contract. */
 export class ApiError extends Error {
@@ -90,6 +107,75 @@ export const authApi = {
   async me() {
     return request<z.infer<typeof authMeResponseSchema>["data"]>("/api/auth/me", {
       method: "GET"
+    });
+  }
+};
+
+/** GET /api/status — flat (non-enveloped) response; owner-only cards read sub-objects off it. */
+export const statusApi = {
+  async get() {
+    return request<ApiStatus>("/api/status", { method: "GET" });
+  }
+};
+
+/** GET /api/scheduler/status — settings page notification/scheduler card. */
+export const schedulerApi = {
+  async status() {
+    return request<SchedulerStatus>("/api/scheduler/status", { method: "GET" });
+  }
+};
+
+/** GET /api/research/scorecard — R7 global research scorecard (settings page). */
+export const researchApi = {
+  async scorecard() {
+    return request<ResearchScorecard>("/api/research/scorecard", { method: "GET" });
+  }
+};
+
+export const notificationsApi = {
+  async list(limit = 20) {
+    return request<NotificationsList>(`/api/notifications?limit=${limit}`, { method: "GET" });
+  },
+  async unread() {
+    return request<NotificationsUnread>("/api/notifications/unread", { method: "GET" });
+  },
+  async markRead(id: number | string) {
+    return request<NotificationsUnread>("/api/notifications/read", {
+      method: "POST",
+      body: JSON.stringify({ id })
+    });
+  },
+  async markAllRead() {
+    return request<NotificationsUnread>("/api/notifications/read", {
+      method: "POST",
+      body: JSON.stringify({ all: true })
+    });
+  },
+  async test() {
+    return request<NotificationTestResult>("/api/notifications/test", {
+      method: "POST",
+      body: "{}"
+    });
+  }
+};
+
+export const preferencesApi = {
+  async get() {
+    return request<{ preferences: UserPreferences }>("/api/preferences", { method: "GET" });
+  },
+  async update(patch: PreferencesUpdateRequest) {
+    return request<{ preferences: UserPreferences }>("/api/preferences", {
+      method: "PATCH",
+      body: JSON.stringify(patch)
+    });
+  }
+};
+
+export const feedbackApi = {
+  async submit(message: string, context: Record<string, unknown> | null = null) {
+    return request<{ id: number | string; received: true }>("/api/feedback", {
+      method: "POST",
+      body: JSON.stringify({ message, context })
     });
   }
 };

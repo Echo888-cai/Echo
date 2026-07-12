@@ -9,8 +9,11 @@ interface AuthContextValue {
   user: PublicUser | null;
   /** True once a 401 (outside /api/auth/*) tells us the session is gone. */
   authRequired: boolean;
+  /** Mirrors S.multiUser — false in legacy single-user mode (no owner row yet). */
+  multiUser: boolean;
   setUser: (user: PublicUser | null) => void;
   setAuthRequired: (required: boolean) => void;
+  setMultiUser: (multiUser: boolean) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -18,6 +21,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<PublicUser | null>(null);
   const [authRequired, setAuthRequired] = useState(false);
+  const [multiUser, setMultiUser] = useState(false);
 
   useEffect(() => {
     // Mirrors the old api.js behavior: any 401 outside of /api/auth/* flips
@@ -30,7 +34,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, authRequired, setUser, setAuthRequired }}>
+    <AuthContext.Provider value={{ user, authRequired, multiUser, setUser, setAuthRequired, setMultiUser }}>
       {children}
     </AuthContext.Provider>
   );
