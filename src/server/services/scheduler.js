@@ -332,11 +332,11 @@ export const JOBS = [
 
 // ── 引擎 ─────────────────────────────────────────────────────
 
-function getState(jobId) {
+export function getState(jobId) {
   return getDb().prepare("SELECT * FROM scheduler_state WHERE job_id = ?").get(jobId) || null;
 }
 
-function setState(jobId, { lastRunAt, status, detail }) {
+export function setState(jobId, { lastRunAt, status, detail }) {
   getDb().prepare(`
     INSERT INTO scheduler_state (job_id, last_run_at, last_status, last_detail)
     VALUES (@jobId, @lastRunAt, @status, @detail)
