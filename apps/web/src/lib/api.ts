@@ -1,0 +1,95 @@
+// Typed API client — mirrors src/ui/api.js's fetch wrapper (CSRF header,
+// 401 handling contract) but exposes it through @echo/contracts schemas
+// instead of loosely-typed JSON, and swaps the old global-mutable
+// `S.authRequired` flag for an injectable callback (see AuthContext).
+import {
+  authLoginRequestSchema,
+  authLoginResponseSchema,
+  authRegisterRequestSchema,
+  authRegisterResponseSchema,
+  authLogoutResponseSchema,
+  authMeResponseSchema,
+  type publicUserSchema
+} from "@echo/contracts";
+import { z } from "zod";
+
+export type PublicUser = z.infer<typeof publicUserSchema>;
+export type AuthLoginRequest = z.infer<typeof authLoginRequestSchema>;
+export type AuthRegisterRequest = z.infer<typeof authRegisterRequestSchema>;
+
+/** Thrown for any non-2xx response; `.message` matches the legacy api.js contract. */
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+/**
+ * Called whenever a request 401s (outside of /api/auth/*), so the caller
+ * (AuthContext) can flip its "authRequired" state — the React analogue of
+ * the old code's `S.authRequired = true; render();`.
+ */
+let onUnauthorized: (() => void) | null = null;
+export function setUnauthorizedHandler(handler: (() => void) | null) {
+  onUnauthorized = handler;
+}
+
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const method = (options.method || "GET").toUpperCase();
+  const response = await fetch(path, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      // U-1 CSRF: server requires this custom header on all non-GET requests.
+      ...(method !== "GET" ? { "X-Echo-Auth": "1" } : {}),
+      ...(options.headers || {})
+    }
+  });
+
+  // U-1: in multi-user mode, an expired session flips the whole app to the
+  // login card — except for /api/auth/* itself, so a failed login attempt
+  // doesn't also trigger this.
+  if (response.status === 401 && !path.startsWith("/api/auth/")) {
+    onUnauthorized?.();
+    throw new ApiError("请先登录", 401);
+  }
+
+  const json: any = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = json?.error?.message || json?.error || `请求失败 ${response.status}`;
+    throw new ApiError(message, response.status);
+  }
+  return (json?.ok && json.data ? json.data : json) as T;
+}
+
+export const authApi = {
+  async login(body: AuthLoginRequest) {
+    const parsed = authLoginRequestSchema.parse(body);
+    const data = await request<z.infer<typeof authLoginResponseSchema>["data"]>(
+      "/api/auth/login",
+      { method: "POST", body: JSON.stringify(parsed) }
+    );
+    return data;
+  },
+  async register(body: AuthRegisterRequest) {
+    const parsed = authRegisterRequestSchema.parse(body);
+    const data = await request<z.infer<typeof authRegisterResponseSchema>["data"]>(
+      "/api/auth/register",
+      { method: "POST", body: JSON.stringify(parsed) }
+    );
+    return data;
+  },
+  async logout() {
+    return request<z.infer<typeof authLogoutResponseSchema>["data"]>("/api/auth/logout", {
+      method: "POST"
+    });
+  },
+  async me() {
+    return request<z.infer<typeof authMeResponseSchema>["data"]>("/api/auth/me", {
+      method: "GET"
+    });
+  }
+};

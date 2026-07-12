@@ -1,0 +1,39 @@
+/* Minimal reset for the R-3 app shell. Design tokens (colors, radii,
+   shadows, motion, fonts) come entirely from @echo/ui/tokens.css — this
+   file only sets up the bare structural defaults Vite's blank index.html
+   needs (the legacy 00-foundation.css base-layer rules like the paper
+   texture / scrollbars / body gradient stay with the legacy app for now,
+   out of scope for this slice). */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+body {
+  color: var(--ink);
+  background: var(--bg);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
+    "Segoe UI", Inter, system-ui, "PingFang SC", "Hiragino Sans GB", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+textarea,
+input {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
