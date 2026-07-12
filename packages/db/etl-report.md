@@ -1,0 +1,129 @@
+# ETL report — luvio.db (SQLite) → echo_dev (Postgres 16)
+
+R-1 data-foundation proof: local Postgres 16 (Homebrew), database `echo_dev`,
+schema applied via `drizzle-kit migrate` from `packages/db/migrations/0001_init.sql`
+(34 tables — the 24 tables that exist in luvio.db today, plus 2 derived child
+tables replacing JSON columns (`historical_valuation_points`,
+`portfolio_snapshot_totals`) and the 8 tables the running app doesn't have yet
+that were reconstructed from the migration history, e.g. none actually — all 34
+map 1:1 or 1:N onto the 24 SQLite tables).
+
+ETL script: `packages/db/src/etl/sqlite-to-postgres.ts`, run via
+`DATABASE_URL=postgres://localhost:5432/echo_dev npx tsx src/etl/sqlite-to-postgres.ts`
+from `packages/db/`. Verified idempotent — ran three times consecutively;
+row counts identical after each run (including the two derived child tables,
+once unique constraints were added — see anomalies below).
+
+## Row counts: SQLite vs Postgres
+
+| Table | SQLite rows | Postgres rows | Match |
+|---|---:|---:|---|
+| companies | 726 | 726 | ✓ |
+| company_details | 31 | 31 | ✓ |
+| market_snapshots | 30 | 30 | ✓ |
+| users | 10 | 10 | ✓ |
+| invite_codes | 1 | 1 | ✓ |
+| auth_sessions | 1 | 1 | ✓ |
+| research_sessions | 7 | 7 | ✓ |
+| company_profiles | 7 | 7 | ✓ |
+| profile_events | 13 | 13 | ✓ |
+| research_snapshots | 2 | 2 | ✓ |
+| portfolio_positions | 1 | 1 | ✓ |
+| watchlist_prefs | 12 | 12 | ✓ |
+| watch_rules | 6 | 6 | ✓ |
+| portfolio_snapshots | 3 | 3 | ✓ |
+| notifications | 7 | 7 | ✓ |
+| hk_financials | 14 | 14 | ✓ |
+| cn_financials | 119 | 119 | ✓ |
+| hk_filing_ingest_log | 10 | 10 | ✓ |
+| cn_filing_ingest_log | 67 | 67 | ✓ |
+| earnings_calendar | 13 | 13 | ✓ |
+| comp_peers | 13 | 13 | ✓ |
+| insider_activity | 4 | 4 | ✓ |
+| historical_valuation | 8 | 8 | ✓ |
+| hk_buybacks | 29 | 29 | ✓ |
+| web_evidence | 52 | 52 | ✓ |
+| scheduler_state | 8 | 8 | ✓ |
+| documents | 265 | 265 | ✓ |
+| user_preferences | 2 | 2 | ✓ |
+| feedback | 0 | 0 | ✓ (source table empty) |
+| llm_audit | 44 | 44 | ✓ |
+| fact_guard_audit | 19 | 19 | ✓ |
+| canary_runs | 160 | 160 | ✓ |
+
+Derived child tables (not 1:1 with a SQLite table — decomposed out of a JSON column):
+
+| Table | Source column | Rows after ETL |
+|---|---|---:|
+| historical_valuation_points | historical_valuation.series_json (8 tickers' annual PE series) | 72 |
+| portfolio_snapshot_totals | portfolio_snapshots.totals_json (per-currency breakdown) | 3 |
+
+All 24 source tables reached exact row-count parity; the script printed
+`[ETL] all tables reached row-count parity.` on every run.
+
+## Spot checks (SQLite value vs Postgres value)
+
+**company_details / 0700.HK** — `summary`/`moat` TEXT-JSON arrays vs Postgres `text[]`:
+- SQLite `summary[0]`: "腾讯是中国互联网生态核心公司，游戏、社交广告、金融科技与企业服务构成主要利润池。"
+- Postgres `summary[1]`: identical string, preserved byte-for-byte.
+- SQLite `moat`: 5 elements ("社交网络效应", "内容与游戏发行能力", ...) — Postgres array has the same 5 elements in the same order.
+
+**portfolio_positions / 0700.HK (user local)**:
+- SQLite: `shares=100.0, avg_cost=380.0, stop_loss=NULL, take_profit=NULL`
+- Postgres: `shares=100, avg_cost=380, stop_loss=NULL, take_profit=NULL` — numeric REAL → `numeric` conversion is exact (no float drift on these round values).
+
+**hk_financials / 0700.HK, period_end=2026-03-31**:
+- SQLite: `revenue=194371000000.0, eps=6.433, extracted_at='2026-07-04 13:42:41'`
+- Postgres: `valid_time=2026-03-31, revenue=194371000000, eps=6.433, knowledge_time=2026-07-04 21:42:41+08` (= 13:42:41 UTC — the `+08` is the display timezone of the psql session, not a data error; the stored instant matches).
+
+**company_profiles / 0700.HK — valuation_json decomposition**:
+- SQLite `valuation_json`: `{"method":"PE 区间","bear":"352.56","base":"452.00","bull":"578.56","currentPrice":452}`
+- Postgres: `valuation_method='PE 区间', valuation_bear=352.56, valuation_base=452.00, valuation_bull=578.56, valuation_current_price=452` — the single JSON blob was correctly decomposed into 5 real columns (per the "fixed well-typed record → structure it" rule).
+
+**research_snapshots / TEST.TMP**:
+- SQLite: `snapshot_date='2026-07-11', falsifiers_json='["股价跌破 100 元。"]'`
+- Postgres: `valid_time=2026-07-11 (date column, renamed from snapshot_date), falsifiers={"股价跌破 100 元。"} (text[])` — match.
+
+## Anomalies found during the ETL (fixed, documented for the record)
+
+1. **`serial`/`bigserial` id columns accidentally emitted as `GENERATED ALWAYS AS
+   IDENTITY`.** First-draft schema used `integer(...).generatedAlwaysAsIdentity()`
+   / `bigint(...).generatedAlwaysAsIdentity()` for `market_snapshots.id`,
+   `profile_events.id`, `research_snapshots.id` to get auto-incrementing PKs.
+   `GENERATED ALWAYS` rejects any explicit `id` value on INSERT (needed here to
+   preserve the original SQLite rowids for idempotent re-runs) — Postgres throws
+   `cannot insert a non-DEFAULT value into column "id"`. Fixed by switching those
+   three columns to `serial()`/`bigserial()` (`GENERATED BY DEFAULT`, which is
+   what the other ~10 auto-increment tables already used), then regenerating the
+   migration and recreating `echo_dev` from scratch.
+2. **Two JSON→child-table decompositions were not idempotent on re-run.**
+   `historical_valuation_points` and `portfolio_snapshot_totals` had no unique
+   constraint tying a row back to its parent, so re-running the ETL doubled
+   their contents (72 → 144, 3 → 6) while every other table's `ON CONFLICT`
+   correctly no-op'd. Fixed by adding `uq_historical_valuation_points_ticker_period`
+   (ticker, period_end_date) and `uq_portfolio_snapshot_totals_snapshot_currency`
+   (user_id, snapshot_valid_time, currency) unique indexes and targeting them
+   with `onConflictDoNothing` in the ETL. Verified with two more consecutive
+   re-runs — counts stayed at 72 / 3.
+3. **`market_snapshots.as_of` timestamps aren't uniformly naive UTC.** Some
+   rows (e.g. Tencent Finance pulls) store a full offset-aware ISO string
+   (`2026-07-03T16:08:18+08:00`), not the naive `datetime('now')`-style
+   `"YYYY-MM-DD HH:MM:SS"` format most other timestamp columns use. The initial
+   `toTimestamp()` helper blindly appended `Z` to any string containing `T`,
+   turning `...+08:00` into `...+08:00Z` (invalid) and crashing the whole run.
+   Fixed by detecting an existing `Z`/`±HH:MM` suffix and only appending `Z` to
+   genuinely naive strings. **Flag for a human**: worth checking whether any
+   other provider-sourced timestamp column (e.g. `web_evidence.published_at`,
+   `hk_buybacks.published_at`) has the same offset-aware-vs-naive inconsistency
+   at larger scale — the small dev dataset didn't happen to exercise it there,
+   but the same bug class could resurface once ingest volume grows.
+4. **`historical_valuation.series_json` shape assumption was wrong on first
+   pass.** Guessed `{year, pe}` from the table name; actual production shape
+   (confirmed in `src/server/services/historicalValuation.js`) is
+   `{period: "YYYY-MM-DD", value: number}` — a fiscal-period-end date, not a
+   bare year. Column names in `historical_valuation_points` were corrected to
+   `period_end_date` / `pe_value` before the first real ETL run (no bad data
+   was ever loaded).
+
+No data-quality anomalies were found in the source data itself — every
+row read from luvio.db transformed cleanly and round-tripped exactly.
