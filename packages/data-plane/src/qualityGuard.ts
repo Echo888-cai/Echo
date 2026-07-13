@@ -8,7 +8,7 @@
  * caller decides what to do with a flagged result (matches the codebase's
  * existing "诚实降级" convention rather than inventing a new one).
  */
-import type { QuoteResult } from "./ports.js";
+import type { ProviderEnvelope, QuoteResult } from "./ports.js";
 
 export interface QualityIssue {
   field: string;
@@ -85,4 +85,25 @@ export function checkQuote(result: QuoteResult): QualityReport {
   const warnCount = issues.filter((i) => i.severity === "warn").length;
   const score = Math.max(0, 100 - rejectCount * 50 - warnCount * 15);
   return { ok: rejectCount === 0, score, issues };
+}
+
+/**
+ * Loose check for the fundamentals/filings/calendar envelope shape — these
+ * ports don't have a second real adapter yet to design a richer per-field
+ * guard against (same reasoning as ports.ts's ProviderEnvelope), so this only
+ * checks the one thing every one of them promises: an honest providerStatus.
+ * `asOf` is checked only when the envelope actually declares the key — not
+ * every provider has an "as of" freshness concept (earningsCalendar.js's
+ * envelope reports `nextDate` instead, which isn't a staleness timestamp).
+ */
+export function checkEnvelope(result: ProviderEnvelope): QualityReport {
+  if (result.providerStatus !== "ok") return { ok: true, score: 100, issues: [] };
+  if ("asOf" in result && (!result.asOf || Number.isNaN(Date.parse(result.asOf)))) {
+    return {
+      ok: false,
+      score: 50,
+      issues: [{ field: "asOf", severity: "reject", message: "providerStatus=ok but asOf is missing or unparseable" }]
+    };
+  }
+  return { ok: true, score: 100, issues: [] };
 }

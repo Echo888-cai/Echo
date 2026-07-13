@@ -54,18 +54,32 @@ export interface QuotePort extends Adapter {
 // is the next slice's job once there's a second (real) adapter per port to
 // design the shape against, not a guess made in isolation now.
 
-export interface FundamentalsPort extends Adapter {
-  fetchFundamentals(ticker: string): Promise<Record<string, unknown>>;
+/** Loose envelope shared by financialData.js/filingData.js/earningsCalendar.js
+ *  return values — each carries its own richer fields on top of this, but
+ *  providerStatus is the one thing every port/adapter/quality-check needs. */
+export interface ProviderEnvelope {
+  providerStatus: "ok" | "missing" | "error";
+  source?: string | null;
+  asOf?: string;
+  [key: string]: unknown;
 }
 
+export interface FundamentalsPort extends Adapter {
+  fetchFundamentals(ticker: string): Promise<ProviderEnvelope>;
+}
+
+// News scaffolding stays a type placeholder — getNewsSnapshot(company) takes a
+// company object (ticker + name + aliases), not a bare ticker, so wrapping it
+// needs a slightly different port shape than the other four; deferred to the
+// slice that actually needs a second news adapter to design against.
 export interface NewsPort extends Adapter {
   fetchNews(ticker: string): Promise<Record<string, unknown>>;
 }
 
 export interface FilingsPort extends Adapter {
-  fetchFilings(ticker: string): Promise<unknown[]>;
+  fetchFilings(ticker: string): Promise<ProviderEnvelope>;
 }
 
 export interface CalendarPort extends Adapter {
-  fetchNextEarnings(ticker: string): Promise<Record<string, unknown> | null>;
+  fetchNextEarnings(ticker: string): Promise<ProviderEnvelope>;
 }
