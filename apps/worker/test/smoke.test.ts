@@ -1,9 +1,9 @@
 /**
  * smoke.test.ts — R-2 worker smoke test.
  *
- * Follows tests/setupTestDb.mjs's isolation pattern: point LUVIO_DB_PATH at a throwaway
+ * Follows tests/setupTestDb.mjs's isolation pattern: point ECHO_DB_PATH at a throwaway
  * temp file BEFORE importing scheduler.js (which reads the env var lazily on first
- * getDb() call), so this never touches the dev luvio.db / scheduler_state table.
+ * getDb() call), so this never touches the dev echo.db / scheduler_state table.
  *
  * Does NOT let any real job body run against live services: a synthetic job entry with a
  * spied `run()` is pushed onto the (module-cached) JOBS array instead of exercising one of
@@ -19,8 +19,8 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-if (!process.env.LUVIO_DB_PATH) {
-  process.env.LUVIO_DB_PATH = join(tmpdir(), `luvio-worker-test-${process.pid}.db`);
+if (!process.env.ECHO_DB_PATH) {
+  process.env.ECHO_DB_PATH = join(tmpdir(), `echo-worker-test-${process.pid}.db`);
 }
 
 import test from "node:test";

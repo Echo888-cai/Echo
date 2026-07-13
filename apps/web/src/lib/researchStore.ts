@@ -49,12 +49,12 @@ export function genSessionId(): string {
 }
 
 const storeKeys = {
-  thread: "luvio.v3.thread",
-  company: "luvio.v3.company",
-  panel: "luvio.v3.panel",
-  documents: "luvio.v3.documents",
-  sessionId: "luvio.v3.sessionId",
-  conversationId: "luvio.v3.conversationId"
+  thread: "echo.v3.thread",
+  company: "echo.v3.company",
+  panel: "echo.v3.panel",
+  documents: "echo.v3.documents",
+  sessionId: "echo.v3.sessionId",
+  conversationId: "echo.v3.conversationId"
 };
 
 function readStore<T>(key: string, fallback: T): T {

@@ -7,11 +7,11 @@ function positiveNumber(name, fallback) {
 
 export function quotaPolicy(userId = "local") {
   const calls = userId === "local"
-    ? positiveNumber("LUVIO_OWNER_DAILY_MODEL_CALLS", positiveNumber("LUVIO_DAILY_MODEL_CALLS", 40))
-    : positiveNumber("LUVIO_DAILY_MODEL_CALLS", 40);
+    ? positiveNumber("ECHO_OWNER_DAILY_MODEL_CALLS", positiveNumber("ECHO_DAILY_MODEL_CALLS", 40))
+    : positiveNumber("ECHO_DAILY_MODEL_CALLS", 40);
   return {
     dailyCalls: calls,
-    dailyCostUsd: positiveNumber("LUVIO_DAILY_COST_USD", 0)
+    dailyCostUsd: positiveNumber("ECHO_DAILY_COST_USD", 0)
   };
 }
 
@@ -41,7 +41,7 @@ export function quotaGuard(userId = "local") {
 
 export function estimateModelCost(inputTokens, outputTokens) {
   if (!Number.isFinite(inputTokens) || !Number.isFinite(outputTokens)) return null;
-  const inputRate = positiveNumber("LUVIO_INPUT_USD_PER_M_TOKENS", 0);
-  const outputRate = positiveNumber("LUVIO_OUTPUT_USD_PER_M_TOKENS", 0);
+  const inputRate = positiveNumber("ECHO_INPUT_USD_PER_M_TOKENS", 0);
+  const outputRate = positiveNumber("ECHO_OUTPUT_USD_PER_M_TOKENS", 0);
   return Number(((inputTokens * inputRate + outputTokens * outputRate) / 1_000_000).toFixed(6));
 }

@@ -65,13 +65,13 @@ const setCookie = sessionCookie("tok123");
 assert.match(setCookie, /HttpOnly/);
 assert.match(setCookie, /SameSite=Lax/);
 assert.match(setCookie, /Path=\//);
-assert.ok(!setCookie.includes("Secure"), "本机 http 不带 Secure（LUVIO_TRUST_PROXY=1 才带）");
+assert.ok(!setCookie.includes("Secure"), "本机 http 不带 Secure（ECHO_TRUST_PROXY=1 才带）");
 assert.match(sessionCookie("", { clear: true }), /Max-Age=0/);
 
-// ── LUVIO_AUTH_DISABLED 逃生门 ─────────────────────────────────
-process.env.LUVIO_AUTH_DISABLED = "1";
+// ── ECHO_AUTH_DISABLED 逃生门 ─────────────────────────────────
+process.env.ECHO_AUTH_DISABLED = "1";
 assert.equal(resolveRequestUser(/** @type {any} */ ({ headers: {} })).id, OWNER_USER_ID);
 assert.equal(multiUserEnabled(), false);
-delete process.env.LUVIO_AUTH_DISABLED;
+delete process.env.ECHO_AUTH_DISABLED;
 
 console.log("phase-u1 ✓ 鉴权与邀请制（scrypt / 会话 / 邀请码 / legacy 切换）");

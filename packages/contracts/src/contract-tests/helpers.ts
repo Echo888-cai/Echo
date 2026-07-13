@@ -1,9 +1,9 @@
 /**
  * Test harness: spawns the real server.js as a child process against an isolated,
- * throwaway SQLite file (same LUVIO_DB_PATH isolation trick as tests/setupTestDb.mjs
+ * throwaway SQLite file (same ECHO_DB_PATH isolation trick as tests/setupTestDb.mjs
  * uses for the existing in-process test suite — reused here rather than invented,
  * just applied to a child process instead of an import). Auth is disabled via
- * LUVIO_AUTH_DISABLED=1 so requests run as the legacy single-user "owner" without
+ * ECHO_AUTH_DISABLED=1 so requests run as the legacy single-user "owner" without
  * needing to drive cookie-based login — the contract suite focuses on DB-backed
  * endpoints, not the auth state machine (that's covered by tests/phase-u1.mjs).
  */
@@ -38,9 +38,9 @@ export async function startTestServer(): Promise<TestServer> {
     env: {
       ...process.env,
       PORT: String(port),
-      LUVIO_DB_PATH: dbPath,
-      LUVIO_AUTH_DISABLED: "1",
-      LUVIO_DISABLE_SCHEDULER: "1",
+      ECHO_DB_PATH: dbPath,
+      ECHO_AUTH_DISABLED: "1",
+      ECHO_DISABLE_SCHEDULER: "1",
       NODE_ENV: "test"
     },
     stdio: ["ignore", "pipe", "pipe"]

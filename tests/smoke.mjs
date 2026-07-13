@@ -19,7 +19,7 @@ import { upsertPosition, getPosition, deletePosition } from "../src/server/repos
 import { looksMultiHolding } from "../src/server/services/entityExtractor.js";
 
 assert.equal(companies.length, 31, "seed data should include 31 HK companies");
-assert.equal(PROMPT_VERSION, "luvio-prompts-v0.6");
+assert.equal(PROMPT_VERSION, "echo-prompts-v0.6");
 assert.ok(promptNames().includes("首席研究助手"));
 assert.ok(PROMPTS.risk.system.includes("挑战"));
 // 研究纪律宪法注入 cio 与 chat 两条链路。

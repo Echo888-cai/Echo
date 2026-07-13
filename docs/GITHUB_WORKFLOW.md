@@ -237,9 +237,9 @@ git push
 ```text
 .env
 node_modules/
-luvio.db
-luvio.db-wal
-luvio.db-shm
+echo.db
+echo.db-wal
+echo.db-shm
 ```
 
 这些已经在 `.gitignore` 里。

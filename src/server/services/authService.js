@@ -10,7 +10,7 @@
  *     （跨站表单/图片发不出自定义头；我们的前端 fetch 统一带上）。
  *
  * 运行模式（resolveRequestUser）：
- *   · LUVIO_AUTH_DISABLED=1        → 恒为 owner（CI/单测/本机逃生门）。
+ *   · ECHO_AUTH_DISABLED=1        → 恒为 owner（CI/单测/本机逃生门）。
  *   · users 表为空（尚未建 owner）  → 单用户 legacy 模式，恒为 owner（'local'）——
  *     现有本机工作流零改变；跑 scripts/manage-users.js create-owner 后鉴权自动生效。
  *   · 有用户                       → 必须携带有效会话 cookie，否则 401。
@@ -151,7 +151,7 @@ function legacyOwner() {
  * @returns {{id:string, username:string, displayName:string, role:string}|null}
  */
 export function resolveRequestUser(req) {
-  if (process.env.LUVIO_AUTH_DISABLED === "1") return legacyOwner();
+  if (process.env.ECHO_AUTH_DISABLED === "1") return legacyOwner();
   if (countUsers() === 0) return legacyOwner(); // 尚未建 owner：单用户模式，行为与今天完全一致
   const token = parseCookies(req)[COOKIE_NAME];
   const user = getSessionUser(token);
@@ -160,7 +160,7 @@ export function resolveRequestUser(req) {
 
 /** 登录/登出要写的 Set-Cookie 值。生产（反代后）带 Secure，本机 http 不带。 */
 export function sessionCookie(token, { clear = false } = {}) {
-  const secure = process.env.LUVIO_TRUST_PROXY === "1" ? "; Secure" : "";
+  const secure = process.env.ECHO_TRUST_PROXY === "1" ? "; Secure" : "";
   if (clear) return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
   return `${COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${secure}`;
 }
@@ -172,5 +172,5 @@ export function requestToken(req) {
 
 /** 多用户模式是否已启用（前端据此显示"退出登录"）。 */
 export function multiUserEnabled() {
-  return process.env.LUVIO_AUTH_DISABLED !== "1" && countUsers() > 0;
+  return process.env.ECHO_AUTH_DISABLED !== "1" && countUsers() > 0;
 }

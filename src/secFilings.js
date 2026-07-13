@@ -12,7 +12,7 @@
 import { bareSymbol } from "./market.js";
 import { normalizeTicker } from "./data.js";
 
-const SEC_UA = process.env.SEC_USER_AGENT || "Luvio Research research@luvio.app";
+const SEC_UA = process.env.SEC_USER_AGENT || "Echo Research research@echoresearch.app";
 // Forms worth surfacing: current reports, quarterly/annual, foreign-issuer equivalents.
 const FORMS_OF_INTEREST = new Set(["8-K", "10-Q", "10-K", "10-K/A", "10-Q/A", "6-K", "20-F", "40-F", "8-K/A"]);
 

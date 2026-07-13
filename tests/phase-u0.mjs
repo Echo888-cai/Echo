@@ -17,8 +17,8 @@ assert.ok(isAllowedStaticPath("/assets/manifest.webmanifest"));
 
 // ── 静态白名单：挡住会泄密/泄源的（这就是 E11 要修的洞） ────────
 assert.ok(!isAllowedStaticPath("/.env"), ".env 含全部 API key，绝不可发");
-assert.ok(!isAllowedStaticPath("/luvio.db"), "SQLite 整库绝不可发");
-assert.ok(!isAllowedStaticPath("/luvio.db-wal"));
+assert.ok(!isAllowedStaticPath("/echo.db"), "SQLite 整库绝不可发");
+assert.ok(!isAllowedStaticPath("/echo.db-wal"));
 assert.ok(!isAllowedStaticPath("/server.js"));
 assert.ok(!isAllowedStaticPath("/package.json"));
 assert.ok(!isAllowedStaticPath("/docs/PLAN.md"));

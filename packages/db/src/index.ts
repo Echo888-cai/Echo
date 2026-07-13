@@ -3,7 +3,7 @@
  *
  * `createDb(connectionString)` returns a drizzle client bound to the local `echo_dev`
  * Postgres instance (or whatever DATABASE_URL points at). This package is additive:
- * it does not read or write luvio.db except via the one-off ETL script under
+ * it does not read or write echo.db except via the one-off ETL script under
  * src/etl/, and nothing in the running app (server.js, src/db/**) imports it yet.
  */
 import postgres from "postgres";

@@ -165,50 +165,11 @@ The public edge is deployment-ready for a single HK/SG VPS: Caddy TLS, loopback-
 
 ## Architecture
 
-Plain Node (single runtime dependency: `better-sqlite3`) and a build-less, framework-less native-ESM front end. No bundler, no transpile step — the browser loads `src/app.js` as a module directly.
+Echo Research is mid-way through a strangler-fig rewrite: **production traffic still runs entirely on the original monolith** (plain Node, single runtime dependency `better-sqlite3`, build-less native-ESM front end — the browser loads `src/app.js` as a module directly, no bundler, no transpile step), while a parallel new stack (`apps/api` NestJS · `apps/web` React+Vite · `apps/worker` BullMQ · `packages/{contracts,db,data-plane,ui}`) has been built out module-for-module alongside it and hasn't been cut over yet. Both are real, both are tested, only one currently serves users — deliberately, so the main branch is always shippable and either side can be rolled back independently.
 
-```text
-Echo Research
-├── index.html                     # SPA shell (loads src/app.js as an ES module)
-├── server.js                      # Thin HTTP router — only the endpoints the UI uses
-├── src/
-│   ├── app.js                     # Front-end entry: route dispatch + global event delegation
-│   ├── ui/                        # Modular front end (no framework)
-│   │   ├── state.js api.js resolve.js format.js markdown.js
-│   │   ├── shell.js research.js watch.js settings.js portfolio.js
-│   │   └── notifications.js components.js
-│   ├── styles/                    # Layered CSS (00-foundation → 07-brand)
-│   ├── market.js                  # HK/US/CN detection + per-provider symbol mapping
-│   ├── data.js marketData.js financialData.js newsData.js filingData.js
-│   ├── fmpClient.js secFilings.js documentParser.js prompts.js
-│   ├── server/
-│   │   ├── routes/                # chat · discover · companies · research (incl. FTS
-│   │   │                          #   search) · reports · documents · events · portfolio ·
-│   │   │                          #   portraits · watch · notifications · hkFinancials · status
-│   │   ├── services/              # agentService · answerComposer · valuationEngine ·
-│   │   │                          #   financialQuality · webEvidenceService · eventEngine ·
-│   │   │                          #   companyPortrait · discovery · intentClassifier ·
-│   │   │                          #   twoStageChat · scheduler · notifier · riskEngine ·
-│   │   │                          #   hkFilingsPipeline · modelGateway · decisionPanel ·
-│   │   │                          #   factGuard · earningsCalendar · falsifyRules ·
-│   │   │                          #   insiderActivity · historicalValuation · researchReview ·
-│   │   │                          #   dbBackup · …
-│   │   ├── repositories/          # SQLite access (sessions, profiles, portfolio, watch,
-│   │   │                          #   insiderActivity, hkBuyback, historicalValuation,
-│   │   │                          #   factGuardAudit, researchSnapshots, …)
-│   │   ├── schemas/               # structured-output validation
-│   │   └── utils/                 # time anchoring, async, env
-│   ├── data/                      # HK stock seed data
-│   └── db/
-│       ├── migrations/            # numbered, additive SQL migrations (see docs/ARCHITECTURE.md)
-│       └── migrate.js             # `PRAGMA user_version`-based migrator, runs on boot
-├── scripts/                       # seed-db, doctor, canary, hk-coverage, one-off migrations
-├── tests/                         # smoke · reliability · phase3/4/6/7 · notifications ·
-│                                  # phase-b/d/ea/g/r/f/p7 (one file per shipped phase)
-└── docs/                          # product, architecture, data-source & plan notes
-```
+See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full picture (current layout, target layout, data-layer present/future, the design-token pipeline shared by both front ends) and [REFACTOR_PROPOSAL.md](docs/REFACTOR_PROPOSAL.md) for why and on what timeline.
 
-The chat route is thin: it orchestrates a single data+evidence pass, a two-stage model call (search-triage → **streamed** answer), and one DB write. Streaming and non-streaming requests share one `finalizeChat` post-processor, so both paths persist and render identically. All answer composition lives in `services/answerComposer.js`; every model call goes through `services/modelGateway.js` (provider priority + fallback).
+The chat route (the core of the monolith) is thin: it orchestrates a single data+evidence pass, a two-stage model call (search-triage → **streamed** answer), and one DB write. Streaming and non-streaming requests share one `finalizeChat` post-processor, so both paths persist and render identically. All answer composition lives in `services/answerComposer.js`; every model call goes through `services/modelGateway.js` (provider priority + fallback).
 
 ---
 
@@ -228,7 +189,7 @@ pip3 install --user pdfminer.six
 The backend has **no hot reload** — after editing `src/server/**` or `src/*.js`, restart the node process. For isolated local runs against a throwaway DB:
 
 ```bash
-LUVIO_DB_PATH=$TMPDIR/x.db PORT=4199 node server.js
+ECHO_DB_PATH=$TMPDIR/x.db PORT=4199 node server.js
 ```
 
 ---

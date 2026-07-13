@@ -107,7 +107,7 @@ check("db_backup 到点判定：过了 03:30 且今天没跑过 → 该跑", () 
 
 console.log("\n[4] dbBackup：真实备份 + 恢复校验 + 滚动保留（对着测试临时库）");
 const tmpBackupDir = mkdtempSync(join(tmpdir(), "echo-backup-test-"));
-process.env.LUVIO_BACKUP_DIR = tmpBackupDir;
+process.env.ECHO_BACKUP_DIR = tmpBackupDir;
 
 await checkAsync("runBackup：真实生成备份文件，integrity_check 通过", async () => {
   const detail = await runBackup({ retain: 14 });
@@ -129,10 +129,10 @@ await checkAsync("滚动保留：超过 retain 的旧备份被清理", async () 
   assert.equal(files.length, 1, "retain=1 时旧备份应被清理，只留最新一份");
 });
 
-check("backupDir()：LUVIO_BACKUP_DIR 覆盖生效", () => {
+check("backupDir()：ECHO_BACKUP_DIR 覆盖生效", () => {
   assert.equal(backupDir(), tmpBackupDir);
 });
-delete process.env.LUVIO_BACKUP_DIR;
+delete process.env.ECHO_BACKUP_DIR;
 
 console.log(`\nF-1: ${pass} passed, ${fail} failed.`);
 if (fail > 0) process.exit(1);

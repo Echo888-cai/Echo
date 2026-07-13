@@ -39,9 +39,9 @@ export async function startTestServer(): Promise<TestServer> {
     env: {
       ...process.env,
       API_PORT: String(port),
-      LUVIO_DB_PATH: dbPath,
-      LUVIO_AUTH_DISABLED: "1",
-      LUVIO_DISABLE_SCHEDULER: "1",
+      ECHO_DB_PATH: dbPath,
+      ECHO_AUTH_DISABLED: "1",
+      ECHO_DISABLE_SCHEDULER: "1",
       NODE_ENV: "test"
     },
     stdio: ["ignore", "pipe", "pipe"]

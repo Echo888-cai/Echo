@@ -1,8 +1,8 @@
 .env
 .DS_Store
 node_modules/
-luvio.db
-luvio.db-*
+echo.db
+echo.db-*
 backups/
 *.log
 .cache/

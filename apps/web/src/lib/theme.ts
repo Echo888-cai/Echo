@@ -1,7 +1,7 @@
 // React port of the theme bits of src/ui/state.js — same localStorage key and
 // document.documentElement.dataset.theme contract, so 00-foundation.css's
 // [data-theme="dark"] rules apply unmodified.
-const THEME_KEY = "luvio.v3.theme";
+const THEME_KEY = "echo.v3.theme";
 
 export type Theme = "light" | "dark";
 

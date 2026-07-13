@@ -1,5 +1,5 @@
 /**
- * Seed script — populates luvio.db with HK + CN companies + detail overrides.
+ * Seed script — populates echo.db with HK + CN companies + detail overrides.
  *
  * Usage: node scripts/seed-db.js
  *   - Creates/resets the companies and company_details tables

@@ -4,9 +4,9 @@ import assert from "node:assert/strict";
 import { insertLlmAudit, getUserDailyUsage, getProviderCallStats } from "../src/server/repositories/llmAuditRepository.js";
 import { quotaStatus, quotaGuard, estimateModelCost } from "../src/server/services/quotaService.js";
 
-process.env.LUVIO_DAILY_MODEL_CALLS = "2";
-process.env.LUVIO_INPUT_USD_PER_M_TOKENS = "1";
-process.env.LUVIO_OUTPUT_USD_PER_M_TOKENS = "2";
+process.env.ECHO_DAILY_MODEL_CALLS = "2";
+process.env.ECHO_INPUT_USD_PER_M_TOKENS = "1";
+process.env.ECHO_OUTPUT_USD_PER_M_TOKENS = "2";
 
 assert.equal(estimateModelCost(1_000_000, 1_000_000), 3);
 
@@ -32,8 +32,8 @@ assert.equal(quotaStatus("user-a").remainingCalls, 0);
 assert.equal(quotaGuard("user-a").status, 429);
 assert.equal(quotaStatus("user-b").exhausted, false);
 
-delete process.env.LUVIO_DAILY_MODEL_CALLS;
-delete process.env.LUVIO_INPUT_USD_PER_M_TOKENS;
-delete process.env.LUVIO_OUTPUT_USD_PER_M_TOKENS;
+delete process.env.ECHO_DAILY_MODEL_CALLS;
+delete process.env.ECHO_INPUT_USD_PER_M_TOKENS;
+delete process.env.ECHO_OUTPUT_USD_PER_M_TOKENS;
 
 console.log("phase-u4 ✓ 每用户用量 / token / 成本 / 每日配额");
