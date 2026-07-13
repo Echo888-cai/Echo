@@ -1,4 +1,3 @@
-export * from "./earnings.js";
 export * from "./eventRules.js";
 export * from "./companyIdentity.js";
 export * from "./factGuard.js";
@@ -9,4 +8,6 @@ export * from "./historicalValuation.js";
 export * from "./portraitRules.js";
 export * from "./researchReview.js";
 export * from "./risk.js";
+export * from "./reportComposer.js";
 export * from "./valuation.js";
+export * from "./answerComposer.js";

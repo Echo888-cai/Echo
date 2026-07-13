@@ -1,7 +1,5 @@
 /**
- * Contract for src/server/routes/documents.js — only handleDocumentParseApi is wired in
- * server.js (POST /api/parse-document). handleDocumentList/Upload/Get/Delete are exported
- * but never mounted, so they're skipped here.
+ * Document parsing contract.
  *
  *   POST /api/parse-document { name?, type?, dataUrl, ticker? } → {document}
  */
@@ -15,7 +13,7 @@ export const parseDocumentRequestSchema = z.object({
   ticker: z.string().optional()
 });
 
-/** Mirrors src/documentParser.js parseUploadedDocument() + the docId patched in by the route. */
+/** Normalized parsed document returned to the composer. */
 export const parsedDocumentSchema = z.object({
   id: z.union([z.string(), z.number()]),
   name: z.string(),

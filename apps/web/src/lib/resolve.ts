@@ -1,8 +1,4 @@
-// React port of src/ui/resolve.js — company identification/resolution (aliases,
-// dual-listing, US-ticker heuristics, intent classification for the research
-// composer). Pure functions + one API-calling function (resolveCompany); ported
-// as-is since this is exactly the kind of hand-tuned heuristic table that must
-// not drift from the legacy behavior it's replacing.
+// Company identification, dual listings and research-intent resolution.
 import { companiesApi, type ResolvedCompany } from "./api";
 import { extractHkTicker, extractUsTickerToken } from "@echo/domain/company-identity";
 

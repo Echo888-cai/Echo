@@ -1,5 +1,5 @@
 /**
- * Contracts for src/server/routes/preferences.js.
+ * Preferences and feedback contracts.
  *
  *   GET   /api/preferences        → {preferences}
  *   PATCH /api/preferences        → {preferences}

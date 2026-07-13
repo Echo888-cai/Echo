@@ -1,6 +1,5 @@
 /**
- * Contract for src/server/routes/discover.js — POST /api/discover.
- * Not enveloped (sendJson directly). Delegates to services/discovery.js runScreener()/runMacro().
+ * Discovery contract — POST /api/discover.
  */
 import { z } from "zod";
 

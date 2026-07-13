@@ -1,4 +1,4 @@
-// React port of src/ui/portfolio.js's renderPositionCard() + renderPortfolioReview()
+// Position and portfolio-discipline cards.
 // (pure render, no side effects there — kept that way here too). Exported from
 // components/ rather than inlined in the portfolio route because research/chat's
 // session replay (components.js's meta.type==="portfolio" messages) will reuse

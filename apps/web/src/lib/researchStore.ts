@@ -1,9 +1,5 @@
-// React port of src/ui/state.js's research-related slice: localStorage-backed
-// thread/company/panel/documents/session state, the `running` Map (parallel
-// in-flight research runs keyed by session), and the busy-clock ticker.
-//
-// Kept as a module-level store (not React state) for the same reason the
-// legacy S object is module-level: Sidebar and the research page both need to
+// Shared research state and parallel in-flight runs keyed by session.
+// Kept module-level because the sidebar and research page both need to
 // read/react to the same "what's the active company / is anything running"
 // truth, and several actions (sendChat, comparisons, deep research) run
 // entirely outside any component's lifecycle — they're triggered by a submit
@@ -322,7 +318,7 @@ export function addReasoningChars(key: string, n: number) {
   if (key === activeRunKey()) emit();
 }
 
-// appendMessage doesn't scroll here (unlike legacy's direct DOM query) — the
+// appendMessage doesn't scroll here; the
 // conversation view component handles scroll-follow via a ref + effect on
 // thread length change, since that's the idiomatic React way to react to a
 // list growing rather than reaching into the DOM from the store.

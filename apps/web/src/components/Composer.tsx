@@ -1,4 +1,4 @@
-// React port of src/ui/research.js's renderComposer() — question textarea +
+// Research composer: question textarea +
 // quick-reply chips + file upload + busy status + send button.
 import { useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from "react";
 import type { ResearchCompany } from "../lib/researchStore";

@@ -1,4 +1,4 @@
-// React port of renderFeedback()/submitFeedback() in src/ui/beta.js — floating
+// Floating feedback entry and submission state.
 // feedback button + modal form → POST /api/feedback.
 import { useState, type FormEvent } from "react";
 import { useRouterState } from "@tanstack/react-router";

@@ -1,5 +1,5 @@
 /**
- * Contracts for src/server/routes/notifications.js.
+ * Notification and orchestration-status contracts.
  *
  *   GET  /api/notifications         → {notifications, unread, telegram}
  *   GET  /api/notifications/unread  → {unread}

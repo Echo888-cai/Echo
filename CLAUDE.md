@@ -1,19 +1,9 @@
-# CLAUDE.md — Claude Code Instructions
+# Echo Research 开发约束
 
-## Project
-
-- **唯一计划文档：`docs/PLAN.md`**（终局架构 + 已拍板决策 + 1→7 执行步骤 + 宪法红线）。做任何改动前先读它；不要创建新计划、分轨、ADR 或候选方案。
-- 生产在旧底盘（`server.js` + `src/` + SQLite，后端无热重载）；`npm run lint`、`npm run typecheck`、`npm run typecheck:workspaces`、`npm test`、契约测试和 React build 必须全绿再提交。
-
-## Effort Policy
-
-- **Default to medium effort** for normal work.
-- **Use high effort** only for: tricky debugging, multi-file refactors, architecture decisions.
-- **Use low effort** for: formatting, renames, simple edits, boilerplate, sub-agent execution.
-- If a task would require max effort on Sonnet 5, first evaluate whether Opus 4.8 at high or Fable 5 at medium is better on quality and cost.
-
-## Routing Rule
-
-- **Default to Sonnet 5** for: knowledge work, everyday coding, brownfield maintenance, research & summarization.
-- **Escalate to Opus 4.8 or Fable 5** only on clear evidence the task is in the hardest tier (long-horizon autonomous loops, deepest multi-step reasoning, security-sensitive).
-- **Fable 5 is reserved** for ambitious, multi-day autonomous projects where its planning and self-validation actually change the outcome.
+- 唯一计划与架构底账是 `docs/PLAN.md`，不另建平行计划或重复实现。
+- 运行架构只有 React/PWA、Hono+tRPC、Temporal、Drizzle/PostgreSQL 和 Rust 金融内核。
+- 领域规则只能进入 `packages/domain`，用例编排只能进入 `packages/application`。
+- 金额、股数、比率与估值使用 PostgreSQL `NUMERIC` 和 Rust 十进制定点；展示边界之外不得新增浮点金融计算。
+- 私有数据同时经过应用层租户过滤与 PostgreSQL 强制 RLS。
+- 不提供买卖指令；数据缺失时明确说“未核到”；未获商用授权的数据源不可进入商用路由。
+- 提交前必须通过 lint、全 workspace 类型检查、Rust fmt/clippy/test、领域与契约测试、Temporal 恢复测试、Playwright E2E、Web build 和数据库恢复演练。

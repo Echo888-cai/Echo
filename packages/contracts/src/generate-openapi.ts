@@ -16,7 +16,7 @@ const document = generator.generateDocument({
     title: "Echo Research API (contract snapshot)",
     version: "0.1.0",
     description:
-      "Descriptive snapshot of the current Node.js HTTP API (src/server/routes/*.js), the behavioral reference for the Hono + tRPC rebuild (docs/PLAN.md §4 step 2). Not a forward-looking spec."
+      "Echo Research Hono REST surface generated from the shared zod contracts."
   },
   servers: [{ url: "http://127.0.0.1:4173" }]
 });

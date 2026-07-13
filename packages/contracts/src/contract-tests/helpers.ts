@@ -1,17 +1,11 @@
 /**
- * Test harness: spawns the real server.js as a child process against an isolated,
- * throwaway SQLite file (same ECHO_DB_PATH isolation trick as tests/setupTestDb.mjs
- * uses for the existing in-process test suite — reused here rather than invented,
- * just applied to a child process instead of an import). Auth is disabled via
- * ECHO_AUTH_DISABLED=1 so requests run as the legacy single-user "owner" without
- * needing to drive cookie-based login — the contract suite focuses on DB-backed
- * endpoints, not the auth state machine (that's covered by tests/phase-u1.mjs).
+ * Test harness: spawns the Hono API against an isolated PostgreSQL tenant.
+ * Auth is bypassed only for that tenant; RLS and repository user filters remain active.
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdtempSync, rmSync } from "node:fs";
+import postgres from "postgres";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "..", "..", "..", "..");
@@ -19,7 +13,6 @@ const repoRoot = join(here, "..", "..", "..", "..");
 export interface TestServer {
   baseUrl: string;
   proc: ChildProcess;
-  dbPath: string;
   stop: () => Promise<void>;
 }
 
@@ -29,17 +22,19 @@ function pickPort(): number {
 }
 
 export async function startTestServer(): Promise<TestServer> {
-  const tmpDir = mkdtempSync(join(tmpdir(), "echo-contract-"));
-  const dbPath = join(tmpDir, "test.db");
+  if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required for contract tests");
+  const tenant = `__contract_${process.pid}__`;
+  const sql = postgres(process.env.DATABASE_URL, { max: 1 });
+  await sql`insert into users (id, username, pass_hash) values (${tenant}, ${tenant}, '!test') on conflict (id) do nothing`;
   const port = pickPort();
 
-  const proc = spawn(process.execPath, [join(repoRoot, "server.js")], {
+  const proc = spawn(process.execPath, [join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs"), join(repoRoot, "apps", "api", "src", "server.ts")], {
     cwd: repoRoot,
     env: {
       ...process.env,
-      PORT: String(port),
-      ECHO_DB_PATH: dbPath,
+      API_PORT: String(port),
       ECHO_AUTH_DISABLED: "1",
+      ECHO_AUTH_DISABLED_USER_ID: tenant,
       ECHO_DISABLE_SCHEDULER: "1",
       NODE_ENV: "test"
     },
@@ -55,11 +50,14 @@ export async function startTestServer(): Promise<TestServer> {
   return {
     baseUrl,
     proc,
-    dbPath,
     stop: async () => {
       proc.kill();
       await new Promise((resolve) => proc.once("exit", resolve));
-      rmSync(tmpDir, { recursive: true, force: true });
+      for (const table of ["portfolio_snapshot_totals", "notifications", "feedback", "portfolio_positions", "portfolio_snapshots", "watchlist_prefs", "watch_rules", "company_profiles", "profile_events", "research_sessions", "research_snapshots", "documents", "llm_audit", "user_preferences"]) {
+        await sql.unsafe(`delete from ${table} where user_id = $1`, [tenant]);
+      }
+      await sql`delete from users where id = ${tenant}`;
+      await sql.end();
     }
   };
 }
@@ -68,7 +66,7 @@ async function waitForServer(baseUrl: string, proc: ChildProcess, getStderr: () 
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (proc.exitCode !== null) {
-      throw new Error(`server.js exited early (code ${proc.exitCode}):\n${getStderr()}`);
+      throw new Error(`Hono API exited early (code ${proc.exitCode}):\n${getStderr()}`);
     }
     try {
       const res = await fetch(`${baseUrl}/api/status`, { headers: { "X-Echo-Auth": "1" } });
@@ -78,10 +76,10 @@ async function waitForServer(baseUrl: string, proc: ChildProcess, getStderr: () 
     }
     await new Promise((r) => setTimeout(r, 150));
   }
-  throw new Error(`server.js did not become ready within ${timeoutMs}ms:\n${getStderr()}`);
+  throw new Error(`Hono API did not become ready within ${timeoutMs}ms:\n${getStderr()}`);
 }
 
-/** All non-GET requests need this header (CSRF gate in server.js). */
+/** All non-GET requests need the Hono CSRF header. */
 export function jsonHeaders(extra: Record<string, string> = {}) {
   return { "Content-Type": "application/json", "X-Echo-Auth": "1", ...extra };
 }

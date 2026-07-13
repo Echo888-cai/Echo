@@ -1,8 +1,4 @@
-// React port of src/ui/research.js's orchestration functions (everything
-// except the render* functions, which became components/AnswerCard.tsx +
-// routes/research.tsx). Operates on researchStore's module-level state, same
-// division of responsibility as legacy: state.js held data, research.js held
-// the flows that mutate it. Kept as plain functions (not hooks) because they
+// Research actions operate on shared session state. They stay plain functions because they
 // run across component lifecycles — a research run keeps streaming after the
 // user switches to another session/page.
 import {
@@ -217,7 +213,7 @@ export async function deleteSession(id: string) {
   }
   const item = getRecentSessions().find((session) => session.id === id);
   const title = item?.title || item?.question || "这条研究";
-  const ok = window.confirm(`删除"${title}"？\n\n这会从本地 SQLite 里移除这条历史研究。`);
+  const ok = window.confirm(`删除"${title}"？\n\n这会永久移除这条历史研究。`);
   if (!ok) return;
   try {
     await researchSessionsApi.remove(id);
@@ -242,7 +238,7 @@ export async function clearAllSessions() {
     showToast("有研究正在生成，完成后再清空。");
     return;
   }
-  const ok = window.confirm("清空全部历史研究？\n\n这会删除本地 SQLite 里的所有历史记录。");
+  const ok = window.confirm("清空全部历史研究？\n\n这会永久删除你的所有历史记录。");
   if (!ok) return;
   try {
     await researchSessionsApi.clearAll();

@@ -1,7 +1,5 @@
 /**
- * Contracts for src/server/routes/research.js (research session / conversation routes).
- * Note: handleSessionMemo (POST /api/research/sessions/:id/memo) is exported but NOT wired
- * in server.js, so it's omitted here.
+ * Research session and conversation contracts.
  *
  *   GET    /api/research/conversations       → {conversations, count}
  *   GET    /api/research/sessions            → {sessions, count}
@@ -12,7 +10,7 @@
 import { z } from "zod";
 import { okEnvelope } from "./envelope.js";
 
-/** Mirrors research.js handleSessionList's mapped row (listResearchSessions() raw row + derived fields). */
+/** Compact session row used by research history. */
 export const sessionSummarySchema = z
   .object({
     id: z.string(),

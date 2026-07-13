@@ -1,9 +1,4 @@
-/* Minimal reset for the R-3 app shell. Design tokens (colors, radii,
-   shadows, motion, fonts) come entirely from @echo/ui/tokens.css — this
-   file only sets up the bare structural defaults Vite's blank index.html
-   needs (the legacy 00-foundation.css base-layer rules like the paper
-   texture / scrollbars / body gradient stay with the legacy app for now,
-   out of scope for this slice). */
+/* Structural browser reset. Brand values come from @echo/ui. */
 * {
   box-sizing: border-box;
 }

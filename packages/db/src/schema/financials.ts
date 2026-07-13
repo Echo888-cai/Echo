@@ -10,8 +10,7 @@
  *   011_historical_valuation.sql (historical_valuation)
  *   012_hk_buybacks.sql (hk_buybacks)
  *   015_cn_financials.sql (cn_financials, cn_filing_ingest_log)
- *   src/server/repositories/{compPeersRepository,webEvidenceRepository,
- *     historicalValuationRepository,insiderActivityRepository}.js for JSON shapes.
+ * Structured from the canonical financial repository shapes.
  */
 import {
   pgTable,
@@ -25,7 +24,7 @@ import {
   index,
   uniqueIndex
 } from "drizzle-orm/pg-core";
-import { companies } from "./core";
+import { companies } from "./core.js";
 
 /**
  * hk_financials / cn_financials — first-party filing extracts (HKEX PDF / 巨潮资讯网).
@@ -208,8 +207,8 @@ export const historicalValuation = pgTable("historical_valuation", {
 
 /**
  * Child table replacing historical_valuation.series_json (see doc comment above).
- * Actual source shape (src/server/services/historicalValuation.js) is a flat list of
- * {period: "YYYY-MM-DD", value: number} — fiscal-year-end date + PE at that date, not
+ * The series is a flat list of {period: "YYYY-MM-DD", value: number}:
+ * fiscal-year-end date + PE at that date, not
  * a {year, pe} pair as one might guess from the table name.
  */
 export const historicalValuationPoints = pgTable(

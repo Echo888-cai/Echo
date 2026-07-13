@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Echo Research design tokens, shared by every web surface.",
   "exports": {
-    "./tokens.css": "./src/tokens.css"
+    "./tokens.css": "./src/tokens.css",
+    "./styles/*": "./src/styles/*"
   }
 }

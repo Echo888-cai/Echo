@@ -9,6 +9,8 @@
     "rootDir": "../..",
     "outDir": "dist",
     "noEmit": true,
+    "allowJs": true,
+    "checkJs": false,
     "allowImportingTsExtensions": false,
     "resolveJsonModule": true,
     "isolatedModules": true,

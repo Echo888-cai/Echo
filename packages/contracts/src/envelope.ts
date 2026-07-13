@@ -1,5 +1,5 @@
 /**
- * Shared response envelope — mirrors src/server/utils/async.js.
+ * Shared response envelope for REST compatibility endpoints.
  *
  * Most routes reply through sendOk/sendError, which wrap the payload in a
  * standard envelope:

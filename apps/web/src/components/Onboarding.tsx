@@ -1,7 +1,4 @@
-// React port of renderOnboarding() in src/ui/beta.js. The legacy version
-// marks each of the 3 steps "done" from real research/watch/portfolio state;
-// none of those pages exist yet in this slice, so all three read as "not
-// done" here — the same thing a genuinely fresh install would show today.
+// Onboarding progress derives from real research, watch and portfolio state.
 import { Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { preferencesApi } from "../lib/api";

@@ -1,8 +1,7 @@
 /**
- * Contract for src/server/routes/chat.js — POST /api/chat.
+ * Research chat contract — POST /api/chat.
  *
- * Not enveloped (sendJson directly). Delegates to services/chatOrchestrator.js runChat(),
- * which can respond either as a single JSON object (finalizeChat() return value, modeled
+ * The API can respond either as a single JSON object (modeled
  * below) or as an SSE stream (text/event-stream) — the SSE path isn't representable as a
  * JSON response schema and isn't contracted here. Deeply nested fields (decisionPanel,
  * valuation, webEvidence, etc.) are intentionally loose: they come from LLM + market-data

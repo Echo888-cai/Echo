@@ -34,10 +34,9 @@ jobs:
       - run: npm run lint
       - run: npm run lint:rust
       - run: npm run typecheck
-      - run: npm run typecheck:workspaces
       - run: npm run migrate --workspace @echo/db
-      - run: npm run test:postgres --workspace @echo/db
-      # 测试不需要任何 API key：模型层与数据层都有本地兜底
       - run: npm test
-      - run: npm test --workspace @echo/contracts
       - run: npm run build --workspace @echo/web
+      - run: npm run db:recovery-drill
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e

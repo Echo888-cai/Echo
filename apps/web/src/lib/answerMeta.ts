@@ -1,4 +1,4 @@
-// React port of src/ui/components.js's provenanceFromPanel/dataSourceLabels/
+// Provenance and data-source metadata for structured answers.
 // dataSourceGrounding — pure data-shaping helpers that turn a decisionPanel
 // into the evidence-card/grounding-bar props AnswerCard renders. Split out
 // from AnswerCard.tsx because researchActions.ts (answerMetaFromResult) also

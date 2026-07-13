@@ -1,5 +1,5 @@
 /**
- * Contract for src/server/routes/reports.js — POST /api/report/generate.
+ * Deep research contract — POST /api/report/generate.
  * Not enveloped (sendJson directly). Deep-research pipeline; loose/best-effort shape.
  */
 import { z } from "zod";

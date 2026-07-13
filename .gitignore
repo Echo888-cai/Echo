@@ -1,14 +1,13 @@
 .env
 .DS_Store
 node_modules/
-echo.db
-echo.db-*
 backups/
 *.log
 .cache/
 dist/
 coverage/
 target/
+**/.terraform/
 packages/finance-native/*.node
 packages/contracts/openapi.json
 

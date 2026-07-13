@@ -12,8 +12,8 @@
  * feedback).
  */
 import { pgTable, text, integer, serial, bigserial, numeric, boolean, timestamp, jsonb, index } from "drizzle-orm/pg-core";
-import { users } from "./auth";
-import { companies } from "./core";
+import { users } from "./auth.js";
+import { companies } from "./core.js";
 
 export const schedulerState = pgTable("scheduler_state", {
   jobId: text("job_id").primaryKey(),

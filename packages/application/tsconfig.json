@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "../..",
+    "allowJs": true,
+    "checkJs": false,
+    "paths": {
+      "@echo/domain": ["../../packages/domain/src/index.js"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}

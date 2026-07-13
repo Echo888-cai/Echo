@@ -1,17 +1,8 @@
 /* ============================================================
    @echo/ui — design tokens (source of truth)
 
-   Mechanically extracted from the legacy app's
-   src/styles/00-foundation.css (:root / [data-theme="dark"] blocks).
-   Values are byte-identical to the original — do NOT "clean up" or
-   rename anything here; this file is the single source of truth for
-   CSS custom properties. This file is the only token source of truth;
-   if a value ever needs to change, change it here.
-
-   Only the token declarations were extracted — base-layer rules that
-   consume them (body background, scrollbars, keyframes, dark-mode
-   patches for specific components, etc.) still live in the legacy
-   src/styles/*.css files and are out of scope for this package.
+   Single source of truth for Echo surfaces, ink, motion, radii and typography.
+   Change shared visual values here rather than introducing page-local variants.
    ============================================================ */
 
 :root {

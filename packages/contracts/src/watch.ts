@@ -1,5 +1,5 @@
 /**
- * Contracts for src/server/routes/watch.js.
+ * Watch desk contracts.
  *
  *   GET  /api/watch/desk?slot=&tickers=&events= → {desk}
  *   GET  /api/watch/stock?ticker=                → {stock}

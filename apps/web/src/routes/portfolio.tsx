@@ -1,8 +1,5 @@
-// React port of src/ui/portfolioPage.js's renderPortfolioPage() — overview
-// banner + net-worth chart + portfolio-review card + position list. Positions
-// are still recorded via natural-language chat (see the "add" button below),
-// unchanged from legacy — a manual entry form is out of scope for this slice.
-import { useNavigate } from "@tanstack/react-router";
+// Portfolio overview, net-worth chart, discipline review and positions.
+import { useState, type FormEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { portfolioApi, ApiError } from "../lib/api";
 import { pnlDir } from "../lib/format";
@@ -16,9 +13,9 @@ import { PositionCard, PortfolioReviewCard } from "../components/Portfolio";
 // .page-wide scaffolding, 08-portfolio.css for the .pfp-*/.pf-* rules, and
 // 03-research.css for .pr-* (the portfolio-review card's rules live there —
 // it started life as a chat-panel component, per portfolio.js's header comment).
-import "../../../../src/styles/03-research.css";
-import "../../../../src/styles/06-watch.css";
-import "../../../../src/styles/08-portfolio.css";
+import "@echo/ui/styles/03-research.css";
+import "@echo/ui/styles/06-watch.css";
+import "@echo/ui/styles/08-portfolio.css";
 
 // Same approximate FX constants as services/portfolioReview.js /
 // portfolioSnapshot.js — all three places must agree (PLAN v4 红线 11).
@@ -134,9 +131,59 @@ function EmptyCta({ onAdd }: { onAdd: () => void }) {
   );
 }
 
+function PositionEntryForm({ onSaved, onCancel }: { onSaved: () => void; onCancel: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy) return;
+    const form = new FormData(event.currentTarget);
+    setBusy(true);
+    setError("");
+    try {
+      await portfolioApi.upsert({
+        ticker: String(form.get("ticker") || "").trim().toUpperCase(),
+        companyName: String(form.get("companyName") || "").trim() || undefined,
+        shares: String(form.get("shares") || "").trim() || undefined,
+        avgCost: String(form.get("avgCost") || "").trim() || undefined,
+        stopLoss: String(form.get("stopLoss") || "").trim() || undefined,
+        takeProfit: String(form.get("takeProfit") || "").trim() || undefined,
+        note: String(form.get("note") || "").trim() || undefined
+      });
+      showToast("持仓已保存。");
+      onSaved();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "保存失败，请稍后重试。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="pf-entry" onSubmit={submit} aria-label="记录持仓">
+      <div className="pf-entry-head">
+        <div><p className="hero-eyebrow">持仓记录</p><h3>记一笔持仓</h3></div>
+        <button type="button" className="wl-add-cancel" onClick={onCancel}>取消</button>
+      </div>
+      <div className="pf-entry-grid">
+        <label>股票代码<input name="ticker" required maxLength={32} placeholder="0700.HK" autoFocus /></label>
+        <label>公司名称<input name="companyName" maxLength={80} placeholder="腾讯控股" /></label>
+        <label>持有股数<input name="shares" required inputMode="decimal" placeholder="100" /></label>
+        <label>平均成本<input name="avgCost" required inputMode="decimal" placeholder="420" /></label>
+        <label>止损线<input name="stopLoss" inputMode="decimal" placeholder="可选" /></label>
+        <label>止盈线<input name="takeProfit" inputMode="decimal" placeholder="可选" /></label>
+      </div>
+      <label className="pf-entry-note">研究备注<input name="note" maxLength={500} placeholder="为什么持有、要继续验证什么" /></label>
+      {error ? <p className="wl-add-error" role="alert">{error}</p> : null}
+      <button className="primary" type="submit" disabled={busy}>{busy ? "正在保存…" : "保存持仓"}</button>
+    </form>
+  );
+}
+
 export function PortfolioPage() {
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [adding, setAdding] = useState(false);
 
   const positionsQuery = useQuery({ queryKey: ["portfolio", "positions"], queryFn: () => portfolioApi.list() });
   const reviewQuery = useQuery({
@@ -164,10 +211,13 @@ export function PortfolioPage() {
     }
   }
 
-  // 记账走对话（自然语言解析），composer 目前只活在研究页——从持仓页点进来时先跳过去
-  // （composer 预填在研究页迁移落地前先不接，legacy 的模板字符串行为随那片一起补上）。
+  function saved() {
+    setAdding(false);
+    queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+  }
+
   function handleAdd() {
-    navigate({ to: "/" });
+    setAdding(true);
   }
 
   if (positionsQuery.isLoading) {
@@ -184,7 +234,9 @@ export function PortfolioPage() {
     return (
       <Shell>
         <div className="page-wide">
-          <EmptyCta onAdd={handleAdd} />
+          {adding
+            ? <PositionEntryForm onSaved={saved} onCancel={() => setAdding(false)} />
+            : <EmptyCta onAdd={handleAdd} />}
         </div>
       </Shell>
     );
@@ -207,10 +259,11 @@ export function PortfolioPage() {
               </p>
               <h2 className="wd-title">{positions.length} 笔持仓</h2>
             </div>
-            <button className="wd-portfolio-link wl-add-btn" type="button" onClick={handleAdd}>
+            <button className="wd-portfolio-link wl-add-btn" type="button" onClick={() => setAdding((open) => !open)}>
               ＋ 记一笔持仓
             </button>
           </div>
+          {adding ? <PositionEntryForm onSaved={saved} onCancel={() => setAdding(false)} /> : null}
           <OverviewBanner positions={positions} review={review} />
           <NetWorthChart snapshots={snapshots} />
           <PortfolioReviewCard review={review} />

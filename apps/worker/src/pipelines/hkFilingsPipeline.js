@@ -16,11 +16,10 @@ import { mkdirSync } from "node:fs";
 import { writeFile, access } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { normalizeTicker } from "../../../../src/data.js";
-import { isUS } from "../../../../src/market.js";
-import { upsertHkFinancials, hasHkFinancialsForUrl, upsertHkFilingIngestLog } from "../../../../src/server/repositories/hkFinancialsRepository.js";
-import { addDocument } from "../../../../src/server/repositories/documentRepository.js";
-import { upsertHkBuyback, hasHkBuybackForUrl } from "../../../../src/server/repositories/hkBuybackRepository.js";
+import { isUS, normalizeTicker } from "@echo/data-plane";
+import { upsertHkFinancials, hasHkFinancialsForUrl, upsertHkFilingIngestLog } from "@echo/db/repositories/hkFinancialsRepository.js";
+import { addDocument } from "@echo/db/repositories/documentRepository.js";
+import { upsertHkBuyback, hasHkBuybackForUrl } from "@echo/db/repositories/hkBuybackRepository.js";
 
 const execFileAsync = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -572,14 +571,14 @@ export async function ingestHkFinancials(ticker, { limit = 3, force = false } = 
   try {
     announcements = await searchHkexResultsAnnouncements(t);
   } catch (error) {
-    logIngestOutcome({ ticker: t, status: "search_failed", detail: error.message || String(error) });
+    await logIngestOutcome({ ticker: t, status: "search_failed", detail: error.message || String(error) });
     throw error;
   }
   const result = { ticker: t, ingested: [], skipped: [], errors: [] };
 
   for (const item of announcements.slice(0, limit)) {
     try {
-      if (!force && hasHkFinancialsForUrl(item.url)) {
+      if (!force && await hasHkFinancialsForUrl(item.url)) {
         result.skipped.push(item.title);
         continue;
       }
@@ -598,7 +597,7 @@ export async function ingestHkFinancials(ticker, { limit = 3, force = false } = 
         throw new Error(`解析到的收入为负（${parsed.fields.revenue.current}），疑似匹配到附注/分项表而非合并利润表`);
       }
       const f = parsed.fields;
-      upsertHkFinancials({
+      await upsertHkFinancials({
         ticker: t,
         periodLabel: period.periodLabel,
         periodEnd: period.periodEnd,
@@ -624,7 +623,7 @@ export async function ingestHkFinancials(ticker, { limit = 3, force = false } = 
       });
       // 全文进 documents 表，研究会话可引用原文段落。
       try {
-        addDocument({
+        await addDocument({
           ticker: t,
           name: item.title,
           mimeType: "text/plain",
@@ -646,7 +645,7 @@ export async function ingestHkFinancials(ticker, { limit = 3, force = false } = 
       result.errors.push(`${item.title}: ${error.message}`);
     }
   }
-  logIngestOutcome({
+  await logIngestOutcome({
     ticker: t,
     status: classifyIngestStatus(announcements, result),
     detail: result.errors[0] || (announcements.length === 0 ? "HKEX 未搜到业绩公告（可能新上市/停牌/退市/代码库有误）" : null),
@@ -667,8 +666,8 @@ export function classifyIngestStatus(announcements, result) {
   return "parse_failed";
 }
 
-function logIngestOutcome(entry) {
-  try { upsertHkFilingIngestLog(entry); } catch { /* 留痕失败不影响摄取结果本身 */ }
+async function logIngestOutcome(entry) {
+  try { await upsertHkFilingIngestLog(entry); } catch { /* 留痕失败不影响摄取结果本身 */ }
 }
 
 // ─── F-4b：HKEX 购回报告解析 + 摄取 ───────────────────────────────────
@@ -719,14 +718,14 @@ export async function ingestHkBuybacks(ticker, { daysBack = 180, limit = 30, for
   try {
     announcements = await searchHkexBuybackAnnouncements(t, { daysBack });
   } catch (error) {
-    logIngestOutcome({ ticker: t, status: "search_failed", detail: error.message || String(error) });
+    await logIngestOutcome({ ticker: t, status: "search_failed", detail: error.message || String(error) });
     throw error;
   }
   const result = { ticker: t, ingested: [], skipped: [], errors: [] };
 
   for (const item of announcements.slice(0, limit)) {
     try {
-      if (!force && hasHkBuybackForUrl(item.url)) {
+      if (!force && await hasHkBuybackForUrl(item.url)) {
         result.skipped.push(item.title);
         continue;
       }
@@ -739,7 +738,7 @@ export async function ingestHkBuybacks(ticker, { daysBack = 180, limit = 30, for
         continue;
       }
       for (const row of rows) {
-        upsertHkBuyback({
+        await upsertHkBuyback({
           ticker: t,
           tradeDate: row.tradeDate,
           sharesRepurchased: row.sharesRepurchased,
@@ -759,7 +758,7 @@ export async function ingestHkBuybacks(ticker, { daysBack = 180, limit = 30, for
       result.errors.push(`${item.title}: ${error.message}`);
     }
   }
-  logIngestOutcome({
+  await logIngestOutcome({
     ticker: t,
     status: result.ingested.length > 0 || result.skipped.length > 0 ? "ok" : (announcements.length === 0 ? "no_announcements" : "parse_failed"),
     detail: result.errors[0] || (announcements.length === 0 ? "HKEX 未搜到购回公告（近期可能未回购）" : null),

@@ -5,7 +5,6 @@ import {
   equityValueFromMultipleDecimal,
   perShareDecimal
 } from "./index.cjs";
-import { computeSurprisePct } from "../domain/src/earnings.js";
 
 const SURPRISE_GOLDEN_VECTORS = [
   { actual: "1.05", estimate: "1.00", expected: "5" },
@@ -24,11 +23,9 @@ test("N-API uses the Rust exact-decimal kernel", () => {
   assert.deepEqual(perShareDecimal(equity.amount, "550000000", 2, "USD"), { amount: "14.35", currency: "USD" });
 });
 
-test("native surprise calculation matches legacy display semantics on golden vectors", () => {
+test("native surprise calculation matches exact golden vectors", () => {
   for (const vector of SURPRISE_GOLDEN_VECTORS) {
     const exact = surprisePercentDecimal(vector.actual, vector.estimate);
     assert.equal(exact, vector.expected);
-    const display = exact == null ? null : Math.round(Number(exact) * 10) / 10;
-    assert.equal(display, computeSurprisePct(Number(vector.actual), Number(vector.estimate)));
   }
 });

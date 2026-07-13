@@ -1,5 +1,5 @@
 /**
- * Contracts for src/server/routes/portraits.js.
+ * Company portrait and research review contracts.
  *
  *   GET    /api/company/profiles        → {profiles, count}
  *   GET    /api/company/profile?ticker= → {profile, markdown}

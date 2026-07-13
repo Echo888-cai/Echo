@@ -1,4 +1,4 @@
-// React port of the theme bits of src/ui/state.js — same localStorage key and
+// Theme persistence and system-preference resolution.
 // document.documentElement.dataset.theme contract, so 00-foundation.css's
 // [data-theme="dark"] rules apply unmodified.
 const THEME_KEY = "echo.v3.theme";

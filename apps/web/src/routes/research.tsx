@@ -1,7 +1,4 @@
-// React port of src/ui/research.js's renderResearch() — the product's core
-// page: continuous conversation + session management + deep research +
-// export. State lives in researchStore (see that file's header comment for
-// why it's module-level rather than component state).
+// Continuous research conversation, session management, reports and export.
 import { useEffect, useRef } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Shell } from "../components/Shell";
@@ -23,7 +20,7 @@ import { sendChat, exportResearch, loadSession } from "../lib/researchActions";
 import { markdownToHtml } from "../lib/markdown";
 import { marketLabelOf } from "../lib/format";
 
-import "../../../../src/styles/03-research.css";
+import "@echo/ui/styles/03-research.css";
 
 const EXPORT_ICON = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -209,7 +206,7 @@ export function ResearchPage() {
   const prevLenRef = useRef(thread.length);
 
   // Follow the conversation to the bottom on new messages, but only when the
-  // user was already near the bottom — mirrors legacy's appendMessage scroll
+  // Keep streaming readable without stealing scroll from someone reviewing evidence.
   // behavior (keepScroll for the streaming→final transition is implicit here
   // since that transition doesn't change thread.length).
   useEffect(() => {
@@ -220,7 +217,7 @@ export function ResearchPage() {
     }
   }, [thread.length]);
 
-  // Mirrors legacy's document-level submit listener (app.js): only blocks on
+  // The document-level listener only blocks on
   // the *current* session being busy — a different session running in the
   // background doesn't block asking here or starting a new one (parallel
   // conversations).

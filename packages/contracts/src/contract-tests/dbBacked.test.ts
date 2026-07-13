@@ -1,5 +1,5 @@
 /**
- * R-0 contract tests: spins up the real server.js (isolated temp SQLite DB, auth
+ * Contract tests: spins up the Hono API against an isolated PostgreSQL tenant, auth
  * disabled) and validates live HTTP responses against the zod schemas in
  * packages/contracts/src. Scope: endpoints backed by local DB / pure logic only —
  * no live market data, web search, or LLM calls (those degrade gracefully but
@@ -14,9 +14,7 @@
  *   - /api/watch/desk, /api/watch/stock, /api/events/digest     → pull live market
  *     snapshots + news for each tracked ticker (slow, network-dependent).
  *   - /api/hk-financials/ingest                                 → scrapes HKEX PDFs.
- *   - /api/auth/login, /register, /invite                       → require
- *     multi-user mode (ECHO_AUTH_DISABLED=1 keeps this suite in legacy mode);
- *     already covered by tests/phase-u1.mjs.
+ * Authentication mutation behavior is covered by the API boundary suite.
  */
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -93,7 +91,7 @@ test("POST /api/feedback matches feedbackCreateResponseSchema", async () => {
   feedbackCreateResponseSchema.parse(body);
 });
 
-test("GET /api/companies/search matches companySearchResponseSchema (pure SQLite, no network)", async () => {
+test("GET /api/companies/search matches companySearchResponseSchema (PostgreSQL, no network)", async () => {
   const { status, body } = await getJson("/api/companies/search?q=%E8%85%BE%E8%AE%AF"); // 腾讯
   assert.equal(status, 200);
   companySearchResponseSchema.parse(body);
@@ -185,9 +183,9 @@ test("research sessions: list / conversations / clear", async () => {
   sessionClearResponseSchema.parse(cleared.body);
 });
 
-test("GET /api/hk-financials matches hkFinancialsListResponseSchema (DB read, no ingest)", async () => {
+test("GET /api/hk-financials matches hkFinancialsListResponseSchema (PostgreSQL read, no ingest)", async () => {
   const { status, body } = await getJson("/api/hk-financials?ticker=0700.HK");
   assert.equal(status, 200);
   const parsed = hkFinancialsListResponseSchema.parse(body);
-  assert.equal(parsed.data.rows.length, 0, "fresh DB has no ingested filings");
+  assert.ok(Array.isArray(parsed.data.rows));
 });

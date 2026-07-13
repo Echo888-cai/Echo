@@ -1,5 +1,5 @@
 /**
- * Contracts for src/server/routes/hkFinancials.js.
+ * HK financial facts and ingestion contracts.
  *
  *   GET  /api/hk-financials?ticker=&limit=          → {ticker, rows}
  *   POST /api/hk-financials/ingest?ticker=&limit=&force= → {ticker, ingested, skipped, errors}

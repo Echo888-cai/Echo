@@ -5,10 +5,10 @@
  * calling src/marketData.js's getMarketSnapshot() directly today, but now
  * commercial-mode-aware and quality-guarded.
  */
-import { legacyFreeQuoteAdapter } from "./adapters/legacyFreeQuoteAdapter.js";
-import { legacyFreeFundamentalsAdapter } from "./adapters/legacyFreeFundamentalsAdapter.js";
-import { legacyFilingsAdapter } from "./adapters/legacyFilingsAdapter.js";
-import { legacyCalendarAdapter } from "./adapters/legacyCalendarAdapter.js";
+import { postgresQuoteAdapter } from "./adapters/postgresQuoteAdapter.js";
+import { postgresFundamentalsAdapter } from "./adapters/postgresFundamentalsAdapter.js";
+import { postgresFilingsAdapter } from "./adapters/postgresFilingsAdapter.js";
+import { postgresCalendarAdapter } from "./adapters/postgresCalendarAdapter.js";
 import { detectMarket, type Market } from "./market.js";
 import { selectAdapter, type SelectOptions } from "./router.js";
 import { checkQuote, checkEnvelope, type QualityReport } from "./qualityGuard.js";
@@ -17,10 +17,10 @@ import type { QuotePort, QuoteResult, FundamentalsPort, FilingsPort, CalendarPor
 // Registration point for future adapters (e.g. a licensed Wind/Polygon/HKEX
 // distributor feed) — add to the relevant array, nothing else in this file
 // changes; the router already re-ranks whatever's registered.
-const quoteAdapters: QuotePort[] = [legacyFreeQuoteAdapter];
-const fundamentalsAdapters: FundamentalsPort[] = [legacyFreeFundamentalsAdapter];
-const filingsAdapters: FilingsPort[] = [legacyFilingsAdapter];
-const calendarAdapters: CalendarPort[] = [legacyCalendarAdapter];
+const quoteAdapters: QuotePort[] = [postgresQuoteAdapter];
+const fundamentalsAdapters: FundamentalsPort[] = [postgresFundamentalsAdapter];
+const filingsAdapters: FilingsPort[] = [postgresFilingsAdapter];
+const calendarAdapters: CalendarPort[] = [postgresCalendarAdapter];
 
 export interface Routed<T> {
   result: T;

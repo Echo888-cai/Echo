@@ -2,11 +2,10 @@
  * portfolio.ts — portfolio_positions / watchlist_prefs / watch_rules / portfolio_snapshots
  *
  * Source: 001_init.sql, 009_watch_rules_metric.sql, 014_portfolio_snapshots.sql,
- * 018_multiuser.sql (PK rebuilds to (user_id, ticker) / (user_id, snapshot_date)),
- * src/server/repositories/portfolioSnapshotsRepository.js for totals_json shape.
+ * 018_multiuser.sql (PK rebuilds to (user_id, ticker) / (user_id, snapshot_date)).
  */
 import { pgTable, text, integer, bigserial, numeric, boolean, timestamp, date, index, uniqueIndex, primaryKey } from "drizzle-orm/pg-core";
-import { users } from "./auth";
+import { users } from "./auth.js";
 
 export const portfolioPositions = pgTable(
   "portfolio_positions",

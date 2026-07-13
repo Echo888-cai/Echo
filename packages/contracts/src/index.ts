@@ -1,11 +1,4 @@
-/**
- * @echo/contracts — R-0 contract layer.
- *
- * Zod schemas describing Echo Research's CURRENT HTTP API (as implemented in
- * src/server/routes/*.js and wired in server.js). This is a descriptive snapshot,
- * not a forward-looking spec: it exists so the Hono + tRPC rebuild (docs/PLAN.md
- * §4 step 2) has something concrete to diff behavior against.
- */
+/** Zod schemas shared by the Hono API, tRPC router and React client. */
 export * from "./envelope.js";
 export * from "./auth.js";
 export * from "./companies.js";

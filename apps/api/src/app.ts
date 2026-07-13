@@ -1,27 +1,67 @@
 import { Hono } from "hono";
+import { randomBytes } from "node:crypto";
 import { initTRPC, TRPCError } from "@trpc/server";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { z } from "zod";
 import {
+  askRequestSchema,
+  authInviteRequestSchema,
+  authLoginRequestSchema,
+  authRegisterRequestSchema,
   companySearchResultSchema,
   companySearchResponseSchema,
-  statusResponseSchema
+  feedbackCreateRequestSchema,
+  notificationsReadRequestSchema,
+  parseDocumentRequestSchema,
+  portfolioUpsertRequestSchema,
+  preferencesUpdateRequestSchema,
+  reportGenerateRequestSchema,
+  statusResponseSchema,
+  watchTrackRequestSchema,
+  watchUntrackRequestSchema
 } from "@echo/contracts";
 
-// 迁移期只复用既有业务/仓储实现，不复刻规则。第二步完成后这些相对导入会被正式端口替代。
-import { buildStatusSnapshot } from "../../../src/server/services/statusSnapshot.js";
-import { searchCompanies } from "../../../src/server/repositories/companyRepository.js";
-import { resolveRequestUser } from "../../../src/server/services/auth.js";
-import { apiError, apiOk } from "../../../src/server/utils/async.js";
+import { searchCompanies } from "@echo/db/repositories/companyRepository.js";
+import { createInvite } from "@echo/db/repositories/authRepository.js";
+import { insertFeedback } from "@echo/db/repositories/feedbackRepository.js";
+import { getUserPreferences, updateUserPreferences } from "@echo/db/repositories/userPreferencesRepository.js";
+import { listNotifications, markAllRead, markRead, unreadCount, insertNotification } from "@echo/db/repositories/notificationsRepository.js";
+import { clearResearchSessions, deleteResearchSession, getResearchSession, listConversations } from "@echo/db/repositories/researchSessionsRepository.js";
+import { getCompanyProfile } from "@echo/db/repositories/companyProfilesRepository.js";
+import { deletePosition, listPositions, upsertPosition } from "@echo/db/repositories/portfolioRepository.js";
+import { listSnapshots as listPortfolioSnapshots } from "@echo/db/repositories/portfolioSnapshotsRepository.js";
+import { getCompanyByTickerComplete, getLatestMarketSnapshot } from "@echo/db/repositories/companyRepository.js";
+import { listRules } from "@echo/db/repositories/watchRulesRepository.js";
+import { evaluateRule } from "@echo/domain";
+import { computeGlobalScorecard, computeTickerScorecard } from "@echo/domain";
+import { listSnapshots as listResearchSnapshots, listSnapshotTickers } from "@echo/db/repositories/researchSnapshotsRepository.js";
+import { addToWatch, listWatchAdds, removeFromWatch } from "@echo/db/repositories/watchlistRepository.js";
+import { listCompanyProfiles } from "@echo/db/repositories/companyProfilesRepository.js";
+import { runAsk } from "@echo/application/research";
+import { parseDocument } from "./documents.js";
+import { executeResearchWorkflow } from "./temporal.js";
+import { buildStatusSnapshot } from "./status.js";
+import {
+  destroySession,
+  loginWithPassword,
+  multiUserEnabled,
+  registerWithInvite,
+  requestToken,
+  sessionCookie,
+  resolveRequestUser
+} from "./auth.js";
+import { apiError, apiOk, rateLimit } from "./http.js";
+import { registerRestRoutes } from "./rest-routes.js";
 
-type User = { id: string; username: string; displayName: string; role: string };
-type Context = { user: User | null };
+type User = { id: string; username: string; displayName: string | null; role: "owner" | "member" };
+type Context = { user: User | null; request: Request; responseHeaders: Headers };
 type Variables = { user: User };
 
 const t = initTRPC.context<Context>().create();
+const publicProcedure = t.procedure;
 const protectedProcedure = t.procedure.use(({ ctx, next }) => {
   if (!ctx.user) throw new TRPCError({ code: "UNAUTHORIZED", message: "请先登录" });
-  return next({ ctx: { user: ctx.user } });
+  return next({ ctx: { user: ctx.user, request: ctx.request, responseHeaders: ctx.responseHeaders } });
 });
 
 const searchInputSchema = z.object({ q: z.string().trim().max(120).default("") });
@@ -30,24 +70,266 @@ const searchOutputSchema = z.object({
   total: z.number().int().nonnegative()
 });
 
+const queryText = z.object({ q: z.string().trim().max(120) });
+const tickerInput = z.object({ ticker: z.string().trim().min(1).max(32) });
+const idInput = z.object({ id: z.string().trim().min(1).max(160) });
+
+function tickerCurrency(ticker: string) {
+  return ticker.endsWith(".HK") ? "HKD" : /\.(SS|SZ)$/.test(ticker) ? "CNY" : "USD";
+}
+
+async function enrichPosition(position: any, userId: string) {
+  const [snapshot, company, rules] = await Promise.all([
+    getLatestMarketSnapshot(position.ticker),
+    getCompanyByTickerComplete(position.ticker),
+    listRules(position.ticker, userId)
+  ]);
+  const price = snapshot?.price ?? null;
+  let nearestFalsifierRule = null;
+  if (price != null && price > 0) {
+    for (const rule of rules) {
+      const result = evaluateRule(rule, price);
+      if (!result.sane || result.distancePct == null) continue;
+      if (!nearestFalsifierRule || Math.abs(result.distancePct) < Math.abs(nearestFalsifierRule.distancePct)) {
+        nearestFalsifierRule = { ruleId: rule.id, label: rule.label, kind: rule.kind, threshold: rule.threshold, distancePct: result.distancePct, triggered: result.triggered };
+      }
+    }
+  }
+  const enriched: any = {
+    ...position,
+    currentPrice: price,
+    currency: company?.currency || tickerCurrency(position.ticker),
+    asOf: snapshot?.as_of || null,
+    priceStatus: price == null ? "missing" : "ok",
+    changePct: snapshot?.change_percent ?? null,
+    sector: company?.sector || null,
+    industry: company?.industry || null,
+    falsifierRuleCount: rules.length,
+    nearestFalsifierRule,
+    nextEarnings: null
+  };
+  if (price != null && position.avgCost != null && position.avgCost !== 0) {
+    enriched.returnPct = (price - position.avgCost) / position.avgCost;
+    if (position.shares != null) {
+      enriched.marketValue = price * position.shares;
+      enriched.costValue = position.avgCost * position.shares;
+      enriched.unrealizedPnl = enriched.marketValue - enriched.costValue;
+    }
+  }
+  if (price && position.stopLoss != null) enriched.toStopPct = (price - position.stopLoss) / price;
+  if (price && position.takeProfit != null) enriched.toTakePct = (position.takeProfit - price) / price;
+  return enriched;
+}
+
+async function enrichedPositions(userId: string) {
+  return Promise.all((await listPositions(userId)).map((position) => enrichPosition(position, userId)));
+}
+
+function portfolioReview(positions: any[]) {
+  const totals = new Map<string, { currency: string; marketValue: number; costValue: number; pnl: number }>();
+  for (const position of positions) {
+    if (position.marketValue == null) continue;
+    const current = totals.get(position.currency) || { currency: position.currency, marketValue: 0, costValue: 0, pnl: 0 };
+    current.marketValue += position.marketValue;
+    current.costValue += position.costValue || 0;
+    current.pnl += position.unrealizedPnl || 0;
+    totals.set(position.currency, current);
+  }
+  const checks: any[] = [];
+  for (const position of positions) {
+    if (position.currentPrice != null && position.stopLoss != null && position.currentPrice <= position.stopLoss) {
+      checks.push({ level: "bad", ticker: position.ticker, text: `${position.companyName} 已触及止损纪律线` });
+    }
+    if (position.avgCost != null && position.stopLoss == null) checks.push({ level: "warn", ticker: position.ticker, text: `${position.companyName} 尚未设置止损线` });
+    if (position.nearestFalsifierRule?.triggered) checks.push({ level: "bad", ticker: position.ticker, text: `${position.companyName} 的证伪条件已越线` });
+  }
+  return {
+    positionCount: positions.length,
+    totals: [...totals.values()],
+    weights: [],
+    marketExposure: {},
+    sectorWeights: [],
+    checks,
+    verdict: positions.length ? (checks.length ? `有 ${checks.length} 项纪律检查需要处理。` : "组合纪律检查通过。") : "还没有持仓记录。"
+  };
+}
+
+async function watchDesk(userId: string) {
+  const [watched, positions, profiles] = await Promise.all([listWatchAdds(userId), listPositions(userId), listCompanyProfiles(100, userId)]);
+  const tickers = new Map<string, string>();
+  for (const item of [...watched, ...positions, ...profiles]) tickers.set(item.ticker, (item as any).companyName || (item as any).nameZh || item.ticker);
+  const failures: unknown[] = [];
+  const cards = await Promise.all([...tickers].map(async ([ticker, name]) => {
+    try {
+      const [market, profile, rules] = await Promise.all([getLatestMarketSnapshot(ticker), getCompanyProfile(ticker, userId), listRules(ticker, userId)]);
+      const price = market?.price ?? null;
+      const evaluations = price == null ? [] : rules.map((rule) => ({ rule, result: evaluateRule(rule, price) }));
+      const falsified = evaluations.some(({ result }) => result.triggered);
+      const atRisk = !falsified && evaluations.some(({ result }) => result.distancePct != null && Math.abs(result.distancePct) < 8);
+      return { ticker, companyName: name, price, changePct: market?.change_percent ?? null, asOf: market?.as_of || null,
+        thesis: profile?.thesis || "", confidence: profile?.confidence || "", state: falsified ? "falsified" : atRisk ? "atRisk" : "intact",
+        falsifiers: evaluations, updatedAt: profile?.updatedAt || market?.as_of || null };
+    } catch (error) {
+      failures.push({ ticker, message: error instanceof Error ? error.message : String(error) });
+      return { ticker, companyName: name, state: "intact", price: null };
+    }
+  }));
+  const counts = { falsified: cards.filter((card) => card.state === "falsified").length, atRisk: cards.filter((card) => card.state === "atRisk").length,
+    intact: cards.filter((card) => card.state === "intact").length, total: cards.length };
+  return { generatedAt: new Date().toISOString(), slot: (new Date().getUTCHours() < 8 ? "premarket" : "afterhours") as "premarket" | "afterhours",
+    cards, counts, failures, partial: failures.length > 0 };
+}
+
+async function scorecardFor(ticker: string, userId: string) {
+  const [snapshots, market] = await Promise.all([listResearchSnapshots(ticker, userId), getLatestMarketSnapshot(ticker)]);
+  return computeTickerScorecard(snapshots, { price: market?.price ?? null });
+}
+
 export const appRouter = t.router({
-  status: protectedProcedure.output(statusResponseSchema).query(({ ctx }) => statusResponseSchema.parse(buildStatusSnapshot(ctx.user.id))),
+  auth: t.router({
+    login: publicProcedure.input(authLoginRequestSchema).mutation(async ({ ctx, input }) => {
+      const { user, token } = await loginWithPassword(input);
+      ctx.responseHeaders.append("set-cookie", sessionCookie(token));
+      return { user };
+    }),
+    register: publicProcedure.input(authRegisterRequestSchema).mutation(async ({ ctx, input }) => {
+      const { user, token } = await registerWithInvite({ ...input, displayName: input.displayName });
+      ctx.responseHeaders.append("set-cookie", sessionCookie(token));
+      return { user };
+    }),
+    logout: publicProcedure.mutation(async ({ ctx }) => {
+      await destroySession(requestToken(ctx.request));
+      ctx.responseHeaders.append("set-cookie", sessionCookie("", { clear: true }));
+      return { loggedOut: true as const };
+    }),
+    me: publicProcedure.query(async ({ ctx }) => ({ user: ctx.user, multiUser: await multiUserEnabled() })),
+    invite: protectedProcedure.input(authInviteRequestSchema).mutation(async ({ ctx, input }) => {
+      if (!await multiUserEnabled()) throw new TRPCError({ code: "CONFLICT", message: "请先用管理命令创建 owner 账号" });
+      if (ctx.user.role !== "owner") throw new TRPCError({ code: "FORBIDDEN", message: "只有 owner 能生成邀请码" });
+      const code = `echo-${randomBytes(4).toString("hex")}`;
+      await createInvite(code, { note: input.note, createdBy: ctx.user.id });
+      return { code };
+    })
+  }),
+  status: protectedProcedure.output(statusResponseSchema).query(async ({ ctx }) => statusResponseSchema.parse(await buildStatusSnapshot(ctx.user.id))),
   companies: t.router({
     search: protectedProcedure
       .input(searchInputSchema)
       .output(searchOutputSchema)
-      .query(({ input }) => {
-        const companies = input.q ? searchCompanies(input.q) : [];
+      .query(async ({ input }) => {
+        const companies = input.q ? await searchCompanies(input.q) : [];
         return { companies, total: companies.length };
-      })
+      }),
+    verify: protectedProcedure.input(tickerInput).query(async ({ input }) => {
+      const company = await getCompanyByTickerComplete(input.ticker);
+      if (company) return { status: "verified" as const, name: company.nameZh || company.nameEn || company.ticker };
+      const suggestions = (await searchCompanies(input.ticker, { limit: 5 })).map((item) => ({ ticker: item.ticker, name: item.nameZh || item.nameEn || item.ticker }));
+      return { status: "not_found" as const, suggestions };
+    }),
+    resolve: protectedProcedure.input(queryText).query(async ({ input }) => {
+      const direct = await getCompanyByTickerComplete(input.q);
+      const match = direct || (await searchCompanies(input.q, { limit: 1 }))[0];
+      if (!match) return { company: null, reason: "not_found" };
+      return { company: { ticker: match.ticker, nameZh: match.nameZh || match.ticker, ...(match.nameEn ? { nameEn: match.nameEn } : {}), ...(match.industry ? { industry: match.industry } : {}) } };
+    })
+  }),
+  scheduler: t.router({
+    status: protectedProcedure.query(() => ({ scheduler: { engine: "temporal", status: "configured", polling: false }, telegram: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) }))
+  }),
+  research: t.router({
+    scorecard: protectedProcedure.query(async ({ ctx }) => {
+      const tickers = await listSnapshotTickers(ctx.user.id);
+      const perTicker = await Promise.all(tickers.map(async ({ ticker }) => ({ ticker, scorecard: await scorecardFor(ticker, ctx.user.id) })));
+      return { global: computeGlobalScorecard(perTicker), perTicker };
+    }),
+    conversations: protectedProcedure.input(z.object({ limit: z.number().int().min(1).max(50).default(30) })).query(async ({ ctx, input }) => {
+      const conversations = await listConversations({ limit: input.limit, userId: ctx.user.id });
+      return { conversations, count: conversations.length };
+    }),
+    get: protectedProcedure.input(idInput).query(async ({ ctx, input }) => {
+      const session = await getResearchSession(input.id, ctx.user.id);
+      if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "未找到研究会话" });
+      return { session, report: null };
+    }),
+    remove: protectedProcedure.input(idInput).mutation(async ({ ctx, input }) => {
+      if (!await deleteResearchSession(input.id, ctx.user.id)) throw new TRPCError({ code: "NOT_FOUND", message: "未找到研究会话" });
+      return { deleted: true as const, sessionId: input.id };
+    }),
+    clear: protectedProcedure.mutation(async ({ ctx }) => ({ deleted: await clearResearchSessions(ctx.user.id), cleared: true as const }))
+  }),
+  notifications: t.router({
+    list: protectedProcedure.input(z.object({ limit: z.number().int().min(1).max(100).default(20) })).query(async ({ ctx, input }) => ({
+      notifications: await listNotifications(input.limit, ctx.user.id), unread: await unreadCount(ctx.user.id), telegram: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID)
+    })),
+    unread: protectedProcedure.query(async ({ ctx }) => ({ unread: await unreadCount(ctx.user.id) })),
+    read: protectedProcedure.input(notificationsReadRequestSchema).mutation(async ({ ctx, input }) => {
+      if ("all" in input) await markAllRead(ctx.user.id); else await markRead(input.id, ctx.user.id);
+      return { unread: await unreadCount(ctx.user.id) };
+    }),
+    test: protectedProcedure.mutation(async ({ ctx }) => {
+      await insertNotification({ kind: "system", title: "通知通道测试", body: "Echo Research 通知中心工作正常。", userId: ctx.user.id });
+      return { telegram: "skipped", telegramConfigured: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) };
+    })
+  }),
+  preferences: t.router({
+    get: protectedProcedure.query(async ({ ctx }) => ({ preferences: await getUserPreferences(ctx.user.id) })),
+    update: protectedProcedure.input(preferencesUpdateRequestSchema).mutation(async ({ ctx, input }) => ({ preferences: await updateUserPreferences(ctx.user.id, input) }))
+  }),
+  portfolio: t.router({
+    list: protectedProcedure.query(async ({ ctx }) => ({ positions: await enrichedPositions(ctx.user.id) })),
+    review: protectedProcedure.query(async ({ ctx }) => ({ review: portfolioReview(await enrichedPositions(ctx.user.id)) })),
+    snapshots: protectedProcedure.query(async ({ ctx }) => ({ snapshots: await listPortfolioSnapshots(180, ctx.user.id) })),
+    upsert: protectedProcedure.input(portfolioUpsertRequestSchema).mutation(async ({ ctx, input }) => {
+      const number = (value: string | number | undefined) => value == null || value === "" ? undefined : Number(value);
+      const saved = await upsertPosition(input.ticker, { ...input, shares: number(input.shares), avgCost: number(input.avgCost), stopLoss: number(input.stopLoss), takeProfit: number(input.takeProfit) }, ctx.user.id);
+      return { position: await enrichPosition(saved, ctx.user.id) };
+    }),
+    remove: protectedProcedure.input(tickerInput).mutation(async ({ ctx, input }) => {
+      if (!await deletePosition(input.ticker, ctx.user.id)) throw new TRPCError({ code: "NOT_FOUND", message: "未找到该持仓" });
+      return { deleted: true as const, ticker: input.ticker };
+    })
+  }),
+  watch: t.router({
+    desk: protectedProcedure.input(z.object({ events: z.boolean().default(true) })).query(async ({ ctx }) => ({ desk: await watchDesk(ctx.user.id) })),
+    stock: protectedProcedure.input(tickerInput).query(async ({ ctx, input }) => {
+      const [company, profile, market, rules] = await Promise.all([getCompanyByTickerComplete(input.ticker), getCompanyProfile(input.ticker, ctx.user.id), getLatestMarketSnapshot(input.ticker), listRules(input.ticker, ctx.user.id)]);
+      return { stock: { ticker: input.ticker, company, profile, market, rules } };
+    }),
+    track: protectedProcedure.input(watchTrackRequestSchema).mutation(async ({ ctx, input }) => {
+      await addToWatch(input.ticker, input.name, ctx.user.id); return { tracked: true as const, ticker: input.ticker };
+    }),
+    untrack: protectedProcedure.input(watchUntrackRequestSchema).mutation(async ({ ctx, input }) => {
+      await removeFromWatch(input.ticker, ctx.user.id); return { untracked: true as const, ticker: input.ticker };
+    })
+  }),
+  portraits: t.router({
+    profile: protectedProcedure.input(tickerInput).query(async ({ ctx, input }) => {
+      const profile = await getCompanyProfile(input.ticker, ctx.user.id);
+      if (!profile) throw new TRPCError({ code: "NOT_FOUND", message: "未找到该公司画像" });
+      return { profile, markdown: profile.profileMd };
+    }),
+    review: protectedProcedure.input(tickerInput).query(async ({ ctx, input }) => ({ ticker: input.ticker.toUpperCase(), scorecard: await scorecardFor(input.ticker, ctx.user.id) }))
+  }),
+  ask: protectedProcedure.input(askRequestSchema).mutation(({ ctx, input }) => runAsk(input, ctx.user.id)),
+  reports: t.router({
+    generate: protectedProcedure.input(reportGenerateRequestSchema).mutation(({ ctx, input }) => executeResearchWorkflow({ request: input, userId: ctx.user.id }))
+  }),
+  documents: t.router({
+    parse: protectedProcedure.input(parseDocumentRequestSchema).mutation(async ({ ctx, input }) => ({ document: await parseDocument(input, ctx.user.id) }))
+  }),
+  feedback: t.router({
+    submit: protectedProcedure.input(feedbackCreateRequestSchema).mutation(async ({ ctx, input }) => ({
+      id: await insertFeedback(ctx.user.id, input.message, input.context), received: true as const
+    }))
   })
 });
 
 export type AppRouter = typeof appRouter;
 
-function requestUser(request: Request): User | null {
-  const headers = Object.fromEntries(request.headers.entries());
-  return resolveRequestUser({ headers });
+async function requestUser(request: Request): Promise<User | null> {
+  const user = await resolveRequestUser(request);
+  if (!user) return null;
+  return { ...user, role: user.role === "owner" ? "owner" : "member" };
 }
 
 export function createApp() {
@@ -60,32 +342,58 @@ export function createApp() {
 
   app.get("/healthz", (c) => c.json({ ok: true, service: "echo-api" }));
 
-  app.use("/api/*", async (c, next) => {
-    const user = requestUser(c.req.raw);
+  const secure = async (c: any, next: any) => {
+    const heavyTrpc = c.req.path.startsWith("/trpc/") && /(?:ask|reports\.generate|documents\.parse)/.test(c.req.path);
+    const ratePath = heavyTrpc ? "/api/ask" : c.req.path;
+    const limited = rateLimit(c.req.raw, ratePath);
+    if (limited) return c.json(apiError(limited.status, limited.message), 429);
+    if (c.req.method !== "GET" && c.req.method !== "HEAD" && c.req.header("x-echo-auth") !== "1") {
+      return c.json(apiError(403, "缺少校验请求头（请从 Echo Research 页面发起请求）"), 403);
+    }
+    if (c.req.path.startsWith("/api/auth/") || c.req.path.startsWith("/trpc/auth.")) {
+      await next();
+      return;
+    }
+    const user = await requestUser(c.req.raw);
     if (!user) return c.json(apiError(401, "请先登录"), 401);
     c.set("user", user);
     await next();
-  });
+  };
 
-  // REST/OpenAPI 兼容层与 tRPC 共用同一业务函数，迁移期不会出现第二套业务语义。
-  app.get("/api/status", (c) => {
-    const body = statusResponseSchema.parse(buildStatusSnapshot(c.get("user").id));
+  app.use("/api/*", secure);
+  app.use("/trpc/*", secure);
+
+  // REST/OpenAPI 与 tRPC 共用同一业务函数，保持唯一业务语义。
+  app.get("/api/status", async (c) => {
+    const body = statusResponseSchema.parse(await buildStatusSnapshot(c.get("user").id));
     return c.json(body);
   });
 
-  app.get("/api/companies/search", (c) => {
+  app.get("/api/companies/search", async (c) => {
     const input = searchInputSchema.parse({ q: c.req.query("q") || "" });
-    const companies = input.q ? searchCompanies(input.q) : [];
+    const companies = input.q ? await searchCompanies(input.q) : [];
     const body = companySearchResponseSchema.parse(apiOk({ companies, total: companies.length }));
     return c.json(body);
   });
 
-  app.all("/trpc/*", (c) => fetchRequestHandler({
-    endpoint: "/trpc",
-    req: c.req.raw,
-    router: appRouter,
-    createContext: () => ({ user: requestUser(c.req.raw) })
+  registerRestRoutes(app, async (c, responseHeaders) => appRouter.createCaller({
+    user: await requestUser(c.req.raw),
+    request: c.req.raw,
+    responseHeaders
   }));
+
+  app.all("/trpc/*", async (c) => {
+    const responseHeaders = new Headers();
+    const response = await fetchRequestHandler({
+      endpoint: "/trpc",
+      req: c.req.raw,
+      router: appRouter,
+      createContext: async () => ({ user: await requestUser(c.req.raw), request: c.req.raw, responseHeaders })
+    });
+    const headers = new Headers(response.headers);
+    responseHeaders.forEach((value, key) => headers.append(key, value));
+    return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  });
 
   return app;
 }

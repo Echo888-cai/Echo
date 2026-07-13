@@ -6,8 +6,9 @@
     "allowJs": true,
     "checkJs": false,
     "paths": {
-      "@echo/contracts": ["../../packages/contracts/src/index.ts"]
+      "@echo/contracts": ["../../packages/contracts/src/index.ts"],
+      "@echo/domain": ["../../packages/domain/src/index.js"]
     }
   },
-  "include": ["src/**/*.ts", "../../src/server/services/statusSnapshot.js", "../../src/server/repositories/**/*.js", "../../src/db/**/*.js"]
+  "include": ["src/**/*.ts"]
 }
