@@ -188,12 +188,16 @@ async function scorecardFor(ticker: string, userId: string) {
 export const appRouter = t.router({
   auth: t.router({
     login: publicProcedure.input(authLoginRequestSchema).mutation(async ({ ctx, input }) => {
-      const { user, token } = await loginWithPassword(input);
+      const { user, token } = await loginWithPassword(input).catch((error) => {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: error instanceof Error ? error.message : "登录失败" });
+      });
       ctx.responseHeaders.append("set-cookie", sessionCookie(token));
       return { user };
     }),
     register: publicProcedure.input(authRegisterRequestSchema).mutation(async ({ ctx, input }) => {
-      const { user, token } = await registerWithInvite({ ...input, displayName: input.displayName });
+      const { user, token } = await registerWithInvite({ ...input, displayName: input.displayName }).catch((error) => {
+        throw new TRPCError({ code: "BAD_REQUEST", message: error instanceof Error ? error.message : "注册失败" });
+      });
       ctx.responseHeaders.append("set-cookie", sessionCookie(token));
       return { user };
     }),

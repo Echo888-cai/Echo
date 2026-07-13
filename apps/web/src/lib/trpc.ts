@@ -13,3 +13,7 @@ export const trpc = createTRPCClient<AppRouter>({
 export function isUnauthorizedTrpc(error: unknown) {
   return error instanceof TRPCClientError && error.data?.code === "UNAUTHORIZED";
 }
+
+export function isTrpcError(error: unknown): error is InstanceType<typeof TRPCClientError> {
+  return error instanceof TRPCClientError;
+}

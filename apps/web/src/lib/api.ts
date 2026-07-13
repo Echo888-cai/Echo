@@ -26,7 +26,7 @@ import {
   type parsedDocumentSchema
 } from "@echo/contracts";
 import { z } from "zod";
-import { isUnauthorizedTrpc, trpc } from "./trpc";
+import { isTrpcError, isUnauthorizedTrpc, trpc } from "./trpc";
 
 export type PublicUser = z.infer<typeof publicUserSchema>;
 export type AuthLoginRequest = z.infer<typeof authLoginRequestSchema>;
@@ -101,6 +101,25 @@ async function rpc<T>(operation: Promise<T>): Promise<T> {
       onUnauthorized?.();
       throw new ApiError("请先登录", 401);
     }
+    if (isTrpcError(error)) {
+      throw new ApiError(error.message || "失败了，再试一次", error.data?.httpStatus ?? 500);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Login/register reject with 401/400 for expected reasons (wrong password,
+ * bad invite) — that's the message the user needs to see, not the generic
+ * "please log in" redirect flow that `rpc()` applies to protected endpoints.
+ */
+async function rpcAuth<T>(operation: Promise<T>): Promise<T> {
+  try {
+    return await operation;
+  } catch (error) {
+    if (isTrpcError(error)) {
+      throw new ApiError(error.message || "失败了，再试一次", error.data?.httpStatus ?? 500);
+    }
     throw error;
   }
 }
@@ -108,11 +127,11 @@ async function rpc<T>(operation: Promise<T>): Promise<T> {
 export const authApi = {
   async login(body: AuthLoginRequest) {
     const parsed = authLoginRequestSchema.parse(body);
-    return rpc(trpc.auth.login.mutate(parsed));
+    return rpcAuth(trpc.auth.login.mutate(parsed));
   },
   async register(body: AuthRegisterRequest) {
     const parsed = authRegisterRequestSchema.parse(body);
-    return rpc(trpc.auth.register.mutate(parsed));
+    return rpcAuth(trpc.auth.register.mutate(parsed));
   },
   async logout() {
     return rpc(trpc.auth.logout.mutate());
