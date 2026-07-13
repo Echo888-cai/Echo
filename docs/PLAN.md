@@ -73,7 +73,7 @@ npm run db:recovery-drill
 - 全新 PostgreSQL 数据库可迁移、首次启动并完成私有数据写入。
 - GitHub 必需检查为绿色，契约、E2E、Temporal 故障恢复与 PostgreSQL RLS 测试均通过。
 - 备份可在隔离数据库恢复，关键表数量、约束和强制 RLS 保持一致。
-- 生产切流前完成数据授权核对、密钥配置、容量验证、回滚和蓝绿切换演练。
+- 生产切流前完成数据授权核对、密钥配置、容量验证、回滚和蓝绿切换演练；容量验证用 `npm run test:load`（见 [architecture/system-overview.md](architecture/system-overview.md) 第 6 节）对着预生产环境实跑，不是本地空跑。
 
 ## 5. 后续产品路线图（严格按 P0 → P4）
 
@@ -81,9 +81,10 @@ npm run db:recovery-drill
 
 这是上线前必须完成的工作，不属于可延后功能。
 
+- [x] 弹性伸缩、只读副本/连接代理、分布式限流和负载测试工具已经就绪：ECS `api`/`worker` 服务按请求数/CPU 自动伸缩（`infra/terraform/main.tf`），PostgreSQL 只读副本 + RDS Proxy 已声明，`ask`/`report/generate`/`parse-document` 限流已从进程内存改为跨副本共享的 Postgres 计数（`packages/db/src/repositories/rateLimitRepository.ts`），ALB 前挂了 AWS WAF 速率规则，`npm run test:load` 提供可重复的压测脚本。细节见 [architecture/system-overview.md](architecture/system-overview.md)。
 - 托管 PostgreSQL、Temporal Cloud、对象存储、OTel 与告警在预生产环境完整接通。
 - 完成数据供应商商用授权清单、字段级来源登记、密钥轮换和最小权限审计。
-- 完成并发研究、长报告、披露高峰和供应商限流场景的容量测试。
+- 用 `npm run test:load` 对预生产环境实测并发研究、长报告、披露高峰和供应商限流场景，产出真实容量数字并据此校准自动伸缩阈值和 WAF 限速值——这一步必须在真实环境跑，本地代码改动不能替代。
 - 进行一次蓝绿切换、数据库恢复、Temporal 故障和供应商降级联合演练。
 - 建立发布负责人、回滚阈值、事故分级和用户通知模板。
 
