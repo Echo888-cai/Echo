@@ -1,4 +1,5 @@
-import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, scrypt, scryptSync, timingSafeEqual } from "node:crypto";
+import { promisify } from "node:util";
 import {
   countUsers,
   createUser,
@@ -19,21 +20,24 @@ const SCRYPT_PARAMS = { N: 16384, r: 8, p: 1 };
 const SESSION_DAYS = 30;
 const COOKIE_NAME = "echo_session";
 export const OWNER_USER_ID = "local";
+// scryptSync here runs once at module load, not on the request path — safe to stay synchronous.
 const DUMMY_PASSWORD_HASH = `s1$${Buffer.alloc(16).toString("hex")}$${scryptSync("echo-invalid-login-sentinel", Buffer.alloc(16), 64, SCRYPT_PARAMS).toString("hex")}`;
 const USERNAME_RE = /^[a-z0-9_-]{3,24}$/;
+const scryptAsync = promisify(scrypt) as (password: string, salt: Buffer, keylen: number, options: typeof SCRYPT_PARAMS) => Promise<Buffer>;
 
-export function hashPassword(password: string) {
+export async function hashPassword(password: string) {
   if (password.length < 8) throw new Error("口令至少 8 位");
   const salt = randomBytes(16);
-  return `s1$${salt.toString("hex")}$${scryptSync(password, salt, 64, SCRYPT_PARAMS).toString("hex")}`;
+  const derived = await scryptAsync(password, salt, 64, SCRYPT_PARAMS);
+  return `s1$${salt.toString("hex")}$${derived.toString("hex")}`;
 }
 
-export function verifyPassword(password: string, stored: string) {
+export async function verifyPassword(password: string, stored: string) {
   try {
     const [scheme, saltHex, hashHex] = String(stored || "").split("$");
     if (scheme !== "s1" || !saltHex || !hashHex) return false;
     const expected = Buffer.from(hashHex, "hex");
-    const actual = scryptSync(password, Buffer.from(saltHex, "hex"), expected.length, SCRYPT_PARAMS);
+    const actual = await scryptAsync(password, Buffer.from(saltHex, "hex"), expected.length, SCRYPT_PARAMS);
     return timingSafeEqual(actual, expected);
   } catch {
     return false;
@@ -78,7 +82,7 @@ export async function registerWithInvite(input: { invite: string; username: stri
   const user = await createUserWithInvite({
     id,
     username,
-    passHash: hashPassword(input.password),
+    passHash: await hashPassword(input.password),
     displayName: input.displayName,
     role: "member"
   }, invite.code);
@@ -89,7 +93,7 @@ export async function registerWithInvite(input: { invite: string; username: stri
 
 export async function loginWithPassword(input: { username: string; password: string }) {
   const user = await getUserByUsername(input.username);
-  const valid = verifyPassword(input.password, user?.passHash || DUMMY_PASSWORD_HASH) && Boolean(user);
+  const valid = await verifyPassword(input.password, user?.passHash || DUMMY_PASSWORD_HASH) && Boolean(user);
   if (!valid || !user) throw new Error("用户名或密码不对");
   const token = await createSession(user.id);
   await touchLastLogin(user.id);
@@ -100,7 +104,7 @@ export async function createOwner(input: { username: string; password: string; d
   if (await getUserById(OWNER_USER_ID)) throw new Error("owner 已存在");
   const username = input.username.trim().toLowerCase();
   if (!USERNAME_RE.test(username)) throw new Error("用户名 3-24 位，只能用小写字母/数字/_-");
-  return publicUser(await createUser({ id: OWNER_USER_ID, username, passHash: hashPassword(input.password), displayName: input.displayName, role: "owner" }));
+  return publicUser(await createUser({ id: OWNER_USER_ID, username, passHash: await hashPassword(input.password), displayName: input.displayName, role: "owner" }));
 }
 
 function parseCookies(headers: Headers) {
