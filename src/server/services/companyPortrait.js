@@ -10,22 +10,22 @@
 
 import { getCompanyProfile, upsertCompanyProfile } from "../repositories/companyProfilesRepository.js";
 import { replaceFalsifierRules, listRules } from "../repositories/watchRulesRepository.js";
-import { parseFalsifierRules, parseFalsifierRule } from "@echo/domain";
+import {
+  deriveValuationPosition,
+  distillPortraitView as distillView,
+  extractFalsifiersFromAnswer,
+  extractThesisFromAnswer,
+  falsifierRuleSignature as ruleSignature,
+  isDataFragmentThesis,
+  parseFalsifierRules,
+  portraitJudgmentChanged as judgmentChanged,
+  topPortraitEvidence as topEvidence
+} from "@echo/domain";
 import { companyByTicker } from "../../data.js";
 import { beijingDate } from "../utils/time.js";
 import { marketCurrency } from "../../market.js";
 import { insertResearchSnapshot } from "../repositories/researchSnapshotsRepository.js";
-
-/**
- * 价格相对估值中枢的客观位置——刻意不是"看多/看空"评级（宪法：不给买卖指令），
- * 只记录"当时价格相对我们自己算的估值带在哪"这一几何关系，供 R7 复盘用。
- */
-function deriveValuationPosition(valuation) {
-  if (!valuation || valuation.base == null || valuation.currentPrice == null) return null;
-  if (valuation.currentPrice < valuation.base) return "below_base";
-  if (valuation.currentPrice > valuation.base) return "above_base";
-  return "at_base";
-}
+export { extractFalsifiersFromAnswer, extractThesisFromAnswer, isDataFragmentThesis } from "@echo/domain";
 
 /** 从面板的展示级价格字符串（如"431.2 HKD"）兜底解析数字+币种（valuation 缺失时用）。 */
 function parsePriceFromPanel(panel, ticker) {
@@ -33,11 +33,6 @@ function parsePriceFromPanel(panel, ticker) {
   const match = raw.match(/^(-?[\d.]+)\s*([A-Za-z]+)?/);
   if (!match) return { price: null, currency: marketCurrency(ticker) };
   return { price: parseFloat(match[1]), currency: match[2] || marketCurrency(ticker) };
-}
-
-function asList(value, limit = 6) {
-  if (!Array.isArray(value)) return [];
-  return value.map((x) => String(x || "").trim()).filter(Boolean).slice(0, limit);
 }
 
 /** 把已有画像渲染成注入提示词的简短上下文；无画像返回空串。 */
@@ -56,181 +51,6 @@ export function loadPortraitContext(ticker, userId = "local") {
   const recent = profile.events.slice(-3).reverse();
   if (recent.length) lines.push(`- 最近变更：${recent.map((e) => `${e.date} ${e.summary}`).join("；")}`);
   return lines.join("\n");
-}
-
-/**
- * 从回答正文的"证伪条件"段落抽取具体条件行（UX-7）。
- * 模型被要求给量化阈值（含价格线），这些具体条件比本地面板的通用 riskTriggers
- * （"监管变化/竞争加剧"）更有沉淀价值——有具体条件就用它们覆盖通用项。
- */
-const FALSIFY_HEAD_RE = /^#{0,3}\s*(?:\d+[.、]\s*)?(?:证伪条件|风险\s*\/\s*证伪|会推翻逻辑的关键事实)\s*[：:]?\s*$/;
-// 段落边界：整行标题，或"我的判断：…/还缺什么…"这类同行携带内容的散文头（本地答案格式）。
-const SECTION_END_RE = /^#{1,3}\s+\S|^(?:\d+[.、]\s*)?(?:结论|事实|推断|估值|动作|来源|我的判断|数据缺口|证据缺口|接下来重点看|深度研究)\s*[：:]?\s*$|^我的判断[：:]|^还缺什么/;
-export function extractFalsifiersFromAnswer(content = "") {
-  const lines = String(content || "").split(/\r?\n/);
-  const cleanItem = (line) =>
-    line.replace(/^[-•*]\s*/, "").replace(/^\d+[.、)]\s*/, "").replace(/[*_`]/g, "").trim();
-
-  // 第一档：标准段落结构（深度研究式回答，"## 证伪条件" 下的条目）。
-  const out = [];
-  let inSection = false;
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line) continue;
-    if (FALSIFY_HEAD_RE.test(line)) { inSection = true; continue; }
-    if (!inSection) continue;
-    if (SECTION_END_RE.test(line)) break;
-    // 列表已收到条目后撞到散文行 = 段落实际结束（防"我的判断：…"整段被吸进证伪条件）。
-    const isListItem = /^[-•*]|^\d+[.、)]/.test(line);
-    if (!isListItem && out.length) break;
-    const item = cleanItem(line);
-    if (item.length >= 6 && item.length <= 200) out.push(item);
-    if (out.length >= 6) break;
-  }
-  if (out.length) return out;
-
-  // 第二档：松散结构（聚焦式证伪回答，无段落标题）。两条通道：
-  //  a) "……证伪阈值/证伪条件："引导句之后的编号/列表条目（空行不打断，编号项间常有空行）；
-  //  b) 任何"提到证伪/逻辑失效且本身能解析出价格线"的句子（解析器极严，误报率低）。
-  const loose = [];
-  let collecting = false;
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line) continue; // 空行不打断列表收集
-    const item = cleanItem(line);
-    const isListItem = /^[-•*]|^\d+[.、)]/.test(line);
-    if (collecting) {
-      if (isListItem && item.length >= 6) {
-        loose.push(item.slice(0, 200));
-        if (loose.length >= 6) break;
-        continue;
-      }
-      collecting = false; // 非列表行结束收集；这一行自己可能是新引导句/价格线，继续往下判
-    }
-    if (/证伪(?:条件|阈值|信号)/.test(item) && /[：:]\s*$/.test(item)) {
-      collecting = true;
-      continue;
-    }
-    if (/证伪|触发(?:全面)?复核|多头逻辑失效/.test(item) && parseFalsifierRule(item)) {
-      loose.unshift(item.slice(0, 200)); // 价格线放最前
-      if (loose.length >= 6) break;
-    }
-  }
-  // 去重（同句只留一条）
-  return [...new Set(loose)].slice(0, 6);
-}
-
-/**
- * F1（架构审查修复）：从回答正文抽"一句话投资主线"。
- *
- * 根因：distillView 原本读 panel.oneLineView（模型结构化面板字段），但 runAgent 的三个
- * 调用点全部传 useModelPanel:false，这个字段永远是空字符串——是条死路，不是偶发 bug。
- * 模型的真实判断只存在于回答正文的"我的判断"段落里（chat/report 各答题模板的固定段落，
- * 见 answerComposer.js 的段落顺序约定），这里跟 extractFalsifiersFromAnswer 同思路，从正文
- * 里把它抽出来，而不是等一个永远不会被请求的字段。
- */
-const THESIS_HEAD_RE = /^#{0,3}\s*(?:\d+[.、]\s*)?我的判断\s*[：:]?\s*(.*)$/;
-export function extractThesisFromAnswer(content = "") {
-  const lines = String(content || "").split(/\r?\n/);
-  const clean = (s) => s.replace(/[*_`#]/g, "").trim();
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    const m = THESIS_HEAD_RE.exec(line);
-    if (!m) continue;
-    let text = clean(m[1] || "");
-    if (!text) {
-      // 标题单独一行：往下收正文段落，直到撞到下一个段落边界。
-      const collected = [];
-      for (let j = i + 1; j < lines.length; j++) {
-        const next = lines[j].trim();
-        if (!next) { if (collected.length) break; continue; }
-        if (SECTION_END_RE.test(next)) break;
-        collected.push(clean(next));
-      }
-      text = collected.join("");
-    }
-    if (!text) continue;
-    // 只取第一句，避免整段"我的判断"论述涌入本该是一句话的主线字段。
-    const firstSentence = (text.split(/(?<=[。！？])/)[0] || text).trim();
-    const result = firstSentence.slice(0, 120);
-    return result.length >= 6 ? result : null;
-  }
-  return null;
-}
-
-/**
- * R12（M-3）：thesis 碎片过滤——真实审计发现 6 只关注股里 5 只的"投资主线"存的是
- * "收入增速 -1.10%，毛利率 55.71%"这类数据碎片，不是一句判断。根因是旧版 distillView
- * 把 `panel.keyDrivers` 里"基本面"驱动因素的数据摘要当 oneLineView 的回落值——那是给
- * "关键驱动因素"卡片用的数字罗列，从来就不是给"投资主线"用的。已从回落链路里彻底删除
- * （不是"过滤更严"，是"这条路本来就不该走"）；这里的过滤器是防御性的第二道——万一
- * 模型的 oneLineView 本身混进数据罗列（未观察到，但代价低，值得留），同样拒收置空，
- * 让下面"没有新主线就保留旧主线"的逻辑接管，而不是让碎片糊弄过去。
- */
-const FRAGMENT_METRIC_HEAD_RE = /^(收入增速|营收增速|收入|营收|毛利率|净利率|净利润率|经营利润率|净利润增速|利润增速|自由现金流|ROE|ROIC|PE|PB|EPS|同比|环比|增速波动)[\s：:、,，]/;
-export function isDataFragmentThesis(text) {
-  const s = String(text || "").trim();
-  if (!s) return false;
-  if (FRAGMENT_METRIC_HEAD_RE.test(s)) return true;
-  // 数字密度信号：≥2 个百分号且数字字符占比过高，是"数据罗列"而非"论点陈述"
-  // （真实碎片样本："增速波动、无单一方向（59.9% → 1.3% → 127.0% → 115.4% → 67.4%）"）。
-  const pctCount = (s.match(/%/g) || []).length;
-  const digitCount = (s.match(/[0-9]/g) || []).length;
-  if (pctCount >= 2 && digitCount / s.length > 0.12) return true;
-  return false;
-}
-
-/** 从 decisionPanel + 本地公司档案蒸馏画像的"当前 view"字段。 */
-function distillView(panel = {}, profile = {}, valuation = null) {
-  // 证伪条件：优先用面板的 riskTriggers，回落到公司档案 bear。
-  const falsifiers = asList(
-    (Array.isArray(panel.riskTriggers) && panel.riskTriggers.length
-      ? panel.riskTriggers.map((t) => (typeof t === "string" ? t : t.label))
-      : profile.bear),
-    6
-  );
-  const thesisCandidate = String(panel.oneLineView || profile.summary?.[0] || "").trim();
-  return {
-    companyName: panel.companyName || profile.nameZh || panel.ticker,
-    thesis: isDataFragmentThesis(thesisCandidate) ? "" : thesisCandidate,
-    researchStatus: panel.researchStatus || "",
-    confidence: panel.confidence || "",
-    bull: asList(profile.bull),
-    bear: asList(profile.bear),
-    monitors: asList(profile.monitors?.length ? profile.monitors : ["收入增速", "利润率", "自由现金流", "回购/分红", "竞争与监管"]),
-    falsifiers,
-    valuation: valuation && !valuation.cannotValueReason
-      ? { method: valuation.method, bear: valuation.bear, base: valuation.base, bull: valuation.bull, currentPrice: valuation.currentPrice }
-      : null
-  };
-}
-
-/**
- * 只看"投资主线文本"是否实质变化。状态/置信度会随数据源可用性波动（行情源超时又恢复等），
- * 只改字段不进时间线——时间线只留真正的判断变化。
- */
-function judgmentChanged(prev, next) {
-  if (!prev) return false; // 首次建档不算"变更"
-  const norm = (s) => String(s || "").replace(/\s+/g, "").trim();
-  return Boolean(norm(next.thesis)) && norm(prev.thesis) !== norm(next.thesis);
-}
-
-/** 面板来源里挑最可信的几条作为事件证据链接（未来复盘"当时依据什么"）。 */
-function topEvidence(panel, limit = 3) {
-  const sources = Array.isArray(panel?.sources) ? panel.sources : [];
-  return sources
-    .filter((s) => s && s.url)
-    .slice(0, limit)
-    .map((s) => ({ title: s.label || s.type || "来源", url: s.url }));
-}
-
-/** 量化证伪规则的指纹：kind+metric+threshold 集合变了才算"证伪线演进"（文本措辞变化不算）。 */
-function ruleSignature(rules) {
-  return (Array.isArray(rules) ? rules : [])
-    .map((r) => `${r.kind}:${r.metric || ""}:${r.threshold}`)
-    .sort()
-    .join("|");
 }
 
 /**

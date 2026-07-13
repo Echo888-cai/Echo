@@ -164,7 +164,7 @@ repositories 以 Drizzle 重写（`packages/db` schema 已有底子）：金额/
 | `apps/web` | React 外壳 + 登录/持仓/看盘/研究对话/设置五片已落地，未切流 |
 | `apps/worker` | 一手 filing 管道（CNINFO/HKEX）住在 `src/pipelines/`，**旧底盘生产代码直接 import 它们**（这是共享资产不是遗留物）；BullMQ 壳已删除，Temporal 落地于第 4 步 |
 | `apps/api` | Hono + tRPC 已重生并落下首个纵切：统一鉴权、健康检查、状态与公司搜索同时提供 REST/tRPC；直接复用旧 repository/service，已有协议与越权拒绝测试。完整路由迁移仍属于第 2 步，尚未切流 |
-| `packages/domain` | 第 1 步进行中：估值、财务质量、风险、证伪、factGuard、研究复盘、金融格式化、业绩惊喜与历史估值分位已有唯一实现；零运行时依赖、无数据库/HTTP/环境 IO，并有架构边界测试。下一动作继续拆出答案编排、事件分级与画像蒸馏的纯核心 |
+| `packages/domain` | 第 1 步进行中：估值、财务质量、风险、证伪、factGuard、研究复盘、金融格式化、业绩惊喜、历史估值、事件分级/去重、画像主线与证伪抽取已有唯一实现；旧 event/portrait service 只保留 IO 编排。零运行时依赖、无数据库/HTTP/环境 IO，并有架构边界测试。下一动作只剩把答案/报告编排迁成依赖注入的纯核心，并继续扩大 Rust 数值边界 |
 | `crates/finance-core` | Rust 数值内核已通过 `packages/finance-native` 的窄 N-API 边界接入生产业绩 surprise 链路；只收发十进制字符串，跨平台原生构建、黄金向量双算、fmt/clippy/test 已进入门禁。倍数估值与每股价值原语已暴露，后续逐条替换旧数值实现 |
 | `packages/contracts` | zod 单一源 + OpenAPI 导出 + 契约测试（测试挂在旧 server.js 上跑，第 2 步起双跑） |
 | `packages/db` | Drizzle + PostgreSQL schema、双时态财务表、校验和迁移账本、强制 RLS 与 SQLite→PostgreSQL 幂等 ETL 已落地；2026-07-13 在隔离 PostgreSQL 实库完成 32 张共享表行数/主键指纹对账和越权读写拒绝。尚缺托管 RDS、repository 切换与 PITR 演练，因此未切流 |
