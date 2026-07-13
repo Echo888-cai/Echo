@@ -20,7 +20,8 @@
     "check:retired": "node scripts/quality/check-retired-stack.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "db:migrate": "npm run migrate --workspace @echo/db",
-    "db:recovery-drill": "npm run drill:recovery --workspace @echo/db"
+    "db:recovery-drill": "npm run drill:recovery --workspace @echo/db",
+    "test:load": "node scripts/quality/load-test.mjs"
   },
   "dependencies": {
     "@echo/domain": "*",

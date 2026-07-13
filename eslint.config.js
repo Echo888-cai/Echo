@@ -16,7 +16,7 @@ export default [
     }
   },
   {
-    files: ["packages/domain/**/*.{js,mjs}", "apps/worker/src/pipelines/**/*.js", "packages/finance-native/*.mjs"],
+    files: ["packages/domain/**/*.{js,mjs}", "apps/worker/src/pipelines/**/*.js", "packages/finance-native/*.mjs", "scripts/**/*.mjs"],
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "module",
