@@ -30,6 +30,17 @@ export async function createUser(input: any) {
   return hydrateUser(saved);
 }
 
+export async function ensureLocalUser(id = "local") {
+  const [saved] = await database().insert(users).values({
+    id,
+    username: id.toLowerCase(),
+    passHash: "!local-auth-disabled",
+    displayName: "本机用户",
+    role: "owner"
+  }).onConflictDoNothing({ target: users.id }).returning();
+  return hydrateUser(saved) || getUserById(id);
+}
+
 export async function touchLastLogin(userId: string) {
   await database().update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, userId));
 }

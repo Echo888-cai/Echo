@@ -4,6 +4,7 @@ import {
   createUser,
   createUserWithInvite,
   deleteSessionByHash,
+  ensureLocalUser,
   getLiveSession,
   getUnusedInvite,
   getUserById,
@@ -111,7 +112,11 @@ function parseCookies(headers: Headers) {
   return cookies;
 }
 
-const localOwner = () => ({ id: process.env.ECHO_AUTH_DISABLED_USER_ID || OWNER_USER_ID, username: "local", displayName: "本机用户", role: "owner" as const });
+async function localOwner() {
+  const id = process.env.ECHO_AUTH_DISABLED_USER_ID || OWNER_USER_ID;
+  await ensureLocalUser(id);
+  return { id, username: "local", displayName: "本机用户", role: "owner" as const };
+}
 
 export async function resolveRequestUser(request: Request) {
   if (process.env.ECHO_AUTH_DISABLED === "1" || await countUsers() === 0) return localOwner();

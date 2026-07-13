@@ -18,6 +18,14 @@ packages/
   ui           品牌 tokens、组件与页面样式
 crates/
   finance-core 十进制定点金融数值内核
+tests/
+  e2e          跨 React/PWA、Hono 与 PostgreSQL 的核心用户链路
+infra/
+  terraform    蓝绿服务、托管 PostgreSQL、观测与告警 IaC
+scripts/
+  document-processing  披露文档处理工具
+  quality              仓库质量与旧底盘禁入检查
+docs/          产品计划、发布门禁与架构说明
 ```
 
 仓库只有这一套运行架构。API 的非流式操作通过 tRPC，研究流通过 Hono 原生 SSE；后台研究、公告入库、业绩核对、摘要、证伪和备份均由 Temporal 执行。
@@ -66,4 +74,8 @@ OTEL_EXPORTER_OTLP_ENDPOINT=
 
 模型和数据供应商密钥均只允许存在于服务端环境。缺少外部数据时，产品明确显示“未核到”，不生成替代数字。商用环境只允许选择授权元数据标记为可商用的适配器。
 
-唯一计划与验收底账见 [docs/PLAN.md](docs/PLAN.md)。
+## 文档
+
+- [产品计划与验收底账](docs/PLAN.md)
+- [文档导航](docs/README.md)
+- [仓库目录与代码归属](docs/architecture/repository-layout.md)

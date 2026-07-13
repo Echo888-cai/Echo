@@ -2,7 +2,7 @@
  * hkFilingsPipeline — 港股一手数据管道（P7）。
  *
  * HKEX 披露易业绩公告列表（titleSearchServlet）→ 业绩公告 PDF 下载（.cache/filings/）
- * → scripts/extract_pdf_text.py 抽文本（pdfminer 优先，行按 Y 坐标重组）
+ * → scripts/document-processing/extract_pdf_text.py 抽文本（pdfminer 优先，行按 Y 坐标重组）
  * → 解析三表关键行（收入/毛利/经营盈利/期内盈利/EPS/经营现金流/现金）
  * → hk_financials 表（绝对币值 + 来源公告 PDF URL）。
  *
@@ -24,7 +24,7 @@ import { upsertHkBuyback, hasHkBuybackForUrl } from "@echo/db/repositories/hkBuy
 const execFileAsync = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(here, "..", "..", "..", "..");
-const EXTRACT_SCRIPT = join(PROJECT_ROOT, "scripts", "extract_pdf_text.py");
+const EXTRACT_SCRIPT = join(PROJECT_ROOT, "scripts", "document-processing", "extract_pdf_text.py");
 const CACHE_DIR = join(PROJECT_ROOT, ".cache", "filings");
 
 const HKEX_BASE = "https://www1.hkexnews.hk";

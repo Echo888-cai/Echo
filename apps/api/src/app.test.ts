@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { statusResponseSchema, companySearchResponseSchema } from "@echo/contracts";
-import { countUsers, createUser } from "@echo/db/repositories/authRepository.js";
+import { ensureLocalUser } from "@echo/db/repositories/authRepository.js";
 import { closeDatabase } from "@echo/db/repositories/context.js";
 
 process.env.ECHO_AUTH_DISABLED = "1";
@@ -12,6 +12,7 @@ let appRouter: Awaited<typeof import("./app.js")>["appRouter"];
 
 before(async () => {
   ({ app, appRouter } = await import("./app.js"));
+  await ensureLocalUser("local");
 });
 
 after(async () => {
@@ -53,7 +54,6 @@ test("tRPC procedures preserve typed portfolio round-trip semantics", async () =
 
 test("new API rejects unauthenticated requests when auth is enabled", async () => {
   process.env.ECHO_AUTH_DISABLED = "0";
-  if (await countUsers() === 0) await createUser({ id: "local", username: "owner", passHash: "x", role: "owner" });
   const response = await app.request("/api/status");
   assert.equal(response.status, 401);
   process.env.ECHO_AUTH_DISABLED = "1";

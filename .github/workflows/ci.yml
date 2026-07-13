@@ -32,6 +32,7 @@ jobs:
       - run: npm ci
       - run: rustup toolchain install 1.85.0 --profile minimal --component rustfmt,clippy
       - run: npm run lint
+      - run: npm run check:retired
       - run: npm run lint:rust
       - run: npm run typecheck
       - run: npm run migrate --workspace @echo/db

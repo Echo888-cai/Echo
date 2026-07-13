@@ -1,11 +1,11 @@
 import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
-  testDir: "./e2e",
+  testDir: "./tests/e2e",
   timeout: 60_000,
   fullyParallel: false,
   workers: 1,
-  globalSetup: "./e2e/setup.ts",
+  globalSetup: "./tests/e2e/setup.ts",
   use: {
     baseURL: "http://127.0.0.1:4173",
     browserName: "chromium",

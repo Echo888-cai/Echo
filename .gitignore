@@ -1,15 +1,27 @@
+# Secrets and local configuration
 .env
+.env.*
+!.env.example
+.claude/
+
+# Operating-system and editor files
 .DS_Store
+
+# Dependencies, caches, logs and test output
 node_modules/
-backups/
-*.log
 .cache/
-dist/
+*.log
 coverage/
+playwright-report/
+test-results/
+
+# Build and generated artifacts
+dist/
 target/
-**/.terraform/
 packages/finance-native/*.node
 packages/contracts/openapi.json
 
-# local preview config
-.claude/
+# Local data and infrastructure state
+backups/
+*.dump
+**/.terraform/
