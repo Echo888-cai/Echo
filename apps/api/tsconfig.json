@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "../..",
+    "allowJs": true,
+    "checkJs": false,
+    "paths": {
+      "@echo/contracts": ["../../packages/contracts/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "../../src/server/services/statusSnapshot.js", "../../src/server/repositories/**/*.js", "../../src/db/**/*.js"]
+}

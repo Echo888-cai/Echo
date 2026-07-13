@@ -160,18 +160,18 @@ repositories 以 Drizzle 重写（`packages/db` schema 已有底子）：金额/
 
 | 区域 | 状态 |
 |---|---|
-| 生产（用户在用） | 旧底盘：`server.js` + `src/` + SQLite。多用户邀请制 beta 全部能力已交付（鉴权/隔离/配额/onboarding/部署资产），等 VPS + 域名即可上线（见 DEPLOY.md） |
+| 生产（用户在用） | 阿里云 VPS 仍跑稳定旧底盘：`server.js` + `src/` + SQLite；这是受控迁移起点，不会在新底盘未达等价前强切。多用户邀请制 beta、备份、systemd 与 Caddy 已上线（见 DEPLOY.md） |
 | `apps/web` | React 外壳 + 登录/持仓/看盘/研究对话/设置五片已落地，未切流 |
 | `apps/worker` | 一手 filing 管道（CNINFO/HKEX）住在 `src/pipelines/`，**旧底盘生产代码直接 import 它们**（这是共享资产不是遗留物）；BullMQ 壳已删除，Temporal 落地于第 4 步 |
-| `apps/api` | 已删除（原 NestJS 版）。第 2 步以 Hono + tRPC 重生 |
+| `apps/api` | Hono + tRPC 已重生并落下首个纵切：统一鉴权、健康检查、状态与公司搜索同时提供 REST/tRPC；直接复用旧 repository/service，已有协议与越权拒绝测试。完整路由迁移仍属于第 2 步，尚未切流 |
 | `packages/domain` | 第 1 步进行中：估值、财务质量、风险、证伪、factGuard、研究复盘、金融格式化、业绩惊喜与历史估值分位已有唯一实现；零运行时依赖、无数据库/HTTP/环境 IO，并有架构边界测试。下一动作继续拆出答案编排、事件分级与画像蒸馏的纯核心 |
-| `crates/finance-core` | 第 1 步已立 Rust 数值内核：固定 Rust 1.85 工具链，`rust_decimal`、Money/Currency、业绩 surprise、倍数估值与每股价值原语；fmt/clippy/test 已进入门禁。当前仍处黄金向量阶段，未切生产调用，避免原生绑定未完成时制造部署风险 |
+| `crates/finance-core` | Rust 数值内核已通过 `packages/finance-native` 的窄 N-API 边界接入生产业绩 surprise 链路；只收发十进制字符串，跨平台原生构建、黄金向量双算、fmt/clippy/test 已进入门禁。倍数估值与每股价值原语已暴露，后续逐条替换旧数值实现 |
 | `packages/contracts` | zod 单一源 + OpenAPI 导出 + 契约测试（测试挂在旧 server.js 上跑，第 2 步起双跑） |
-| `packages/db` | Drizzle + Postgres schema（含双时态财务表）+ ETL 脚本已有底子，未切流 |
+| `packages/db` | Drizzle + PostgreSQL schema、双时态财务表、校验和迁移账本、强制 RLS 与 SQLite→PostgreSQL 幂等 ETL 已落地；2026-07-13 在隔离 PostgreSQL 实库完成 32 张共享表行数/主键指纹对账和越权读写拒绝。尚缺托管 RDS、repository 切换与 PITR 演练，因此未切流 |
 | `packages/data-plane` | 四端口适配器矩阵 + 授权路由 + 质量守卫已落地（曾当场抓到 A 股行情时间戳真实 bug） |
 | `packages/ui` | design tokens 已从旧 CSS 机械提取（数值逐字节一致） |
 | 工程治理基线 | 2026-07-13 完成：历史计划/ADR、废弃 NestJS/BullMQ 骨架、一次性脚本、生成物与零引用实现已删除；仓储/服务命名统一；重复 HTTP/时间/意图实现已收敛；路由与公司解析业务边界已纠正 |
-| 测试门禁 | `npm test` 自动运行 41 个 JavaScript 测试套件、`packages/domain` 单元/架构测试与 Rust finance-core 测试；lint 零 warning；旧底盘与全部 workspace 都进入 typecheck；契约测试与 React build 进入 CI |
+| 测试门禁 | `npm test` 自动构建原生 Rust 绑定并覆盖旧底盘、domain、db、Hono/tRPC API、N-API 黄金向量与 Rust workspace；lint 零 warning；旧底盘与全部 workspace 都进入 typecheck；契约测试与 React build 进入 CI |
 
 ---
 
@@ -186,6 +186,10 @@ npm run lint && npm run typecheck && npm run typecheck:workspaces
 npm run lint:rust && npm run test:rust
 npm test --workspace @echo/contracts
 npm run build --workspace @echo/web
+npm run migrate --workspace @echo/db  # 必须显式提供 DATABASE_URL
+npm run test:postgres --workspace @echo/db # 在真实 PostgreSQL 验证 RLS 越权拒绝
+npm run etl --workspace @echo/db      # SQLite 只读迁移；幂等可重放
+npm run verify --workspace @echo/db   # 行数 + 主键指纹对账
 npm run doctor             # 能力体检；npm run canary 真实数据体检（不进 CI）
 # 隔离运行：ECHO_DB_PATH=$TMPDIR/x.db PORT=4199 node server.js
 # 新前端：cd apps/web && npm run dev

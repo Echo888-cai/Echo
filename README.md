@@ -165,7 +165,7 @@ The public edge is deployment-ready for a single HK/SG VPS: Caddy TLS, loopback-
 
 ## Architecture
 
-Echo Research is mid-way through a strangler-fig rewrite: **production traffic still runs entirely on the original monolith** (plain Node, single runtime dependency `better-sqlite3`, build-less native-ESM front end — the browser loads `src/app.js` as a module directly, no bundler, no transpile step). The endgame uses TypeScript for the product/control plane and a narrow Rust finance kernel for exact-decimal financial calculations. `packages/domain` owns framework-free business rules, `crates/finance-core` owns money/ratio/valuation primitives, `apps/web` is the React 19 + Vite client, `apps/worker` owns first-party filing pipelines, and `packages/{contracts,db,data-plane,ui}` provide the remaining shared boundaries. `apps/api` is created with Hono + tRPC only when step 2 starts. One plan document governs the migration — no parallel tracks.
+Echo Research is mid-way through a controlled strangler-fig rewrite: **production traffic still runs on the original Node + SQLite monolith until the replacement reaches contract parity**. The endgame uses TypeScript for the product/control plane and a narrow Rust finance kernel for exact-decimal financial calculations. `packages/domain` owns framework-free business rules, `crates/finance-core` owns money/ratio/valuation primitives, and `packages/finance-native` exposes those primitives to Node through a decimal-string-only N-API boundary. `apps/api` now contains the first Hono + tRPC vertical slice, `apps/web` is the React 19 + Vite client, `apps/worker` owns first-party filing pipelines, and `packages/{contracts,db,data-plane,ui}` provide the remaining shared boundaries. PostgreSQL migrations, forced tenant RLS, idempotent SQLite ETL and parity verification are implemented and proven against an isolated database; production database cutover waits for repository parity and a managed PITR-capable target. One plan document governs the migration — no parallel tracks.
 
 See **[docs/PLAN.md](docs/PLAN.md)** for the endgame architecture, every ratified technology decision, and the 7-step execution plan.
 
@@ -179,7 +179,7 @@ The chat route (the core of the monolith) is thin: it orchestrates a single data
 npm install        # dependencies
 npm run seed       # seed the local SQLite DB
 npm run dev        # run → http://127.0.0.1:4173
-npm test           # 41 JavaScript suites + domain tests + Rust finance-core tests
+npm test           # legacy + domain + DB + Hono/tRPC + native Rust boundary + Rust tests
 npm run lint       # JavaScript + worker pipelines + TypeScript workspaces
 npm run lint:rust  # rustfmt + clippy (warnings are errors)
 npm run typecheck:workspaces

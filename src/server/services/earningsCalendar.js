@@ -29,7 +29,7 @@
 import { detectMarket, adrOrBareSymbol } from "../../market.js";
 import { getEarningsCalendarRow, upsertEarningsCalendar } from "../repositories/earningsCalendarRepository.js";
 import { fetchJson as requestJson } from "../utils/http.js";
-import { computeSurprisePct } from "@echo/domain";
+import { computeSurprisePctExact } from "./financeKernel.js";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 const LOOKAHEAD_DAYS = 180;
@@ -54,7 +54,7 @@ async function fetchLastReportedEarnings(symbol, apiKey) {
     epsActual: r.actual ?? null,
     revenueEstimate: null,
     revenueActual: null,
-    epsSurprisePct: r.surprisePercent != null ? Math.round(r.surprisePercent * 10) / 10 : computeSurprisePct(r.actual, r.estimate),
+    epsSurprisePct: r.surprisePercent != null ? Math.round(r.surprisePercent * 10) / 10 : computeSurprisePctExact(r.actual, r.estimate),
     revenueSurprisePct: null
   };
 }

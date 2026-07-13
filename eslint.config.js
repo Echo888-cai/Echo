@@ -9,7 +9,7 @@ import tseslint from "typescript-eslint";
  * pipelines use Node globals. TypeScript workspaces share one strict baseline.
  */
 export default [
-  { ignores: ["node_modules/**", "**/dist/**", "coverage/**"] },
+  { ignores: ["node_modules/**", "**/dist/**", "coverage/**", "packages/finance-native/index.cjs", "packages/finance-native/index.d.ts"] },
   js.configs.recommended,
   {
     files: ["src/app.js", "src/ui/**/*.js"],
@@ -30,7 +30,7 @@ export default [
   },
   ...tseslint.configs.recommended.map((config) => ({
     ...config,
-    files: ["packages/**/*.ts", "apps/web/**/*.{ts,tsx}"]
+    files: ["packages/**/*.ts", "apps/**/*.{ts,tsx}"]
   })),
   {
     ...reactHooks.configs.flat["recommended-latest"],
@@ -49,7 +49,7 @@ export default [
     }
   },
   {
-    files: ["packages/**/*.ts", "apps/web/**/*.{ts,tsx}"],
+    files: ["packages/**/*.ts", "apps/**/*.{ts,tsx}"],
     rules: {
       "no-unused-vars": "off",
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrors: "none" }],

@@ -83,6 +83,25 @@ function allRows<T = any>(table: string): T[] {
   return sqliteDb.prepare(`SELECT * FROM ${table}`).all() as T[];
 }
 
+/**
+ * Legacy SQLite allowed a user to be removed while retaining their research history.
+ * PostgreSQL intentionally enforces the relationship, so preserve those tenant ids as
+ * disabled identities instead of dropping data or silently reassigning it to `local`.
+ */
+function referencedValues(columnName: "user_id" | "ticker"): Set<string> {
+  const ids = new Set<string>();
+  const tables = sqliteDb.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[];
+  for (const { name } of tables) {
+    if (!/^[a-z][a-z0-9_]*$/.test(name)) continue;
+    const hasColumn = (sqliteDb.prepare(`PRAGMA table_info(${name})`).all() as { name: string }[])
+      .some((column) => column.name === columnName);
+    if (!hasColumn) continue;
+    const rows = sqliteDb.prepare(`SELECT DISTINCT ${columnName} AS value FROM ${name} WHERE ${columnName} IS NOT NULL AND ${columnName} <> ''`).all() as { value: string }[];
+    for (const row of rows) ids.add(String(row.value));
+  }
+  return ids;
+}
+
 const report: { table: string; sqliteCount: number; postgresCount: number }[] = [];
 
 async function loadCount(pgTable: any): Promise<number> {
@@ -94,25 +113,45 @@ async function run() {
   // ── companies ────────────────────────────────────────────────────────
   {
     const rows = allRows("companies");
-    if (rows.length) {
+    const knownTickers = new Set(rows.map((row: any) => String(row.ticker)));
+    const archivedRows = [...referencedValues("ticker")]
+      .filter((ticker) => !knownTickers.has(ticker))
+      .sort()
+      .map((ticker) => ({
+        ticker,
+        nameZh: ticker,
+        nameEn: "Archived legacy instrument",
+        sector: null,
+        industry: null,
+        listingStatus: "archived",
+        exchange: ticker.endsWith(".HK") ? "HKEX" : ticker.endsWith(".SS") || ticker.endsWith(".SZ") ? "CN" : "US",
+        currency: ticker.endsWith(".HK") ? "HKD" : ticker.endsWith(".SS") || ticker.endsWith(".SZ") ? "CNY" : "USD",
+        marketCapCategory: "__migration_placeholder__",
+        isHsi: false,
+        createdAt: new Date(0),
+        updatedAt: new Date(0)
+      }));
+    const values = [
+      ...rows.map((r: any) => ({
+        ticker: r.ticker,
+        nameZh: r.name_zh,
+        nameEn: r.name_en,
+        sector: r.sector,
+        industry: r.industry,
+        listingStatus: r.listing_status,
+        exchange: r.exchange,
+        currency: r.currency,
+        marketCapCategory: r.market_cap_category,
+        isHsi: toBool(r.is_hsi),
+        createdAt: toTimestamp(r.created_at) || new Date(),
+        updatedAt: toTimestamp(r.updated_at) || new Date()
+      })),
+      ...archivedRows
+    ];
+    if (values.length) {
       await db
         .insert(schema.companies)
-        .values(
-          rows.map((r: any) => ({
-            ticker: r.ticker,
-            nameZh: r.name_zh,
-            nameEn: r.name_en,
-            sector: r.sector,
-            industry: r.industry,
-            listingStatus: r.listing_status,
-            exchange: r.exchange,
-            currency: r.currency,
-            marketCapCategory: r.market_cap_category,
-            isHsi: toBool(r.is_hsi),
-            createdAt: toTimestamp(r.created_at) || new Date(),
-            updatedAt: toTimestamp(r.updated_at) || new Date()
-          }))
-        )
+        .values(values)
         .onConflictDoUpdate({
           target: schema.companies.ticker,
           set: {
@@ -129,7 +168,11 @@ async function run() {
           }
         });
     }
-    report.push({ table: "companies", sqliteCount: rows.length, postgresCount: await loadCount(schema.companies) });
+    if (archivedRows.length) console.log(`[ETL] preserved ${archivedRows.length} archived instrument identities`);
+    const [{ count: sourceCompanyCount }] = await db.execute<{ count: string }>(
+      sql`SELECT COUNT(*)::int AS count FROM ${schema.companies} WHERE market_cap_category IS DISTINCT FROM '__migration_placeholder__'`
+    );
+    report.push({ table: "companies", sqliteCount: rows.length, postgresCount: Number(sourceCompanyCount) });
   }
 
   // ── company_details ──────────────────────────────────────────────────
@@ -207,23 +250,42 @@ async function run() {
   // ── users / invite_codes / auth_sessions ─────────────────────────────
   {
     const rows = allRows("users");
-    if (rows.length) {
+    const knownIds = new Set(rows.map((row: any) => String(row.id)));
+    const archivedRows = [...referencedValues("user_id")]
+      .filter((id) => !knownIds.has(id))
+      .sort()
+      .map((id) => ({
+        id,
+        username: `__archived__${id}`,
+        passHash: "!disabled-legacy-identity",
+        displayName: "Archived legacy identity",
+        role: "member",
+        createdAt: new Date(0),
+        lastLoginAt: null
+      }));
+    const values = [
+      ...rows.map((r: any) => ({
+        id: r.id,
+        username: r.username,
+        passHash: r.pass_hash,
+        displayName: r.display_name,
+        role: r.role,
+        createdAt: toTimestamp(r.created_at) || new Date(),
+        lastLoginAt: toTimestamp(r.last_login_at)
+      })),
+      ...archivedRows
+    ];
+    if (values.length) {
       await db
         .insert(schema.users)
-        .values(
-          rows.map((r: any) => ({
-            id: r.id,
-            username: r.username,
-            passHash: r.pass_hash,
-            displayName: r.display_name,
-            role: r.role,
-            createdAt: toTimestamp(r.created_at) || new Date(),
-            lastLoginAt: toTimestamp(r.last_login_at)
-          }))
-        )
+        .values(values)
         .onConflictDoNothing({ target: schema.users.id });
     }
-    report.push({ table: "users", sqliteCount: rows.length, postgresCount: await loadCount(schema.users) });
+    if (archivedRows.length) console.log(`[ETL] preserved ${archivedRows.length} archived user identities`);
+    const [{ count: sourceUserCount }] = await db.execute<{ count: string }>(
+      sql`SELECT COUNT(*)::int AS count FROM ${schema.users} WHERE username NOT LIKE '__archived__%'`
+    );
+    report.push({ table: "users", sqliteCount: rows.length, postgresCount: Number(sourceUserCount) });
   }
   {
     const rows = allRows("invite_codes");
@@ -944,7 +1006,7 @@ async function run() {
 
   const anomalies = report.filter((r) => r.sqliteCount !== r.postgresCount);
   if (anomalies.length) {
-    console.warn("\n[ETL] row-count mismatches (expected only if re-run partially or source has FK-orphan rows skipped):");
+    console.warn("\n[ETL] row-count mismatches require investigation:");
     console.warn(anomalies);
   } else {
     console.log("\n[ETL] all tables reached row-count parity.");

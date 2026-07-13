@@ -9,6 +9,7 @@ backups/
 dist/
 coverage/
 target/
+packages/finance-native/*.node
 packages/contracts/openapi.json
 
 # local preview config
