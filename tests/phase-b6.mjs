@@ -10,7 +10,7 @@
 import "./setupTestDb.mjs";
 import {
   collapseCharSpacing, normalizeCjkVariants, parseResultsText, parsePeriodFromTitle, detectColumnOrder
-} from "../src/server/services/hkFilingsPipeline.js";
+} from "../apps/worker/src/pipelines/hkFilingsPipeline.js";
 
 let passed = 0;
 let failed = 0;

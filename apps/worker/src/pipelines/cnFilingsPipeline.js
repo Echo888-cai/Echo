@@ -21,14 +21,14 @@ import { mkdirSync } from "node:fs";
 import { writeFile, access } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cnTicker, cnCode, cnExchange, isCN } from "../../market.js";
-import { upsertCnFinancials, hasCnFinancialsForUrl, upsertCnFilingIngestLog } from "../repositories/cnFinancialsRepository.js";
-import { addDocument } from "../repositories/documentRepository.js";
+import { cnTicker, cnCode, cnExchange, isCN } from "../../../../src/market.js";
+import { upsertCnFinancials, hasCnFinancialsForUrl, upsertCnFilingIngestLog } from "../../../../src/server/repositories/cnFinancialsRepository.js";
+import { addDocument } from "../../../../src/server/repositories/documentRepository.js";
 import { classifyIngestStatus } from "./hkFilingsPipeline.js";
 
 const execFileAsync = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = join(here, "..", "..", "..");
+const PROJECT_ROOT = join(here, "..", "..", "..", "..");
 const EXTRACT_SCRIPT = join(PROJECT_ROOT, "scripts", "extract_pdf_text.py");
 const CACHE_DIR = join(PROJECT_ROOT, ".cache", "filings");
 

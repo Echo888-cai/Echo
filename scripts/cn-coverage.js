@@ -24,7 +24,7 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 loadEnvFile(root);
 
 const { getDb } = await import("../src/db/index.js");
-const { ingestCnFinancials } = await import("../src/server/services/cnFilingsPipeline.js");
+const { ingestCnFinancials } = await import("../apps/worker/src/pipelines/cnFilingsPipeline.js");
 
 const args = process.argv.slice(2);
 const limitArg = args.find((a) => a.startsWith("--limit="));

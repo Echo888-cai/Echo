@@ -5,7 +5,7 @@ import "./setupTestDb.mjs";
 import { getDb } from "../src/db/index.js";
 import { insertCanaryResult, getSourceHealthSummary, getLatestBatchId, getLatestBatchResults } from "../src/server/repositories/canaryRepository.js";
 import { upsertHkFilingIngestLog, getHkFilingCoverage } from "../src/server/repositories/hkFinancialsRepository.js";
-import { classifyIngestStatus, parseGeneralAnnouncements } from "../src/server/services/hkFilingsPipeline.js";
+import { classifyIngestStatus, parseGeneralAnnouncements } from "../apps/worker/src/pipelines/hkFilingsPipeline.js";
 import { handleStatusApi } from "../src/server/routes/status.js";
 
 let passed = 0;

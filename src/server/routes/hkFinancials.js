@@ -7,7 +7,7 @@
 
 import { sendOk, sendError } from "../utils/async.js";
 import { getHkFinancials } from "../repositories/hkFinancialsRepository.js";
-import { ingestHkFinancials } from "../services/hkFilingsPipeline.js";
+import { ingestHkFinancials } from "../../../apps/worker/src/pipelines/hkFilingsPipeline.js";
 import { normalizeTicker } from "../../data.js";
 
 export async function handleHkFinancialsList(req, res) {

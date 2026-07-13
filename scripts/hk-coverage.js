@@ -16,7 +16,7 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 loadEnvFile(root);
 
 const { getDb } = await import("../src/db/index.js");
-const { ingestHkFinancials } = await import("../src/server/services/hkFilingsPipeline.js");
+const { ingestHkFinancials } = await import("../apps/worker/src/pipelines/hkFilingsPipeline.js");
 
 const args = process.argv.slice(2);
 const limitArg = args.find((a) => a.startsWith("--limit="));

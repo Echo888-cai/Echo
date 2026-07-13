@@ -16,15 +16,15 @@ import { mkdirSync } from "node:fs";
 import { writeFile, access } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { normalizeTicker } from "../../data.js";
-import { isUS } from "../../market.js";
-import { upsertHkFinancials, hasHkFinancialsForUrl, upsertHkFilingIngestLog } from "../repositories/hkFinancialsRepository.js";
-import { addDocument } from "../repositories/documentRepository.js";
-import { upsertHkBuyback, hasHkBuybackForUrl } from "../repositories/hkBuybackRepository.js";
+import { normalizeTicker } from "../../../../src/data.js";
+import { isUS } from "../../../../src/market.js";
+import { upsertHkFinancials, hasHkFinancialsForUrl, upsertHkFilingIngestLog } from "../../../../src/server/repositories/hkFinancialsRepository.js";
+import { addDocument } from "../../../../src/server/repositories/documentRepository.js";
+import { upsertHkBuyback, hasHkBuybackForUrl } from "../../../../src/server/repositories/hkBuybackRepository.js";
 
 const execFileAsync = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = join(here, "..", "..", "..");
+const PROJECT_ROOT = join(here, "..", "..", "..", "..");
 const EXTRACT_SCRIPT = join(PROJECT_ROOT, "scripts", "extract_pdf_text.py");
 const CACHE_DIR = join(PROJECT_ROOT, ".cache", "filings");
 

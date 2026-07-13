@@ -3,7 +3,7 @@
 import "./setupTestDb.mjs";
 import {
   parseHkexSearchResult, parsePeriodFromTitle, parseResultsText, lineNumbers, hkRowToFinancials
-} from "../src/server/services/hkFilingsPipeline.js";
+} from "../apps/worker/src/pipelines/hkFilingsPipeline.js";
 import { upsertHkFinancials, getHkFinancials, hasHkFinancialsForUrl } from "../src/server/repositories/hkFinancialsRepository.js";
 import { parse8KItems, htmlToText } from "../src/secFilings.js";
 import { hkFilingsToMarkdown } from "../src/financialData.js";

@@ -5,7 +5,7 @@
 import "./setupTestDb.mjs";
 import { computeValuation, classifyAssetStage } from "../src/server/services/valuationEngine.js";
 import { mergeCnFinancialGaps } from "../src/server/services/dataSources.js";
-import { cnRowToFinancials } from "../src/server/services/cnFilingsPipeline.js";
+import { cnRowToFinancials } from "../apps/worker/src/pipelines/cnFilingsPipeline.js";
 
 let passed = 0;
 let failed = 0;

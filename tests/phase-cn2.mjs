@@ -14,7 +14,7 @@
 import "./setupTestDb.mjs";
 import {
   parseCninfoSearchResult, parseCnPeriodFromTitle, parseCnResultsText
-} from "../src/server/services/cnFilingsPipeline.js";
+} from "../apps/worker/src/pipelines/cnFilingsPipeline.js";
 import {
   upsertCnFinancials, getCnFinancials, hasCnFinancialsForUrl,
   upsertCnFilingIngestLog, getCnFilingCoverage

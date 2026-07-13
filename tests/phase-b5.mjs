@@ -6,7 +6,7 @@
 import "./setupTestDb.mjs";
 import { computeValuation } from "../src/server/services/valuationEngine.js";
 import { mergeHkFinancialGaps } from "../src/server/services/dataSources.js";
-import { hkRowToFinancials } from "../src/server/services/hkFilingsPipeline.js";
+import { hkRowToFinancials } from "../apps/worker/src/pipelines/hkFilingsPipeline.js";
 
 let passed = 0;
 let failed = 0;

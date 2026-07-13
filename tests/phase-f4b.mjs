@@ -6,7 +6,7 @@
 //     标注"购回注销有滞后"，否则整体不出现。
 import "./setupTestDb.mjs";
 import assert from "node:assert/strict";
-import { parseBuybackText } from "../src/server/services/hkFilingsPipeline.js";
+import { parseBuybackText } from "../apps/worker/src/pipelines/hkFilingsPipeline.js";
 import { hasHkBuybackForUrl, upsertHkBuyback, listRecentHkBuybacks } from "../src/server/repositories/hkBuybackRepository.js";
 import { financialsToMarkdown, hkBuybackToMarkdown } from "../src/financialData.js";
 
