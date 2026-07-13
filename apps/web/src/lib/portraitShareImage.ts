@@ -1,4 +1,4 @@
-// React port of src/ui/watch.js's exportPortraitImage() — draws the portrait
+// Canvas renderer for portrait share images.
 // share card with the native Canvas API (no screenshot lib, no upload of the
 // user's research data). Kept as a standalone module since it's pure canvas
 // drawing with no React/DOM-query dependency, unlike the rest of watch.js.

@@ -12,8 +12,8 @@
  * feedback).
  */
 import { pgTable, text, integer, serial, bigserial, numeric, boolean, timestamp, jsonb, index } from "drizzle-orm/pg-core";
-import { users } from "./auth";
-import { companies } from "./core";
+import { users } from "./auth.js";
+import { companies } from "./core.js";
 
 export const schedulerState = pgTable("scheduler_state", {
   jobId: text("job_id").primaryKey(),
@@ -115,6 +115,16 @@ export const factGuardAudit = pgTable(
     createdIdx: index("idx_fact_guard_audit_created").on(t.createdAt)
   })
 );
+
+/** rate_limit_buckets backs the shared rate limiter for abuse-prone heavy endpoints
+ * (ask/report-generate/parse-document) — a plain Postgres row instead of Redis, since
+ * multiple API replicas need one shared counter and this stays inside the single
+ * approved architecture. Low-cardinality, low-frequency by design; see http.ts. */
+export const rateLimitBuckets = pgTable("rate_limit_buckets", {
+  key: text("key").primaryKey(),
+  count: integer("count").notNull().default(1),
+  resetAt: timestamp("reset_at", { withTimezone: true }).notNull()
+});
 
 export const canaryRuns = pgTable(
   "canary_runs",

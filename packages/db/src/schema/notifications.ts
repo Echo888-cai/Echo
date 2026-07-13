@@ -5,8 +5,8 @@
  * earnings surprise, system message, ...) — genuinely polymorphic -> kept as JSONB.
  */
 import { pgTable, text, bigserial, timestamp, jsonb, index } from "drizzle-orm/pg-core";
-import { users } from "./auth";
-import { companies } from "./core";
+import { users } from "./auth.js";
+import { companies } from "./core.js";
 
 export const notifications = pgTable(
   "notifications",

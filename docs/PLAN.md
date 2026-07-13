@@ -1,195 +1,143 @@
-# Echo Research 终局计划（2026-07-13 · 唯一计划文档）
+# Echo Research 产品计划与验收底账
 
-> **这是什么**：Echo Research 的**唯一**计划。它取代此前全部计划、分轨、候选池和决策草案；历史只存在于 git，不再进入当前仓库的认知表面。
-> **怎么来的**：2026-07-13，决策者定调：清空所有分轨与候选池，以技术专家 + 金融分析专家 + 产品专家三重视角合议出一个最终方案；不设成本约束，不分短期长期，只以**极致技术美感**与**极致用户体验**为准则。所有决策已拍板（§3），没有"待定"。
-> **给谁看**：任何接手的人或 AI 会话。自包含。执行就按 §4 的 1→7 顺序走，每一步有独立验收。
+> 更新于 2026-07-13。本文是仓库唯一计划文档。生产当前稳定版本保持不变，只有本地验收、GitHub 必需检查和发布演练全部通过，并由负责人明确批准后才允许切流。
 
----
+## 1. 产品目标与永久红线
 
-## 0. 一句话论点
+Echo Research 是面向港股、美股与 A 股价值投资者的证据优先 AI 研究台。北极星不是回答数量，而是让用户更快形成可复核、可持续追踪、能被新证据推翻的投资判断。
 
-Echo Research 的价值在**领域核心**（估值交叉验证、factGuard 防幻觉、三市一手财报管道、证伪闭环）与**品牌气质**（安静的研究札记），不在底盘。此前为了稳妥养了两套底盘并存（生产在旧、新底盘搭骨架），复杂度已经开始反噬心智。本计划只做一件事：**把灵魂完整搬到一个十年不用换血的底盘上，然后把旧底盘连同一切过渡态整体删除**——1→6 步完成换血，第 7 步在干净的地基上做金融纵深与商业化。任何时刻主干可发布，领域逻辑只搬家不重写。
+永久红线：
 
----
+1. 不给买卖指令，只输出研究判断、监控条件和风险检查点。
+2. 不编数字；取不到就明确显示“未核到”，近似口径必须标注。
+3. 私有数据由应用层租户过滤和 PostgreSQL 强制 RLS 双重隔离。
+4. 金额、股数、比率与估值不使用二进制浮点：存储用 `NUMERIC`，计算用 Rust 十进制定点。
+5. 密钥只存服务端环境；未获商用授权的数据源不得进入商用路径。
+6. 组合净值缺日即断口，不插值、不回填。
+7. UI 变更必须通过 375/768/1280 三档视口与双主题实跑。
+8. 数据变更必须可恢复；发布采用 expand-contract 与蓝绿方式。
 
-## 1. 产品是什么（不变的灵魂）
+## 2. 唯一运行架构
 
-面向港美 A 三市价值投资者的 **AI 研究台**：一条连续的研究对话，判断先行、证据溯源、诚实置信度；研究沉淀为公司画像与判断快照；证伪条件不是一句话而是被自动核对的规则——"以判断状态盯盘"是行情软件和通用 AI 都给不了的差异化。
+```text
+React/PWA ── tRPC + Hono SSE ── Hono API ── PostgreSQL
+                                  │
+                                  └── Temporal ── worker / filing / backup
 
-四项核心资产（重写 = 毁灭价值，只许搬家）：
-
-1. **一手财报管道**：CNINFO（A 股 91% 覆盖）/ HKEX PDF 抽取 / SEC EDGAR + Form 4。
-2. **判断生产线**：valuationEngine（多法交叉验证）· financialQuality · falsifyRules（结构化证伪）· factGuard（每个数字对账）· answerComposer · eventEngine（事件分级去噪）。
-3. **研究记忆**：会话 / 画像 / 判断快照 / 记分卡 / llm_audit / fact_guard_audit——未来回测与专有模型语料的地基。
-4. **品牌**：牛皮纸暖底 + 墨色 + 陶土主色 + 具名缓动曲线的静谧动效；`packages/ui` design tokens 是它的工程形态。
-
-北极星指标：每周主动打开 ≥3 天的用户比例；辅助：盘前速报点开率。
-
----
-
-## 2. 终局架构（唯一目标形态）
-
-```
-apps/
-├── web      React 19 + Vite + TanStack Query/Router + @echo/ui
-│            唯一前端；PWA（离线壳 + 推送）；SSE 流式研究对话
-├── api      Hono + tRPC，无状态 ×N
-│            鉴权/限速/CSRF 是普通中间件函数；对外 REST/OpenAPI 由 tRPC 适配层导出
-└── worker   Temporal worker
-             深度研究管线 / filing 抓取解析 / 业绩闭环 = 可重放的 Workflow
-             盘前速报 / 备份 / 证伪核对 = Cron Workflow；一手管道代码住这里
-
-packages/
-├── domain     纯函数领域核心：估值/财务质量/证伪/factGuard/答案编排/事件分级
-│              零框架依赖、decimal 语义、100% 单测——十年后在任何运行时原样执行
-├── contracts  zod schema 单一源 → tRPC procedure input + OpenAPI 导出 + 契约测试
-├── db         Drizzle + PostgreSQL：结构化 schema、NUMERIC、RLS 兜底、
-│              双时态财务仓库（valid_time + knowledge_time，重述不覆盖）
-├── data-plane 供应商适配器矩阵：Quote/Fundamentals/Filings/Calendar/News 端口
-│              + 授权元数据路由（未授权源商用环境不可选）+ 质量守卫入库检查
-└── ui         design tokens + 组件；品牌资产的唯一来源
-
-基础设施：托管 Postgres（HK 区，多可用区 + PITR）· Temporal Cloud ·
-对象存储（备份/文档）· OTel 全链路 → 托管可观测平台 · IaC · CI/CD
+packages/domain       纯领域规则、答案与报告编排
+packages/application  研究用例编排
+packages/contracts    zod 契约单一源
+packages/db           Drizzle、双时态财务仓库、强制 RLS
+packages/data-plane   授权感知的供应商适配器
+packages/ui           品牌与组件
+crates/finance-core   十进制定点金融数值内核
 ```
 
-四个结构性的干净（技术美感的定义，验收时对照）：
+端与端之间只有 zod 契约；领域包不接触 IO；多步任务由 Temporal 提供可重放语义；结构化研究数据保留 valid time 与 knowledge time。仓库布局与归属规则见 [architecture/repository-layout.md](architecture/repository-layout.md)。
 
-1. **领域核心零依赖**——`packages/domain` 不 import 数据库、HTTP、任何框架；
-2. **契约单一源**——端与端之间只有可 diff 的 zod schema，没有口头协议；
-3. **数据资产双时态**——系统永远记得"当时知道什么"，判断可复盘、可回测；
-4. **失败有形态**——每层降级行为声明式（诚实说"未核到"，不编数字），被测试演练过。
+## 3. 架构换血完成底账
 
----
+以下项目已经完成，不再保留旧实现作为旁路或回退底盘：
 
-## 3. 已拍板决策（全部终审，不再讨论）
+- [x] 判断规则、factGuard、证伪、事件、画像、答案与报告编排集中到领域层，研究用例由应用层承接。
+- [x] Hono + tRPC 接管非流式接口，Hono 原生 SSE 保留研究流事件契约。
+- [x] 全部 24 个 repository 使用 Drizzle/PostgreSQL，私有表启用强制 RLS，财务事实使用双时态追加模型。
+- [x] 深度研究、披露入库、业绩复盘、摘要、证伪核对和备份由 Temporal workflow/schedule 承接。
+- [x] React/PWA 覆盖研究、关注、持仓、画像、通知、引导、反馈、设置、离线壳和安装体验。
+- [x] 旧服务入口、旧源码目录、SQLite、旧调度器、旧前端、迁移桥和旧部署配置已删除。
+- [x] IaC、蓝绿服务、OTel、SLO 告警、真实备份与隔离恢复演练已建立。
 
-| 决策 | 结论 | 一句话理由 / 被否决项 |
-|---|---|---|
-| 语言 | TypeScript 全栈 | 契约共享同语言最优雅；否决 Java/Go 重写 |
-| HTTP/RPC | **Hono + tRPC** | fetch-standard、零装饰器仪式、zod 直接复用、端到端类型推导；**否决 NestJS**（三套装饰器概念表达同一件横切逻辑，与"领域核心零框架"矛盾）——NestJS 版 `apps/api` 已于 2026-07-13 删除 |
-| 编排 | **Temporal（Temporal Cloud）** | 多步研究管线需要"从失败步重放"的 durable workflow 语义；**否决 BullMQ**（只有整任务重试）——BullMQ 壳已删除；不自托管 Temporal Server（不设成本约束时托管是更高可靠性） |
-| 数据库 | **托管 PostgreSQL + Drizzle**，AWS RDS 香港区（ap-east-1）多可用区 | RLS 兜底多租户、NUMERIC 承载金融数值、PITR；Drizzle 迁移是可审查纯 SQL；否决 Prisma / ClickHouse / 继续 SQLite（单机文件锁 + 无 RLS 是终局天花板） |
-| 前端 | React 19 + Vite + TanStack Query/Router + zustand（少量本地态） | 类型化契约直连 tRPC；否决 Next.js（登录后应用无 SEO 诉求，SPA+CDN 更简单稳定） |
-| 移动端 | **PWA 是唯一移动形态** | 研究札记场景 = 深度阅读，PWA（离线壳+推送+桌面图标）完整覆盖；**否决原生 App/Expo** |
-| 领域核心载体 | TypeScript + decimal 纪律 | **否决 Rust/WASM**——为不存在的回测需求预付复杂度；真跑批量回测时以"新增 WASM 编译目标"渐进引入 |
-| 服务形态 | 模块化单体（api/worker 两个部署单元） | 否决微服务：可预见规模内单体+清晰模块边界更稳定 |
-| 行情数据商采购顺序 | A 股 **东方财富 Choice**（备选恒生聚源）；美股 **Polygon.io**；港股走**延迟行情授权档**（Finnhub/Twelve Data 付费授权，研究型产品不需要 tick 实时，延迟 15 分钟授权成本低一个量级）；自有一手管道永远是财报事实源与交叉验证层 | 免费腾讯/新浪源保留为**非商用环境**的开发兜底，授权路由保证商用环境不可选 |
-| AI 平台 | modelGateway 独立模块：多供应商路由 + 每用户预算 + 语义缓存；黄金评测集（100–300 题）回归评分 | llm_audit / fact_guard_audit 既有积累直接成为评测基建 |
-| 部署 | 香港区托管云 + IaC；蓝绿发布；expand-contract 迁移法；每月恢复演练 | 环境是代码，不是某台服务器上的手工记忆 |
+完成状态不以本文手工勾选代替自动验收。每个提交仍必须通过第 4 节门禁；GitHub required check 是合并时的最终事实来源。
 
----
+## 4. 发布门禁
 
-## 4. 执行计划：1 → 7（严格顺序执行，每步独立验收）
-
-### 1 · 领域核心独立成包
-
-把 `src/server/services/` 里的纯判断逻辑（valuationEngine、financialQuality、falsifyRules、factGuard、answerComposer、eventEngine、companyPortrait、historicalValuation、insiderActivity、earningsCalendar）搬入 `packages/domain`——只搬家不重写，数据经端口注入，核心不碰 IO。旧 `server.js` 改为从 `packages/domain` import，行为零变化。
-
-**验收**：`npm test` 全绿（旧底盘行为等价）；`packages/domain` 零运行时依赖（package.json dependencies 为空或仅 decimal 库）；领域函数单测覆盖建立。
-
-### 2 · 后端换轨：Hono + tRPC
-
-`apps/api` 以 Hono + tRPC 从零立骨：`packages/contracts` 的 zod schema 直接做 procedure input parser；鉴权（scrypt + 签名 HttpOnly cookie + CSRF）、限速、请求体上限全部平移为组合式中间件；SSE 流式回答保持现有交互契约；对外 REST/OpenAPI 由适配层导出。数据访问暂时继续走现有 repositories（SQLite），本步不动存储。
-
-**验收**：契约测试（`packages/contracts/src/contract-tests/`）对新旧两个后端同绿；跨用户隔离用例在新后端全通；`apps/web` 全线改走 tRPC 类型化调用。
-
-### 3 · 数据底盘：PostgreSQL + Drizzle
-
-repositories 以 Drizzle 重写（`packages/db` schema 已有底子）：金额/股数/比率全部 NUMERIC + decimal 语义；私有表 RLS 兜底（应用层 user_id 过滤照旧，双保险）；财务事实进双时态仓库（重述追加新知识版本，不覆盖）；JSON-in-TEXT 列结构化。`sqlite-to-postgres.ts` ETL 幂等可重放，新旧库双跑对比等价后，SQLite 退役。
-
-**验收**：ETL 后新旧库各跑契约测试输出等价；RLS 越权查询在数据库层被拒（专项测试）；一次 PITR 恢复演练成功。
-
-### 4 · 编排：Temporal
-
-三条多步管线 Workflow 化——深度研究报告生成、filing 抓取→PDF 抽取→结构化入库、业绩后闭环核对（actual vs 共识 vs 证伪线）；周期任务（盘前/盘后速报、每日备份、触线检查）转 Cron Workflow。60s 轮询 scheduler 与"任务失败整体重试"的时代结束：失败从失败那一步重放，全流程可观测。
-
-**验收**：故意在管线第 N 步注入失败，验证从第 N 步恢复而非从头重跑；Temporal UI 能看到每条研究管线的完整轨迹；旧 scheduler.js 退役。
-
-### 5 · 体验完全体：React + PWA
-
-`apps/web` 补齐并超越旧前端全部能力：研究对话（SSE 流式 + 结构化答案卡 + 证据溯源 + 数据接地条 + 置信度 + 估值区间条）、发现层（筛选器/宏观）、持仓、看盘、画像、通知中心、onboarding、反馈、设置、分享图导出；PWA（离线壳 + 推送 + 安装引导）。UX 打磨是验收维度而非可选项：空状态全检、动效克制且可关（具名缓动曲线）、暗色主题同一暖色语言。
-
-**验收**：旧前端功能清单逐项对照全覆盖；三档视口（375/768/1280）× 双主题实跑走查；Lighthouse PWA 检查通过；核心链路（研究→关注→持仓→通知）真实账号全通。
-
-### 6 · 切流与旧底盘退役
-
-生产流量切到新底盘（api + worker + web）；确认稳定后**整体删除** `server.js`、`src/`、根 `index.html`、全部 `tests/phase-*.mjs`。测试体系重建为三层：`packages/domain` 单测 + 契约测试（唯一后端）+ Playwright e2e（核心链路）。部署收敛为 IaC + 蓝绿发布 + OTel 全链路 + SLO 仪表盘（API 可用 99.9%、首 token P95 < 3s、管道日更成功率 99%、RPO ≤ 5min、RTO ≤ 30min）。
-
-**验收**：旧底盘代码从主干消失；CI 三层门禁全绿；一次完整灾难恢复演练成功；SLO 仪表盘上线并有数据。
-
-### 7 · 金融纵深与商业化发布
-
-**金融纵深**（全部建在 `packages/domain`）：
-
-- **盈余质量红旗**（最高优先，一手数据上的最大差异化）：应收/存货增速背离收入、经营现金流长期背离净利润、商誉/净资产占比、大存大贷——"赚得真不真"，不只"赚多少"。
-- **估值行业路由**：银行/保险看 P/B、拨备、内含价值；地产/REIT 看 NAV/FFO；强周期看正常化盈利 + P/B 分位（周期顶低 PE 是陷阱）；取不到就诚实说。
-- **A/H 溢价**：双重上市溢价率进估值锚（现成数据 + 现成路由）。
-- **业绩期视图**：本周财报日历 × 我的证伪线 × 共识预期一屏（素材全现成，纯组装）。
-- **证伪线温度计**：距离 + 趋势的渐进预警（毛利率连续三期向证伪线漂移不再沉默）。
-- **未决问题闭环**：研究时沉淀"还需核实什么" → 下轮自动带出 → 数据到货提醒。
-
-**商业化**：数据商签约按 §3 顺序落地进适配器矩阵 → factGuard 以落库真实误报率升 soft/full → 订阅计费（微信/支付宝）→ 第三方渗透测试 → 法务意见（研究工具/证券投资咨询边界 + 部署区域合规）→ 公开发布。发布前保持免费邀请制不宣传。
-
-**验收**：红旗/行业路由有黄金问题集回归用例；商用环境授权路由无未授权源可选；渗透测试报告闭环；计费端到端真实走通一单。
-
----
-
-## 5. 宪法（永久红线，任何步骤不得违反）
-
-1. **不给买卖指令**——只输出研究判断、监控条件、风险检查点。
-2. **不编数字**——取不到就"未核到"；近似口径显式标注；股东回报只认交易所一手。
-3. **用户资产全私有**——私有表查询缺 user 过滤 = bug 级事故（应用层 + RLS 双保险）；跨用户可见必须是显式产品决策。
-4. **涉及真实用户数据的 schema change 必须非破坏性迁移**，迁移前强制备份。
-5. **密钥只存服务端环境**——不进日志/库/前端/git；用户不需要也不能配置自己的 key。
-6. **未获商用授权的数据源不得出现在商用路径**——由适配器授权路由在类型系统层保证；拿到授权前免费、邀请制、不公开宣传。
-7. **factGuard 升档只认落库的真实误报率**，不认手感。
-8. **组合净值不造历史**——缺日就是断口，不插值不回填。
-9. **UI 改动必须三档视口 × 双主题实跑验收**；动效克制且可关闭。
-10. **金融数值不用浮点承载**——存储与计算 NUMERIC/decimal，浮点只许出现在展示层。
-11. **canary 与真实数据体检不进 CI**——CI 无 key、不烧配额。
-12. **任何时刻主干可发布**——领域逻辑只搬家不重写；每步有回滚线。
-
----
-
-## 6. 现状底账（2026-07-13，接手先核对这张表）
-
-| 区域 | 状态 |
-|---|---|
-| 生产（用户在用） | 旧底盘：`server.js` + `src/` + SQLite。多用户邀请制 beta 全部能力已交付（鉴权/隔离/配额/onboarding/部署资产），等 VPS + 域名即可上线（见 DEPLOY.md） |
-| `apps/web` | React 外壳 + 登录/持仓/看盘/研究对话/设置五片已落地，未切流 |
-| `apps/worker` | 一手 filing 管道（CNINFO/HKEX）住在 `src/pipelines/`，**旧底盘生产代码直接 import 它们**（这是共享资产不是遗留物）；BullMQ 壳已删除，Temporal 落地于第 4 步 |
-| `apps/api` | 已删除（原 NestJS 版）。第 2 步以 Hono + tRPC 重生 |
-| `packages/domain` | 第 1 步进行中：估值、财务质量、风险、证伪、factGuard、研究复盘、金融格式化、业绩惊喜与历史估值分位已有唯一实现；零运行时依赖、无数据库/HTTP/环境 IO，并有架构边界测试。下一动作继续拆出答案编排、事件分级与画像蒸馏的纯核心 |
-| `packages/contracts` | zod 单一源 + OpenAPI 导出 + 契约测试（测试挂在旧 server.js 上跑，第 2 步起双跑） |
-| `packages/db` | Drizzle + Postgres schema（含双时态财务表）+ ETL 脚本已有底子，未切流 |
-| `packages/data-plane` | 四端口适配器矩阵 + 授权路由 + 质量守卫已落地（曾当场抓到 A 股行情时间戳真实 bug） |
-| `packages/ui` | design tokens 已从旧 CSS 机械提取（数值逐字节一致） |
-| 工程治理基线 | 2026-07-13 完成：历史计划/ADR、废弃 NestJS/BullMQ 骨架、一次性脚本、生成物与零引用实现已删除；仓储/服务命名统一；重复 HTTP/时间/意图实现已收敛；路由与公司解析业务边界已纠正 |
-| 测试门禁 | `npm test` 自动运行 40 个旧底盘集成测试 + 3 个 `packages/domain` 单元/架构测试；lint 零 warning；旧底盘与全部 workspace 都进入 typecheck；契约测试与 React build 进入 CI |
-
----
-
-## 7. 怎么跑 + "完成"的定义
+### 本地与 CI 必须全部通过
 
 ```bash
-npm install                # 旧底盘唯一原生依赖 better-sqlite3
-npm run seed               # 建/重置本地 SQLite 种子库
-npm run dev                # 旧底盘 → http://127.0.0.1:4173（后端无热重载，改完重启）
-npm test                   # 全量门禁，必须 EXIT=0 再提交
-npm run lint && npm run typecheck && npm run typecheck:workspaces
-npm test --workspace @echo/contracts
+export DATABASE_URL=postgresql:///echo_dev
+npm install
+npm run db:migrate
+npm run lint
+npm run check:retired
+npm run typecheck
+npm run lint:rust
+npm test
+npm run test:e2e
 npm run build --workspace @echo/web
-npm run doctor             # 能力体检；npm run canary 真实数据体检（不进 CI）
-# 隔离运行：ECHO_DB_PATH=$TMPDIR/x.db PORT=4199 node server.js
-# 新前端：cd apps/web && npm run dev
+npm run db:recovery-drill
 ```
 
-**一步改动的"完成" = 代码 + 测试（进门禁）+ 本文档 §6 底账更新 + 中文单行 commit + PR 过 CI。** 浏览器可见改动实跑验证（红线 9）；外部数据源改动真实调用验证；私有数据改动含跨用户隔离用例（红线 3）。
+同时满足：
 
-## 8. 执行纪律
+- 仓库扫描不存在已退役入口、文件数据库依赖、迁移兼容层或提交的密钥与构建产物。
+- 全新 PostgreSQL 数据库可迁移、首次启动并完成私有数据写入。
+- GitHub 必需检查为绿色，契约、E2E、Temporal 故障恢复与 PostgreSQL RLS 测试均通过。
+- 备份可在隔离数据库恢复，关键表数量、约束和强制 RLS 保持一致。
+- 生产切流前完成数据授权核对、密钥配置、容量验证、回滚和蓝绿切换演练；容量验证用 `npm run test:load`（见 [architecture/system-overview.md](architecture/system-overview.md) 第 6 节）对着预生产环境实跑，不是本地空跑。
 
-- 仓库 `https://github.com/EchoResearchLab/Echo.git`；`main` 保护，所有变更经 PR，CI 全绿才合并。
-- 永远只执行当前最小编号的未完成步骤；不另建分轨、候选方案、待决策清单或平行路线。
-- 每个步骤只允许一个权威实现；迁移完成即删除旧实现与兼容壳，不保留“以后可能用”的代码。
-- 本文档是唯一计划与架构决策来源；如需改 §3 或 §5，直接更新本文，不新增旁路文档。
+## 5. 后续产品路线图（严格按 P0 → P4）
+
+### P0 · 发布准备与可信运行
+
+这是上线前必须完成的工作，不属于可延后功能。
+
+- [x] 弹性伸缩、只读副本/连接代理、分布式限流和负载测试工具已经就绪：ECS `api`/`worker` 服务按请求数/CPU 自动伸缩（`infra/terraform/main.tf`），PostgreSQL 只读副本 + RDS Proxy 已声明，`ask`/`report/generate`/`parse-document` 限流已从进程内存改为跨副本共享的 Postgres 计数（`packages/db/src/repositories/rateLimitRepository.ts`），ALB 前挂了 AWS WAF 速率规则，`npm run test:load` 提供可重复的压测脚本。细节见 [architecture/system-overview.md](architecture/system-overview.md)。
+- 托管 PostgreSQL、Temporal Cloud、对象存储、OTel 与告警在预生产环境完整接通。
+- 完成数据供应商商用授权清单、字段级来源登记、密钥轮换和最小权限审计。
+- 用 `npm run test:load` 对预生产环境实测并发研究、长报告、披露高峰和供应商限流场景，产出真实容量数字并据此校准自动伸缩阈值和 WAF 限速值——这一步必须在真实环境跑，本地代码改动不能替代。
+- 进行一次蓝绿切换、数据库恢复、Temporal 故障和供应商降级联合演练。
+- 建立发布负责人、回滚阈值、事故分级和用户通知模板。
+
+退出指标：GitHub 门禁连续稳定通过；恢复目标 RPO ≤ 24 小时、RTO ≤ 2 小时；核心 API 可用性目标 ≥ 99.9%；没有未解决的高危安全问题和未授权商用数据源。
+
+### P1 · 研究可信度与证据质量
+
+- 为每个核心数字展示来源、口径、有效时间、获知时间和新鲜度。
+- 建立“未核到/口径冲突/来源过期”统一待办，让用户能补证据或选择保守结论。
+- 增强 factGuard：跨来源一致性、币种/单位/复权口径和财报重述检测。
+- 对答案与报告增加证据覆盖率、引用可打开率和结论可追溯率评分。
+- 将盈余质量红旗、现金流质量、应收/存货异常和资本化倾向纳入公司画像。
+
+退出指标：关键数字证据覆盖率 ≥ 95%；引用可打开率 ≥ 99%；已知严重数字错误率 < 0.1%；所有“未核到”都有明确原因和下一步。
+
+### P2 · 投资研究核心工作流
+
+- 上线业绩期驾驶舱：预期、实际、差异、管理层口径变化和下一次证伪点在同一视图。
+- 建立行业估值路由，按银行、保险、周期、消费、SaaS、生物科技等选择合适方法。
+- 增加 A/H 溢价、跨市场可比公司、股本变化和回购稀释分析。
+- 把证伪条件做成可解释的“温度计”，展示距阈值、数据时点和触发历史。
+- 完善组合研究：集中度、相关暴露、财报日冲突和组合层证伪提醒，不输出交易指令。
+
+退出指标：用户完成一家公司“提问 → 证据 → 估值 → 证伪 → 跟踪”的中位时间下降 40%；业绩复盘可在披露后 30 分钟内生成第一版；核心流程完成率 ≥ 70%。
+
+### P3 · 留存与日常使用
+
+- 研究记忆自动沉淀“已确认事实、未决问题、观点变化和待复核日期”。
+- 建立日/周研究摘要，只推送有新证据、接近证伪或即将披露的变化。
+- 支持用户调整提醒强度、静默时段、来源偏好和研究模板。
+- 改进新手引导、示例公司、空状态和失败恢复，让首次用户能在 10 分钟内完成第一份研究卡。
+- 增加反馈闭环：用户可标记数字错误、来源失效、结论无帮助，并进入可追踪队列。
+
+退出指标：通知有用率 ≥ 70%；无效或重复提醒率 < 5%；次周留存和月度活跃研究用户持续增长；反馈 48 小时内有状态变化。
+
+### P4 · 团队协作与商业化准备
+
+- 团队空间、细粒度权限、共享研究模板、评论和审计日志。
+- 可控导出与归档：Markdown/PDF、证据清单、观点变更记录和合规水印。
+- 套餐、用量、成本归因、预算上限和账单管理；模型与数据成本可解释。
+- 完成渗透测试、隐私政策、数据处理协议、供应商协议和法务发布审查。
+- 建立运营后台，但不得绕过领域规则、租户隔离或数据授权路由。
+
+退出指标：租户隔离与权限测试全绿；成本毛利可测量；删除/导出请求可审计；法务与安全发布清单全部签署。
+
+## 6. 产品指标与优先级原则
+
+所有新需求按以下顺序取舍：
+
+1. 是否提高事实正确性、证据可追溯性或风险可见性。
+2. 是否缩短核心研究闭环，而不是单纯增加页面和模型调用。
+3. 是否减少打扰、重复劳动和供应商故障带来的不确定性。
+4. 是否能用明确指标和真实用户行为验证。
+5. 是否保持唯一架构，不引入第二套 API、数据库、调度器或前端实现。
+
+核心看板至少跟踪：证据覆盖率、严重数字错误率、研究完成时间、核心流程完成率、通知有用率、次周留存、API 可用性、研究任务成功率、单位研究成本和恢复演练结果。

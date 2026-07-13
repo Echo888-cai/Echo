@@ -8,6 +8,21 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: echo_ci
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/echo_ci
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
@@ -15,10 +30,14 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: rustup toolchain install 1.85.0 --profile minimal --component rustfmt,clippy
       - run: npm run lint
+      - run: npm run check:retired
+      - run: npm run lint:rust
       - run: npm run typecheck
-      - run: npm run typecheck:workspaces
-      # 测试不需要任何 API key：模型层与数据层都有本地兜底
+      - run: npm run migrate --workspace @echo/db
       - run: npm test
-      - run: npm test --workspace @echo/contracts
       - run: npm run build --workspace @echo/web
+      - run: npm run db:recovery-drill
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e

@@ -1,13 +1,4 @@
-/**
- * Data quality guard (docs/PLAN.md §2 数据平面: "所有外部响应进入数据平面前过
- * 数据质量守卫...量纲、币种、可比性、异常跳变检查，带质量评分入库"). This is new
- * logic — nothing in the legacy code validates a quote's shape before use today
- * (marketData.js reports providerStatus:"missing" on fetch failure, but never
- * checks whether a "successful" response is actually sane). Deliberately
- * conservative: flags issues, does not silently repair or drop fields — the
- * caller decides what to do with a flagged result (matches the codebase's
- * existing "诚实降级" convention rather than inventing a new one).
- */
+/** Conservative validation for external data before it crosses the data-plane boundary. */
 import type { ProviderEnvelope, QuoteResult } from "./ports.js";
 
 export interface QualityIssue {

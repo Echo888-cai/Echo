@@ -2,7 +2,7 @@
  * cnFilingsPipeline — A 股一手数据管道（P-CN-2），巨潮资讯网对应 hkFilingsPipeline 的角色。
  *
  * 巨潮资讯网公告列表（hisAnnouncement/query JSON 接口，官方指定披露平台）→
- * 定期报告 PDF 下载（.cache/filings/）→ scripts/extract_pdf_text.py 抽文本
+ * 定期报告 PDF 下载（.cache/filings/）→ scripts/document-processing/extract_pdf_text.py 抽文本
  * （复用港股管道同一份抽取脚本）→ 解析三表关键行（营业收入/营业成本/营业利润/
  * 净利润/归属于母公司股东的净利润/EPS/经营活动现金流量净额/货币资金）→
  * cn_financials 表（绝对币值，A 股财报几乎全是 CNY，不需要港股那套 CNY→HKD 换算）。
@@ -21,15 +21,15 @@ import { mkdirSync } from "node:fs";
 import { writeFile, access } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cnTicker, cnCode, cnExchange, isCN } from "../../../../src/market.js";
-import { upsertCnFinancials, hasCnFinancialsForUrl, upsertCnFilingIngestLog } from "../../../../src/server/repositories/cnFinancialsRepository.js";
-import { addDocument } from "../../../../src/server/repositories/documentRepository.js";
+import { cnTicker, cnCode, cnExchange, isCN } from "@echo/data-plane";
+import { upsertCnFinancials, hasCnFinancialsForUrl, upsertCnFilingIngestLog } from "@echo/db/repositories/cnFinancialsRepository.js";
+import { addDocument } from "@echo/db/repositories/documentRepository.js";
 import { classifyIngestStatus } from "./hkFilingsPipeline.js";
 
 const execFileAsync = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(here, "..", "..", "..", "..");
-const EXTRACT_SCRIPT = join(PROJECT_ROOT, "scripts", "extract_pdf_text.py");
+const EXTRACT_SCRIPT = join(PROJECT_ROOT, "scripts", "document-processing", "extract_pdf_text.py");
 const CACHE_DIR = join(PROJECT_ROOT, ".cache", "filings");
 
 const CNINFO_BASE = "http://www.cninfo.com.cn";
@@ -343,14 +343,14 @@ export async function ingestCnFinancials(ticker, { limit = 4, force = false } = 
   try {
     announcements = await searchCninfoReportsAnnouncements(t);
   } catch (error) {
-    logIngestOutcome({ ticker: t, status: "search_failed", detail: error.message || String(error) });
+    await logIngestOutcome({ ticker: t, status: "search_failed", detail: error.message || String(error) });
     throw error;
   }
   const result = { ticker: t, ingested: [], skipped: [], errors: [] };
 
   for (const item of announcements.slice(0, limit)) {
     try {
-      if (!force && hasCnFinancialsForUrl(item.url)) {
+      if (!force && await hasCnFinancialsForUrl(item.url)) {
         result.skipped.push(item.title);
         continue;
       }
@@ -366,7 +366,7 @@ export async function ingestCnFinancials(ticker, { limit = 4, force = false } = 
         throw new Error(`解析到的营业收入为负（${parsed.fields.revenue.current}），疑似匹配到附注/分项表`);
       }
       const f = parsed.fields;
-      upsertCnFinancials({
+      await upsertCnFinancials({
         ticker: t,
         periodLabel: item.period.periodLabel,
         periodEnd: item.period.periodEnd,
@@ -392,7 +392,7 @@ export async function ingestCnFinancials(ticker, { limit = 4, force = false } = 
       });
       // 全文进 documents 表，研究会话可引用原文段落。
       try {
-        addDocument({
+        await addDocument({
           ticker: t,
           name: item.title,
           mimeType: "text/plain",
@@ -414,7 +414,7 @@ export async function ingestCnFinancials(ticker, { limit = 4, force = false } = 
       result.errors.push(`${item.title}: ${error.message}`);
     }
   }
-  logIngestOutcome({
+  await logIngestOutcome({
     ticker: t,
     status: classifyIngestStatus(announcements, result),
     detail: result.errors[0] || (announcements.length === 0 ? "巨潮资讯网未搜到定期报告（可能新上市/停牌/退市/代码有误）" : null),
@@ -424,8 +424,8 @@ export async function ingestCnFinancials(ticker, { limit = 4, force = false } = 
   return result;
 }
 
-function logIngestOutcome(entry) {
-  try { upsertCnFilingIngestLog(entry); } catch { /* 留痕失败不影响摄取结果本身 */ }
+async function logIngestOutcome(entry) {
+  try { await upsertCnFilingIngestLog(entry); } catch { /* 留痕失败不影响摄取结果本身 */ }
 }
 
 // ─── cn_financials 行 → financialsData 形状（纯函数） ────────────────

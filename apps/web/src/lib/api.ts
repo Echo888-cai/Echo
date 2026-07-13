@@ -1,14 +1,7 @@
-// Typed API client — mirrors src/ui/api.js's fetch wrapper (CSRF header,
-// 401 handling contract) but exposes it through @echo/contracts schemas
-// instead of loosely-typed JSON, and swaps the old global-mutable
-// `S.authRequired` flag for an injectable callback (see AuthContext).
+// Typed tRPC and Hono SSE client with shared zod contracts and CSRF handling.
 import {
   authLoginRequestSchema,
-  authLoginResponseSchema,
   authRegisterRequestSchema,
-  authRegisterResponseSchema,
-  authLogoutResponseSchema,
-  authMeResponseSchema,
   type publicUserSchema,
   type statusResponseSchema,
   type schedulerStatusResponseSchema,
@@ -33,6 +26,7 @@ import {
   type parsedDocumentSchema
 } from "@echo/contracts";
 import { z } from "zod";
+import { isUnauthorizedTrpc, trpc } from "./trpc";
 
 export type PublicUser = z.infer<typeof publicUserSchema>;
 export type AuthLoginRequest = z.infer<typeof authLoginRequestSchema>;
@@ -79,7 +73,7 @@ export type ChatResult = Record<string, any>;
 export type DiscoverResult = Record<string, any>;
 export type ReportResult = Record<string, any>;
 
-/** Thrown for any non-2xx response; `.message` matches the legacy api.js contract. */
+/** Thrown for any non-2xx response. */
 export class ApiError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -99,261 +93,183 @@ export function setUnauthorizedHandler(handler: (() => void) | null) {
   onUnauthorized = handler;
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const method = (options.method || "GET").toUpperCase();
-  const response = await fetch(path, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      // U-1 CSRF: server requires this custom header on all non-GET requests.
-      ...(method !== "GET" ? { "X-Echo-Auth": "1" } : {}),
-      ...(options.headers || {})
+async function rpc<T>(operation: Promise<T>): Promise<T> {
+  try {
+    return await operation;
+  } catch (error) {
+    if (isUnauthorizedTrpc(error)) {
+      onUnauthorized?.();
+      throw new ApiError("请先登录", 401);
     }
-  });
-
-  // U-1: in multi-user mode, an expired session flips the whole app to the
-  // login card — except for /api/auth/* itself, so a failed login attempt
-  // doesn't also trigger this.
-  if (response.status === 401 && !path.startsWith("/api/auth/")) {
-    onUnauthorized?.();
-    throw new ApiError("请先登录", 401);
+    throw error;
   }
-
-  const json: any = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const message = json?.error?.message || json?.error || `请求失败 ${response.status}`;
-    throw new ApiError(message, response.status);
-  }
-  return (json?.ok && json.data ? json.data : json) as T;
 }
 
 export const authApi = {
   async login(body: AuthLoginRequest) {
     const parsed = authLoginRequestSchema.parse(body);
-    const data = await request<z.infer<typeof authLoginResponseSchema>["data"]>(
-      "/api/auth/login",
-      { method: "POST", body: JSON.stringify(parsed) }
-    );
-    return data;
+    return rpc(trpc.auth.login.mutate(parsed));
   },
   async register(body: AuthRegisterRequest) {
     const parsed = authRegisterRequestSchema.parse(body);
-    const data = await request<z.infer<typeof authRegisterResponseSchema>["data"]>(
-      "/api/auth/register",
-      { method: "POST", body: JSON.stringify(parsed) }
-    );
-    return data;
+    return rpc(trpc.auth.register.mutate(parsed));
   },
   async logout() {
-    return request<z.infer<typeof authLogoutResponseSchema>["data"]>("/api/auth/logout", {
-      method: "POST"
-    });
+    return rpc(trpc.auth.logout.mutate());
   },
   async me() {
-    return request<z.infer<typeof authMeResponseSchema>["data"]>("/api/auth/me", {
-      method: "GET"
-    });
+    return rpc(trpc.auth.me.query());
   }
 };
 
 /** GET /api/status — flat (non-enveloped) response; owner-only cards read sub-objects off it. */
 export const statusApi = {
   async get() {
-    return request<ApiStatus>("/api/status", { method: "GET" });
+    return rpc(trpc.status.query());
   }
 };
 
 /** GET /api/scheduler/status — settings page notification/scheduler card. */
 export const schedulerApi = {
   async status() {
-    return request<SchedulerStatus>("/api/scheduler/status", { method: "GET" });
+    return rpc(trpc.scheduler.status.query());
   }
 };
 
 /** GET /api/research/scorecard — R7 global research scorecard (settings page). */
 export const researchApi = {
   async scorecard() {
-    return request<ResearchScorecard>("/api/research/scorecard", { method: "GET" });
+    return rpc(trpc.research.scorecard.query());
   }
 };
 
 export const notificationsApi = {
   async list(limit = 20) {
-    return request<NotificationsList>(`/api/notifications?limit=${limit}`, { method: "GET" });
+    return rpc(trpc.notifications.list.query({ limit }));
   },
   async unread() {
-    return request<NotificationsUnread>("/api/notifications/unread", { method: "GET" });
+    return rpc(trpc.notifications.unread.query());
   },
   async markRead(id: number | string) {
-    return request<NotificationsUnread>("/api/notifications/read", {
-      method: "POST",
-      body: JSON.stringify({ id })
-    });
+    return rpc(trpc.notifications.read.mutate({ id }));
   },
   async markAllRead() {
-    return request<NotificationsUnread>("/api/notifications/read", {
-      method: "POST",
-      body: JSON.stringify({ all: true })
-    });
+    return rpc(trpc.notifications.read.mutate({ all: true }));
   },
   async test() {
-    return request<NotificationTestResult>("/api/notifications/test", {
-      method: "POST",
-      body: "{}"
-    });
+    return rpc(trpc.notifications.test.mutate());
   }
 };
 
 export const preferencesApi = {
   async get() {
-    return request<{ preferences: UserPreferences }>("/api/preferences", { method: "GET" });
+    return rpc(trpc.preferences.get.query());
   },
   async update(patch: PreferencesUpdateRequest) {
-    return request<{ preferences: UserPreferences }>("/api/preferences", {
-      method: "PATCH",
-      body: JSON.stringify(patch)
-    });
+    return rpc(trpc.preferences.update.mutate(patch));
   }
 };
 
-/** src/server/routes/portfolio.js — used by the portfolio page (R-3 slice 3). */
+/** Portfolio operations. */
 export const portfolioApi = {
   async list() {
-    return request<{ positions: PortfolioPosition[] }>("/api/portfolio", { method: "GET" });
+    return rpc(trpc.portfolio.list.query());
   },
   async review() {
-    return request<{ review: PortfolioReview }>("/api/portfolio/review", { method: "GET" });
+    return rpc(trpc.portfolio.review.query());
   },
   async snapshots() {
-    return request<{ snapshots: PortfolioSnapshot[] }>("/api/portfolio/snapshots", { method: "GET" });
+    return rpc(trpc.portfolio.snapshots.query());
   },
   async upsert(body: PortfolioUpsertRequest) {
-    return request<{ position: PortfolioPosition }>("/api/portfolio", {
-      method: "POST",
-      body: JSON.stringify(body)
-    });
+    return rpc(trpc.portfolio.upsert.mutate(body));
   },
   async remove(ticker: string) {
-    return request<{ deleted: true; ticker: string }>(`/api/portfolio?ticker=${encodeURIComponent(ticker)}`, {
-      method: "DELETE"
-    });
+    return rpc(trpc.portfolio.remove.mutate({ ticker }));
   }
 };
 
-/** src/server/routes/companies.js — company search/verify/resolve, used by resolve.ts. */
+/** Company search and resolution. */
 export const companiesApi = {
   async search(q: string) {
-    return request<{ companies: CompanySearchResult[]; total: number }>(
-      `/api/companies/search?q=${encodeURIComponent(q)}`,
-      { method: "GET" }
-    );
+    return rpc(trpc.companies.search.query({ q }));
   },
   async verify(ticker: string) {
-    return request<CompanyVerifyResult>(`/api/companies/verify?ticker=${encodeURIComponent(ticker)}`, {
-      method: "GET"
-    });
+    return rpc(trpc.companies.verify.query({ ticker }));
   },
   async resolve(q: string) {
-    return request<{ company: ResolvedCompany | null; reason?: string; name?: string }>(
-      `/api/companies/resolve?q=${encodeURIComponent(q)}`,
-      { method: "GET" }
-    );
+    return rpc(trpc.companies.resolve.query({ q }));
   }
 };
 
-/** src/server/routes/watch.js — watch desk (list) + per-stock detail. */
+/** Watch desk and stock detail. */
 export const watchApi = {
   async desk(events = true) {
-    return request<{ desk: WatchDesk }>(`/api/watch/desk${events ? "" : "?events=0"}`, { method: "GET" });
+    return rpc(trpc.watch.desk.query({ events })) as Promise<{ desk: WatchDesk }>;
   },
   async stock(ticker: string) {
-    return request<{ stock: WatchStock }>(`/api/watch/stock?ticker=${encodeURIComponent(ticker)}`, {
-      method: "GET"
-    });
+    return rpc(trpc.watch.stock.query({ ticker })) as Promise<{ stock: WatchStock }>;
   },
   async track(ticker: string, name?: string) {
-    return request<{ tracked: true; ticker: string }>("/api/watch/track", {
-      method: "POST",
-      body: JSON.stringify({ ticker, name })
-    });
+    return rpc(trpc.watch.track.mutate({ ticker, name }));
   },
   async untrack(ticker: string) {
-    return request<{ untracked: true; ticker: string }>("/api/watch/untrack", {
-      method: "POST",
-      body: JSON.stringify({ ticker })
-    });
+    return rpc(trpc.watch.untrack.mutate({ ticker }));
   }
 };
 
-/** src/server/routes/portraits.js — company profile (画像) + per-ticker research review. */
+/** Company portrait and per-ticker review. */
 export const portraitsApi = {
   async profile(ticker: string) {
-    return request<{ profile: CompanyProfile; markdown: string }>(
-      `/api/company/profile?ticker=${encodeURIComponent(ticker)}`,
-      { method: "GET" }
-    );
+    return rpc(trpc.portraits.profile.query({ ticker }));
   },
   async review(ticker: string) {
-    return request<{ ticker: string; scorecard: TickerScorecard }>(
-      `/api/company/review?ticker=${encodeURIComponent(ticker)}`,
-      { method: "GET" }
-    );
+    return rpc(trpc.portraits.review.query({ ticker }));
   }
 };
 
-/** src/server/routes/research.js — conversation/session history for the research sidebar. */
+/** Conversation and session history. */
 export const researchSessionsApi = {
   async conversations(limit = 30) {
-    return request<{ conversations: ConversationGroup[]; count: number }>(
-      `/api/research/conversations?limit=${limit}`,
-      { method: "GET" }
-    );
+    return rpc(trpc.research.conversations.query({ limit }));
   },
   async get(id: string) {
-    return request<{ session: ResearchSession; report: { markdown: string } | null }>(
-      `/api/research/sessions/${encodeURIComponent(id)}`,
-      { method: "GET" }
-    );
+    return rpc(trpc.research.get.query({ id }));
   },
   async remove(id: string) {
-    return request<{ deleted: true; sessionId: string }>(`/api/research/sessions/${encodeURIComponent(id)}`, {
-      method: "DELETE"
-    });
+    return rpc(trpc.research.remove.mutate({ id }));
   },
   async clearAll() {
-    return request<{ deleted: number; cleared: true }>("/api/research/sessions", { method: "DELETE" });
+    return rpc(trpc.research.clear.mutate());
   }
 };
 
-/** src/server/routes/ask.js — POST /api/ask, the unified entry point (company chat / screener / macro). */
+/** Unified company, screener and macro research entry. */
 export const askApi = {
   async ask(body: Record<string, unknown>) {
-    return request<ChatResult>("/api/ask", { method: "POST", body: JSON.stringify(body) });
+    return rpc(trpc.ask.mutate(body as any)) as Promise<ChatResult>;
   }
 };
 
-/** src/server/routes/reports.js — POST /api/report/generate (deep research). */
+/** Temporal-backed deep research. */
 export const reportsApi = {
   async generate(body: Record<string, unknown>) {
-    return request<ReportResult>("/api/report/generate", { method: "POST", body: JSON.stringify(body) });
+    return rpc(trpc.reports.generate.mutate(body as any)) as Promise<ReportResult>;
   }
 };
 
-/** src/server/routes/documents.js — POST /api/parse-document (composer file upload). */
+/** Composer document parsing. */
 export const documentsApi = {
   async parse(body: { name?: string; type?: string; dataUrl: string; ticker?: string | null }) {
-    return request<{ document: ParsedDocument }>("/api/parse-document", {
-      method: "POST",
-      body: JSON.stringify(body)
-    });
+    return rpc(trpc.documents.parse.mutate({ ...body, ticker: body.ticker || undefined }));
   }
 };
 
 /**
- * Streaming chat — mirrors src/ui/api.js's chatStream(): reads the /api/ask SSE
+ * Streaming chat reads the /api/ask SSE
  * response (token/reasoning/final/error events), falling back to a plain JSON
  * POST if the endpoint doesn't stream or errors before a final event lands
- * (never silently drop the answer). Unlike the legacy version this takes
+ * (never silently drop the answer). This takes
  * explicit callbacks instead of reaching into global UI state — the caller
  * (researchStore) decides what "foreground" means.
  */
@@ -416,16 +332,13 @@ export async function chatStream(
       }
     }
   } catch {
-    if (!finalResult) finalResult = await request<ChatResult>("/api/ask", { method: "POST", body: JSON.stringify(body) });
+    if (!finalResult) finalResult = await askApi.ask(body);
   }
   return finalResult!;
 }
 
 export const feedbackApi = {
   async submit(message: string, context: Record<string, unknown> | null = null) {
-    return request<{ id: number | string; received: true }>("/api/feedback", {
-      method: "POST",
-      body: JSON.stringify({ message, context })
-    });
+    return rpc(trpc.feedback.submit.mutate({ message, context }));
   }
 };

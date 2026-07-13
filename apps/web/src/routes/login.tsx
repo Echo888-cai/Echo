@@ -1,16 +1,9 @@
-// React port of src/ui/login.js — visually and behaviorally identical to
-// the legacy login/register card. Same DOM structure, same CSS classes
-// (09-auth.css applies unmodified), same behavior: on success, a full page
-// reload to "/" (matching the legacy `location.reload()` — intentional
-// today-behavior, not "upgraded" to an SPA navigation in this slice).
+// Login and invite registration entry point.
 import { useState, type FormEvent } from "react";
 import { authApi, ApiError } from "../lib/api";
 
-// Single source of truth for the auth-page/auth-card/... styles: the real
-// file that ships with the legacy app, not a fork. Loaded here (rather than
-// centrally in main.tsx) because this slice's only page that needs it is
-// the login page itself.
-import "../../../../src/styles/09-auth.css";
+// Auth styles are route-scoped because no other page needs them.
+import "@echo/ui/styles/09-auth.css";
 
 type AuthMode = "login" | "register";
 

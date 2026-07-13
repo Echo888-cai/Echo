@@ -2,15 +2,14 @@ import { fileURLToPath, URL } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Legacy backend (server.js) listens on process.env.PORT || 4173. Proxy
-// /api so the new frontend can talk to the real running backend during
-// development without duplicating any server-side logic.
+// Hono API listens on process.env.API_PORT || 4180. Proxy the typed tRPC
+// boundary plus REST compatibility/SSE routes during local development.
 //
 // NOTE: deliberately only reads BACKEND_PORT, never plain PORT — dev-server
 // launchers (this repo's .claude/launch.json, Vite itself, etc.) commonly
 // set PORT to configure the *frontend* dev server's own port, which would
 // collide with this lookup and make the proxy target itself (ECONNREFUSED).
-const backendPort = process.env.BACKEND_PORT || 4173;
+const backendPort = process.env.BACKEND_PORT || 4180;
 
 export default defineConfig({
   plugins: [react()],
@@ -29,7 +28,11 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": {
-        target: `http://localhost:${backendPort}`,
+        target: `http://127.0.0.1:${backendPort}`,
+        changeOrigin: true
+      },
+      "/trpc": {
+        target: `http://127.0.0.1:${backendPort}`,
         changeOrigin: true
       }
     }

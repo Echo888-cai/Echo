@@ -1,5 +1,5 @@
 /**
- * Contracts for src/server/routes/auth.js — mirrors current behavior only.
+ * Authentication and invitation contracts.
  *
  *   POST /api/auth/login    {username, password}                    → {user}
  *   POST /api/auth/register {invite, username, password, displayName?} → {user}

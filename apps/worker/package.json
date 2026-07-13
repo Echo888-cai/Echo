@@ -3,5 +3,30 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "一手 filing 管道（CNINFO/HKEX PDF 抽取）的家：src/pipelines/ 被旧底盘生产代码直接 import，是共享资产。终局计划第 4 步在此落地 Temporal worker（BullMQ 壳已按终局计划删除，见 docs/PLAN.md §3）。"
+  "description": "Temporal worker for durable research, filing and monitoring workflows.",
+  "main": "./src/worker.ts",
+  "scripts": {
+    "start": "tsx src/worker.ts",
+    "schedules": "tsx src/register-schedules.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/workflows.test.ts"
+  },
+  "dependencies": {
+    "@echo/application": "*",
+    "@echo/data-plane": "*",
+    "@echo/db": "*",
+    "@echo/domain": "*",
+    "@echo/observability": "*",
+    "@aws-sdk/client-s3": "^3.1085.0",
+    "@aws-sdk/lib-storage": "^3.1085.0",
+    "@temporalio/activity": "^1.20.2",
+    "@temporalio/client": "^1.20.2",
+    "@temporalio/worker": "^1.20.2",
+    "@temporalio/workflow": "^1.20.2"
+  },
+  "devDependencies": {
+    "@temporalio/testing": "^1.20.2",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
+  }
 }

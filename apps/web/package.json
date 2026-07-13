@@ -11,10 +11,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@echo/api": "*",
     "@echo/contracts": "*",
+    "@echo/domain": "*",
     "@echo/ui": "*",
     "@tanstack/react-query": "^5.62.0",
     "@tanstack/react-router": "^1.95.0",
+    "@trpc/client": "^11.18.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zod": "^3.24.1"

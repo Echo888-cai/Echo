@@ -1,13 +1,4 @@
-// React port of src/ui/notifications.js — bell badge (60s unread poll) +
-// dropdown panel (list / mark-read / mark-all-read). Same DOM/classes as the
-// legacy renderNotifPanel() so 01-shell.css applies unmodified.
-//
-// Deviation from legacy (intentional, scope-limited): markNotifRead() in the
-// old app deep-links back to the research session or watch page that the
-// notification is about. Those routes don't exist yet in this slice (R-3
-// ships shell + settings only), so clicking a notification here only marks
-// it read — the session/ticker jump returns once the research/watch pages
-// are migrated.
+// Notification badge, list and read-state controls.
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { notificationsApi, type NotificationItem } from "../lib/api";
@@ -39,7 +30,7 @@ export function NotificationBell() {
     enabled: open
   });
 
-  // Close on outside click, matching the legacy panel's implicit dismiss behavior.
+  // Close on outside click.
   useEffect(() => {
     if (!open) return;
     function handlePointerDown(event: PointerEvent) {

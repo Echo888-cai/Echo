@@ -1,7 +1,5 @@
 /**
- * Contracts for src/server/routes/companies.js — only the 3 handlers wired in
- * server.js (handleCompanyByTicker / handleCompanyHealth are exported but NOT
- * mounted, so they're skipped here).
+ * Company search and resolution contracts.
  *
  *   GET /api/companies/search?q=      → {companies, total}
  *   GET /api/companies/verify?ticker= → {status, name?, suggestions?}

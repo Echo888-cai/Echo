@@ -1,7 +1,4 @@
-// Minimal pub/sub replacement for the legacy toast() in src/ui/format.js
-// (which imperatively pokes a single #toast DOM node). The React analogue
-// mounts one <Toast /> per Shell instance and subscribes to this module's
-// listener set instead of touching the DOM directly.
+// Minimal pub/sub for the single React toast surface.
 type Listener = (message: string) => void;
 
 const listeners = new Set<Listener>();

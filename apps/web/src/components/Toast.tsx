@@ -1,4 +1,4 @@
-// React port of the #toast node in index.html + toast() in src/ui/format.js.
+// Accessible toast surface subscribed to the shared toast channel.
 // Same markup/classes (.toast / .is-visible) so 05-pages.css applies unmodified.
 import { useEffect, useRef, useState } from "react";
 import { subscribeToast } from "../lib/toast";

@@ -1,5 +1,5 @@
 /**
- * Contracts for src/server/routes/portfolio.js.
+ * Portfolio contracts.
  *
  *   GET    /api/portfolio            → {positions}
  *   GET    /api/portfolio/review     → {review}

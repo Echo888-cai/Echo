@@ -1,6 +1,6 @@
 /**
- * Contract for src/server/routes/events.js — GET /api/events/digest.
- * Wrapped in the sendOk envelope. services/eventEngine.js buildDigest() output is
+ * Event digest contract — GET /api/events/digest.
+ * The output is
  * best-effort/loose (depends on live market + news data).
  */
 import { z } from "zod";

@@ -1,10 +1,6 @@
-// React port of src/ui/settings.js's renderSettings() — full settings page:
-// notification prefs, LLM audit/usage, research scorecard, model config
-// (owner-only), data sources (owner-only), canary health (owner-only),
-// factGuard (owner-only), HK filing coverage (owner-only), plus two static
-// informational cards. Same DOM/classes as the legacy cards so
-// 05-pages.css's .settings-card/.setting-row apply unmodified.
+// Preferences, research health, PWA controls and owner diagnostics.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import {
   statusApi,
   schedulerApi,
@@ -20,7 +16,45 @@ import { showToast } from "../lib/toast";
 import { useAuth } from "../lib/auth-context";
 import { Shell } from "../components/Shell";
 
-// ── 通知偏好（src/ui/beta.js renderNotificationPreferences） ──────────────
+interface InstallPromptEvent extends Event {
+  prompt(): Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+}
+
+function PwaCard() {
+  const [prompt, setPrompt] = useState<InstallPromptEvent | null>(null);
+  const [permission, setPermission] = useState(typeof Notification === "undefined" ? "unsupported" : Notification.permission);
+  useEffect(() => {
+    const handler = (event: Event) => { event.preventDefault(); setPrompt(event as InstallPromptEvent); };
+    window.addEventListener("beforeinstallprompt", handler);
+    return () => window.removeEventListener("beforeinstallprompt", handler);
+  }, []);
+  async function install() {
+    if (!prompt) return;
+    await prompt.prompt();
+    const choice = await prompt.userChoice;
+    if (choice.outcome === "accepted") showToast("Echo Research 已安装");
+    setPrompt(null);
+  }
+  async function enableNotifications() {
+    if (typeof Notification === "undefined") return;
+    const next = await Notification.requestPermission();
+    setPermission(next);
+    showToast(next === "granted" ? "浏览器通知已开启" : "浏览器通知未开启");
+  }
+  return (
+    <article className="settings-card">
+      <h2>离线与桌面安装</h2>
+      <p>离线时仍可打开研究台外壳和最近访问页面；安装后可像独立应用一样从桌面启动。</p>
+      <div className="setting-row"><span>离线壳</span><strong>{"serviceWorker" in navigator ? "可用" : "浏览器不支持"}</strong></div>
+      <div className="setting-row"><span>浏览器通知</span><strong>{permission === "granted" ? "已允许" : permission === "denied" ? "已拒绝" : "未开启"}</strong></div>
+      {prompt ? <button type="button" className="ghost-btn" onClick={install}>安装到桌面</button> : null}
+      {permission === "default" ? <button type="button" className="ghost-btn" onClick={enableNotifications}>开启浏览器通知</button> : null}
+    </article>
+  );
+}
+
+// ── 通知偏好 ──────────────────────────────────────────────────────────────
 function NotificationPreferencesCard() {
   const queryClient = useQueryClient();
   const preferencesQuery = useQuery({
@@ -341,6 +375,7 @@ export function SettingsPage() {
         </div>
         <div className="settings-grid">
           <NotificationPreferencesCard />
+          <PwaCard />
           <LlmAuditCard apiStatus={apiStatus} />
           <ScorecardCard />
           {isOwner ? (
@@ -397,11 +432,15 @@ export function SettingsPage() {
           <article className="settings-card">
             <h2>通知与推送</h2>
             <p>
-              服务在跑时自动执行：盘前速报（港股 09:00 / 美股 21:15，北京时间）与交易时段每 30 分钟的持仓触线巡检。结果进右上角通知中心
+              Temporal 工作流自动执行盘前/盘后速报、证伪线巡检、业绩闭环和 PostgreSQL 备份；失败会从中断步骤继续。结果进入右上角通知中心
               {schedStatus?.telegram ? "，并推送到 Telegram" : "；配置 TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID（见 .env.example）可推到手机"}。
             </p>
             {schedStatus ? (
               <>
+                <div className="setting-row">
+                  <span>编排引擎</span>
+                  <strong>{(schedStatus.scheduler as any)?.engine === "temporal" ? "Temporal" : "未连接"}</strong>
+                </div>
                 <div className="setting-row">
                   <span>Telegram 推送</span>
                   <strong>{schedStatus.telegram ? "已配置" : "未配置"}</strong>

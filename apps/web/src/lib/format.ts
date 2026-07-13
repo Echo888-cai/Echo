@@ -1,6 +1,4 @@
-// Shared formatting helpers ported from src/ui/format.js. React auto-escapes
-// interpolated text, so esc() itself is not needed here — only the pure
-// date/number helpers actually used by the migrated components.
+// Shared date, market and number formatting helpers.
 import { marketLabel } from "./market";
 
 // Market label: three-way (港股/美股/A股), reuses market.ts's detectMarket. Blank ticker -> "".
@@ -69,7 +67,7 @@ export function wdWhen(date: string | null | undefined): string {
   return `${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
-// SQLite datetime('now') is UTC; render as relative time (mirrors format.js notifWhen).
+// Stored timestamps are UTC and render as relative local time.
 export function notifWhen(createdAt: string): string {
   const t = Date.parse(
     createdAt.replace(" ", "T") + (createdAt.includes("Z") || createdAt.includes("+") ? "" : "Z")

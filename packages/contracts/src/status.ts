@@ -1,5 +1,5 @@
 /**
- * Contract for src/server/routes/status.js — GET /api/status.
+ * System status contract — GET /api/status.
  *
  * Not wrapped in the sendOk envelope (uses sendJson directly). Best-effort shape;
  * many sub-objects (canary, llmAudit, factGuard, hkFilingCoverage) are optional/loose

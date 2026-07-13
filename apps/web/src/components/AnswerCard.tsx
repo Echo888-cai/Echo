@@ -1,4 +1,4 @@
-// React port of src/ui/components.js's renderMessage() + all its sub-renderers
+// Structured research answer and evidence renderers.
 // (valuation bar, analyst consensus, grounding bar, evidence cards, comparison
 // table, focus strip, dual quote, comp anchor, screener/macro blocks, choice
 // cards, switch-divider) plus markdown.js's renderRichAnswer() for the answer

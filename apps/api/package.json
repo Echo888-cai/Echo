@@ -1,0 +1,31 @@
+{
+  "name": "@echo/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Echo Research Hono + tRPC application boundary.",
+  "main": "./src/app.ts",
+  "types": "./src/app.ts",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "test": "tsx --test src/app.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@echo/application": "*",
+    "@echo/contracts": "*",
+    "@echo/domain": "*",
+    "@echo/db": "*",
+    "@echo/observability": "*",
+    "@hono/node-server": "^2.0.8",
+    "@trpc/server": "^11.18.0",
+    "@temporalio/client": "^1.20.2",
+    "hono": "^4.12.30",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
+  }
+}

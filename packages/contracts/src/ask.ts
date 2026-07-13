@@ -1,5 +1,5 @@
 /**
- * Contract for src/server/routes/ask.js — POST /api/ask.
+ * Unified research entry contract — POST /api/ask.
  *
  * Unified entry point: server-side decides whether this is a company question
  * (delegates to chat's runChat — see chat.ts response shape / SSE) or a

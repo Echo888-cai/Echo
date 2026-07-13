@@ -20,8 +20,7 @@ const indexRoute = createRoute({
   component: ResearchPage
 });
 
-// Legacy's landing page "/" and "/research" are the same view (nav tab
-// highlights both); kept as a real alias route rather than a redirect so
+// Landing page and /research are aliases; a real route keeps
 // direct links to /research still work.
 const researchRoute = createRoute({
   getParentRoute: () => rootRoute,

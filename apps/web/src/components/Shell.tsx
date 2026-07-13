@@ -1,7 +1,4 @@
-// React port of src/ui/shell.js's shell(content, {sidebar}) — topbar (brand,
-// nav, notif bell, theme toggle, auth chip) + main layout wrapper, reusable
-// by every page. Same DOM structure/classes as the legacy shell so
-// 01-shell.css / 02-workspace.css / 07-brand.css apply unmodified.
+// Global navigation, notifications, theme, sidebar and responsive layout.
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
@@ -14,19 +11,14 @@ import { Onboarding } from "./Onboarding";
 import { FeedbackWidget } from "./FeedbackWidget";
 import { Toast } from "./Toast";
 
-// Single source of truth for shell/sidebar/notif/settings/onboarding/feedback
-// styles: the real files that ship with the legacy app, not a fork — same
-// pattern login.tsx used for 09-auth.css. Imported here because Shell wraps
-// every page this slice touches, so this is the one place that needs the
-// full cascade (foundation → shell → workspace → components → pages →
-// brand → beta), matching index.html's <link> order.
-import "../../../../src/styles/00-foundation.css";
-import "../../../../src/styles/01-shell.css";
-import "../../../../src/styles/02-workspace.css";
-import "../../../../src/styles/04-components.css";
-import "../../../../src/styles/05-pages.css";
-import "../../../../src/styles/07-brand.css";
-import "../../../../src/styles/10-beta.css";
+// Shell imports the shared cascade once for every authenticated route.
+import "@echo/ui/styles/00-foundation.css";
+import "@echo/ui/styles/01-shell.css";
+import "@echo/ui/styles/02-workspace.css";
+import "@echo/ui/styles/04-components.css";
+import "@echo/ui/styles/05-pages.css";
+import "@echo/ui/styles/07-brand.css";
+import "@echo/ui/styles/10-beta.css";
 
 function ThemeIcon({ theme }: { theme: Theme }) {
   // 浅色时显示月亮（点了变深色），深色时显示太阳。
@@ -70,8 +62,7 @@ export function Shell({ children, sidebar = true }: { children: ReactNode; sideb
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meQuery.data]);
 
-  // Mirrors the legacy S.authRequired → whole-app login redirect (a 401
-  // outside /api/auth/* flips AuthContext, and here that means bounce to /login).
+  // A session-expired 401 redirects the whole app to login.
   useEffect(() => {
     if (auth.authRequired && routerState.location.pathname !== "/login") {
       navigate({ to: "/login" });
@@ -117,6 +108,7 @@ export function Shell({ children, sidebar = true }: { children: ReactNode; sideb
         <nav>
           <NavLink to="/" label="研究" />
           <NavLink to="/watch" label="看盘" />
+          <NavLink to="/portfolio" label="持仓" />
           <NavLink to="/settings" label="设置" />
           <NotificationBell />
           <button

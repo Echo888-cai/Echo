@@ -1,7 +1,4 @@
-// React port of src/ui/watch.js's watch-desk (list) rendering: renderWatchList/
-// renderWatchRow/renderWatchControls/renderWatchAddForm/renderWatchEmptyCta.
-// Filter/sort state and the add-form open/busy/error state are local component
-// state here (legacy kept them on the global S object).
+// Watch desk list, filters, sorting and add/remove controls.
 import { useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import type { WatchCard, WatchDesk } from "../lib/api";
@@ -239,8 +236,8 @@ export function WatchListBody({ desk, loaded, onRefetch }: { desk: WatchDesk | n
   const [addError, setAddError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   // Optimistic local overlay: newly-tracked/untracked tickers, applied on top of
-  // the query cache until the next desk refetch reconciles it (mirrors legacy's
-  // "insert a minimal card immediately, backfill in the background").
+  // the query cache until the next desk refetch reconciles it.
+  // Insert a minimal card immediately, then backfill it in the background.
   const [optimisticCards, setOptimisticCards] = useState<WatchCard[] | null>(null);
 
   const cards: WatchCard[] = useMemo(

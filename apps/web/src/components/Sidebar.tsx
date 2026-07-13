@@ -1,8 +1,4 @@
-// React port of src/ui/sidebar.js's renderGlobalSidebar() — current research
-// snapshot (incl. "本轮聚焦" multi-ticker mode) + watch-desk context card +
-// grouped session history. Global (rendered by Shell on every route) so the
-// in-research company and its history stay visible from /watch and /portfolio
-// too, not just the research page itself.
+// Global research snapshot, watch context and grouped session history.
 import { useEffect } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
@@ -221,7 +217,7 @@ function SessionHistory() {
   useEffect(() => {
     void refreshSessions();
     // Runs once per Shell mount (route navigation), not once-per-app-boot like
-    // legacy — an intentional upgrade: the sidebar history stays current after
+    // Keep sidebar history current after
     // e.g. deleting/loading a session on another tab.
   }, []);
 

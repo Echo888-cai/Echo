@@ -5,7 +5,11 @@
   "type": "module",
   "description": "Framework-free financial research domain logic for Echo Research.",
   "exports": {
-    ".": "./src/index.js"
+    ".": "./src/index.js",
+    "./company-identity": {
+      "types": "./src/companyIdentity.d.ts",
+      "default": "./src/companyIdentity.js"
+    }
   },
   "scripts": {
     "test": "node test/run.mjs",

@@ -1,4 +1,4 @@
-// React port of src/ui/watch.js's renderWatchPage() — no ticker → desk list,
+// Watch page: no ticker → desk list,
 // ticker present → per-stock detail. Two-stage desk refresh (fast quote-only
 // pass, then a full pass with events) is collapsed into a single react-query
 // fetch here: TanStack Query's cache + refetch already gives "show stale data
@@ -11,7 +11,7 @@ import { Shell } from "../components/Shell";
 import { WatchListBody } from "../components/WatchList";
 import { StockDetail } from "../components/StockDetail";
 
-import "../../../../src/styles/06-watch.css";
+import "@echo/ui/styles/06-watch.css";
 
 export function WatchListPage() {
   const deskQuery = useQuery({

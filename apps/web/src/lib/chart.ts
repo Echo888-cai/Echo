@@ -1,7 +1,4 @@
-// React port of src/ui/watch.js's buildChartPaths() — the one bit of chart
-// math shared by the stock detail price chart and the portfolio net-worth
-// chart (same "numeric series -> SVG line/area path" logic in both legacy
-// files, watch.js exported it for portfolioPage.js to reuse).
+// SVG path math shared by stock and portfolio charts.
 export interface ChartPoint {
   close: number;
 }

@@ -1,9 +1,4 @@
-// React port of src/ui/watch.js's per-stock page: renderStockDetail (price
-// chart + overview cards) and renderPortraitTab (markdown doc + research
-// review + judgment-change timeline + export). Local component state replaces
-// the legacy S.chartRange/S.stockTab/S.stockPortrait/S.stockReview globals;
-// keying the whole component by ticker (done by the caller) resets it on
-// company switch, matching legacy's per-ticker reset.
+// Stock overview, price chart, portrait, research review and judgment timeline.
 import { useState, type ReactElement } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
@@ -16,7 +11,7 @@ import { detectMarket } from "../lib/market";
 import { fmtNum, fmtPct, pnlDir, wdChg, wdWhen } from "../lib/format";
 import { showToast } from "../lib/toast";
 
-import "../../../../src/styles/03-research.css";
+import "@echo/ui/styles/03-research.css";
 
 const WD_STATUS: Record<string, { label: string; cls: string }> = {
   falsified: { label: "已触发证伪", cls: "wd-falsified" },
@@ -271,7 +266,7 @@ const PORTRAIT_KIND: Record<string, { label: string; cls: string }> = {
 function PortraitEvent({ e }: { e: any }) {
   const kind = PORTRAIT_KIND[e.kind] || PORTRAIT_KIND.note;
   const evidence = (Array.isArray(e.evidence) ? e.evidence : []).filter((ev: any) => ev?.url);
-  // Legacy's "查看当轮研究 →" (e.sessionId) jumps into the research chat session
+  // "查看当轮研究 →" jumps into the associated research chat session.
   // history — deferred to the research-page slice, which is where session
   // loading actually lives.
   return (
