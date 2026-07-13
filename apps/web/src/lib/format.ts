@@ -1,6 +1,38 @@
 // Shared formatting helpers ported from src/ui/format.js. React auto-escapes
 // interpolated text, so esc() itself is not needed here — only the pure
 // date/number helpers actually used by the migrated components.
+import { marketLabel } from "./market";
+
+// Market label: three-way (港股/美股/A股), reuses market.ts's detectMarket. Blank ticker -> "".
+export function marketLabelOf(ticker: string | null | undefined): string {
+  if (!ticker) return "";
+  return marketLabel(ticker);
+}
+
+export const isNum = (v: unknown): v is number => v != null && v !== "" && Number.isFinite(Number(v));
+export const fmtMoney = (v: unknown): string => (isNum(v) ? (Math.abs(Number(v)) >= 100 ? Number(v).toFixed(0) : Number(v).toFixed(2)) : "—");
+export const fmtSigned = (v: unknown): string | null => (isNum(v) ? `${Number(v) >= 0 ? "+" : ""}${Number(v).toFixed(1)}%` : null);
+export const dirClass = (v: unknown): "up" | "down" | "flat" => (Number(v) > 0 ? "up" : Number(v) < 0 ? "down" : "flat");
+
+export function numFrom(value: unknown): number | null {
+  const n = parseFloat(String(value).replace(/[^\d.-]/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+export function hostFromUrl(url = ""): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+export function credLevel(score: number | null | undefined): "high" | "mid" | "low" {
+  if (typeof score !== "number") return "mid";
+  if (score >= 0.7) return "high";
+  if (score >= 0.45) return "mid";
+  return "low";
+}
 
 // returnPct is a decimal (0.031 -> "+3.1%"); changePct fields elsewhere are
 // already percentages and don't go through this helper (mirrors format.js).

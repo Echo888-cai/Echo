@@ -5,10 +5,10 @@ import {
   Outlet
 } from "@tanstack/react-router";
 import { LoginPage } from "./routes/login";
-import { PlaceholderPage } from "./routes/placeholder";
 import { SettingsPage } from "./routes/settings";
 import { PortfolioPage } from "./routes/portfolio";
 import { WatchListPage, StockDetailPage } from "./routes/watch";
+import { ResearchPage } from "./routes/research";
 
 const rootRoute = createRootRoute({
   component: () => <Outlet />
@@ -17,7 +17,16 @@ const rootRoute = createRootRoute({
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  component: () => <PlaceholderPage label="研究" />
+  component: ResearchPage
+});
+
+// Legacy's landing page "/" and "/research" are the same view (nav tab
+// highlights both); kept as a real alias route rather than a redirect so
+// direct links to /research still work.
+const researchRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/research",
+  component: ResearchPage
 });
 
 const loginRoute = createRoute({
@@ -56,6 +65,7 @@ const settingsRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
+  researchRoute,
   loginRoute,
   watchRoute,
   watchTickerRoute,
