@@ -1,7 +1,7 @@
 import { asc, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { getTableColumns } from "drizzle-orm";
 import { companies, companyDetails, marketSnapshots } from "../schema/core.js";
-import { database, normalizeTicker, numberOrNull, numeric } from "./context.js";
+import { database, databaseRead, normalizeTicker, numberOrNull, numeric } from "./context.js";
 
 function hydrateCompany(row: any) {
   return {
@@ -96,8 +96,11 @@ export async function getCompanyByTickerComplete(ticker: string) {
   return row ? hydrateCompany(row) : null;
 }
 
+// Read-only, tolerant of a little replication lag, and the highest-traffic lookup in the
+// desk/portfolio views — routed at the replica so it can be moved off the primary connection
+// pool without touching call sites (see packages/db/src/repositories/context.ts).
 export async function getLatestMarketSnapshot(ticker: string) {
-  const [row] = await database().select().from(marketSnapshots)
+  const [row] = await databaseRead().select().from(marketSnapshots)
     .where(eq(marketSnapshots.ticker, normalizeTicker(ticker)))
     .orderBy(desc(marketSnapshots.validTime), desc(marketSnapshots.id)).limit(1);
   if (!row) return null;

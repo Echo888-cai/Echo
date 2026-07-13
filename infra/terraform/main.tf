@@ -96,12 +96,64 @@ resource "aws_db_instance" "main" {
   enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
 }
 
+resource "aws_db_instance" "read_replica" {
+  identifier                   = "${local.name}-read"
+  replicate_source_db          = aws_db_instance.main.identifier
+  instance_class               = var.db_read_replica_instance_class
+  publicly_accessible          = false
+  storage_encrypted            = true
+  vpc_security_group_ids       = [aws_security_group.database.id]
+  auto_minor_version_upgrade   = true
+  performance_insights_enabled = true
+  skip_final_snapshot          = true
+}
+
 resource "aws_secretsmanager_secret" "database" { name = "${local.name}/database" }
 resource "aws_secretsmanager_secret_version" "database" {
   secret_id = aws_secretsmanager_secret.database.id
   secret_string = jsonencode({
-    DATABASE_URL = "postgresql://echo:${random_password.database.result}@${aws_db_instance.main.address}:5432/echo?sslmode=require"
+    DATABASE_URL      = "postgresql://echo:${random_password.database.result}@${aws_db_instance.main.address}:5432/echo?sslmode=require"
+    DATABASE_URL_READ = "postgresql://echo:${random_password.database.result}@${aws_db_instance.read_replica.address}:5432/echo?sslmode=require"
+    # RDS Proxy endpoint, pooled: prefer this for write traffic once task definitions are updated to use it.
+    DATABASE_URL_PROXY = "postgresql://echo:${random_password.database.result}@${aws_db_proxy.main.endpoint}:5432/echo?sslmode=require"
   })
+}
+
+resource "aws_iam_role" "rds_proxy" {
+  name               = "${local.name}-rds-proxy"
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "rds.amazonaws.com" }, Action = "sts:AssumeRole" }] })
+}
+resource "aws_iam_role_policy" "rds_proxy_secrets" {
+  role   = aws_iam_role.rds_proxy.id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = [aws_secretsmanager_secret.database.arn] }] })
+}
+
+resource "aws_db_proxy" "main" {
+  name                   = "${local.name}-proxy"
+  engine_family          = "POSTGRESQL"
+  role_arn               = aws_iam_role.rds_proxy.arn
+  vpc_subnet_ids         = var.private_subnet_ids
+  vpc_security_group_ids = [aws_security_group.database.id]
+  require_tls            = true
+  auth {
+    auth_scheme = "SECRETS"
+    secret_arn  = aws_secretsmanager_secret.database.arn
+    iam_auth    = "DISABLED"
+  }
+}
+
+resource "aws_db_proxy_default_target_group" "main" {
+  db_proxy_name = aws_db_proxy.main.name
+  connection_pool_config {
+    max_connections_percent      = 90
+    max_idle_connections_percent = 50
+  }
+}
+
+resource "aws_db_proxy_target" "main" {
+  db_proxy_name          = aws_db_proxy.main.name
+  target_group_name      = aws_db_proxy_default_target_group.main.name
+  db_instance_identifier = aws_db_instance.main.identifier
 }
 
 resource "aws_s3_bucket" "backup" { bucket = "${local.name}-backup-${data.aws_caller_identity.current.account_id}" }
@@ -292,7 +344,7 @@ resource "aws_ecs_service" "api" {
     container_name   = "api"
     container_port   = 4180
   }
-  lifecycle { ignore_changes = [task_definition, load_balancer] }
+  lifecycle { ignore_changes = [task_definition, load_balancer, desired_count] }
   depends_on = [aws_lb_listener.production]
 }
 
@@ -313,6 +365,90 @@ resource "aws_ecs_service" "worker" {
     security_groups  = [aws_security_group.service.id]
     assign_public_ip = false
   }
+  lifecycle { ignore_changes = [desired_count] }
+}
+
+resource "aws_appautoscaling_target" "api" {
+  max_capacity       = var.api_max_capacity
+  min_capacity       = var.api_min_capacity
+  resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.api.name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  service_namespace  = "ecs"
+}
+resource "aws_appautoscaling_policy" "api_requests" {
+  name               = "${local.name}-api-requests"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.api.resource_id
+  scalable_dimension  = aws_appautoscaling_target.api.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.api.service_namespace
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ALBRequestCountPerTarget"
+      resource_label          = "${aws_lb.api.arn_suffix}/${aws_lb_target_group.blue.arn_suffix}"
+    }
+    target_value       = 500
+    scale_in_cooldown  = 120
+    scale_out_cooldown = 60
+  }
+}
+
+resource "aws_appautoscaling_target" "worker" {
+  max_capacity       = var.worker_max_capacity
+  min_capacity       = var.worker_min_capacity
+  resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.worker.name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  service_namespace  = "ecs"
+}
+resource "aws_appautoscaling_policy" "worker_cpu" {
+  name               = "${local.name}-worker-cpu"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.worker.resource_id
+  scalable_dimension  = aws_appautoscaling_target.worker.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.worker.service_namespace
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+    target_value       = 60
+    scale_in_cooldown  = 180
+    scale_out_cooldown = 60
+  }
+}
+
+resource "aws_wafv2_web_acl" "api" {
+  name        = "${local.name}-api"
+  scope       = "REGIONAL"
+  description = "Per-IP rate limiting in front of the API ALB, defense-in-depth alongside the Postgres-backed app-level limiter."
+  default_action {
+    allow {}
+  }
+  rule {
+    name     = "rate-limit-per-ip"
+    priority = 1
+    action {
+      block {}
+    }
+    statement {
+      rate_based_statement {
+        limit              = var.waf_rate_limit_per_5min
+        aggregate_key_type = "IP"
+      }
+    }
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "${local.name}-rate-limit-per-ip"
+      sampled_requests_enabled   = true
+    }
+  }
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "${local.name}-api-waf"
+    sampled_requests_enabled   = true
+  }
+}
+resource "aws_wafv2_web_acl_association" "api" {
+  resource_arn = aws_lb.api.arn
+  web_acl_arn  = aws_wafv2_web_acl.api.arn
 }
 
 resource "aws_iam_role" "codedeploy" {

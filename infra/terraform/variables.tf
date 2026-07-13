@@ -22,3 +22,29 @@ variable "otel_headers_secret_arn" {
   type      = string
   sensitive = true
 }
+
+variable "api_min_capacity" {
+  type    = number
+  default = 2
+}
+variable "api_max_capacity" {
+  type    = number
+  default = 10
+}
+variable "worker_min_capacity" {
+  type    = number
+  default = 2
+}
+variable "worker_max_capacity" {
+  type    = number
+  default = 8
+}
+variable "db_read_replica_instance_class" {
+  type    = string
+  default = "db.r6g.large"
+}
+variable "waf_rate_limit_per_5min" {
+  description = "Per-IP request budget over a rolling 5 minutes, enforced by AWS WAF in front of the ALB."
+  type        = number
+  default     = 2000
+}

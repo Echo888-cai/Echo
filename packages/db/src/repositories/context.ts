@@ -1,12 +1,13 @@
 import { sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import { createDb } from "../client.js";
+import { createDb, createReadDb } from "../client.js";
 import * as schema from "../schema/index.js";
 
 export type EchoDb = PostgresJsDatabase<typeof schema>;
 export type EchoTx = Parameters<Parameters<EchoDb["transaction"]>[0]>[0];
 
 let connection: ReturnType<typeof createDb> | null = null;
+let readConnection: ReturnType<typeof createReadDb> | null = null;
 
 export function database() {
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required for PostgreSQL repositories");
@@ -14,10 +15,25 @@ export function database() {
   return connection.db;
 }
 
+/** For read-only, replication-lag tolerant queries. Falls back to the primary connection
+ * string when DATABASE_URL_READ is unset (single-instance/local dev), so nothing breaks
+ * until a real read replica is wired up in the environment. */
+export function databaseRead() {
+  const url = process.env.DATABASE_URL_READ || process.env.DATABASE_URL;
+  if (!url) throw new Error("DATABASE_URL is required for PostgreSQL repositories");
+  readConnection ||= createReadDb(url);
+  return readConnection.db;
+}
+
 export async function closeDatabase() {
-  if (!connection) return;
-  await connection.client.end();
-  connection = null;
+  if (connection) {
+    await connection.client.end();
+    connection = null;
+  }
+  if (readConnection) {
+    await readConnection.client.end();
+    readConnection = null;
+  }
 }
 
 export async function withTenant<T>(userId: string, operation: (tx: EchoTx) => Promise<T>) {
