@@ -1,6 +1,7 @@
 import { serve } from "@hono/node-server";
-import { startTelemetry } from "@echo/observability";
+import { loadRootEnv, startTelemetry } from "@echo/observability";
 
+loadRootEnv();
 startTelemetry("echo-api");
 
 const { app } = await import("./app.js");

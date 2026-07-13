@@ -4,10 +4,13 @@ import { mkdir, rm } from "node:fs/promises";
 import { promisify } from "node:util";
 import { join } from "node:path";
 import { runReport } from "@echo/application/research";
+import { ensureFreshMarketSnapshot } from "@echo/application/market-data";
 import { listWithLastReported } from "@echo/db/repositories/earningsCalendarRepository.js";
-import { getCompanyProfile, appendProfileEvent } from "@echo/db/repositories/companyProfilesRepository.js";
+import { getCompanyProfile, appendProfileEvent, listCompanyProfiles } from "@echo/db/repositories/companyProfilesRepository.js";
 import { listAllActiveRules } from "@echo/db/repositories/watchRulesRepository.js";
-import { getLatestMarketSnapshot } from "@echo/db/repositories/companyRepository.js";
+import { listPositions } from "@echo/db/repositories/portfolioRepository.js";
+import { listWatchAdds } from "@echo/db/repositories/watchlistRepository.js";
+import { computePortfolioValuationUsd, upsertSnapshot } from "@echo/db/repositories/portfolioSnapshotsRepository.js";
 import { insertNotification } from "@echo/db/repositories/notificationsRepository.js";
 import { ingestHkFinancials } from "./pipelines/hkFilingsPipeline.js";
 import { ingestCnFinancials } from "./pipelines/cnFilingsPipeline.js";
@@ -72,7 +75,7 @@ export async function checkFalsifiers(userId: string) {
   const rules = await listAllActiveRules(userId);
   const triggered = [];
   for (const rule of rules) {
-    const market = await getLatestMarketSnapshot(rule.ticker);
+    const market = await ensureFreshMarketSnapshot(rule.ticker);
     if (market?.price == null) continue;
     const result = evaluateRule(rule, market.price);
     if (!result.triggered) continue;
@@ -81,6 +84,50 @@ export async function checkFalsifiers(userId: string) {
       dedupeKey: `falsifier:${rule.id}` });
   }
   return { checked: rules.length, triggered };
+}
+
+export async function refreshMarketSnapshots() {
+  const userIds = await listTenantIds();
+  const tickers = new Set<string>();
+  for (const userId of userIds) {
+    for (const position of await listPositions(userId)) tickers.add(position.ticker);
+    for (const item of await listWatchAdds(userId)) tickers.add(item.ticker);
+    for (const profile of await listCompanyProfiles(200, userId)) tickers.add(profile.ticker);
+  }
+  const failed: string[] = [];
+  let refreshed = 0;
+  for (const ticker of tickers) {
+    const snapshot = await ensureFreshMarketSnapshot(ticker);
+    if (snapshot?.price != null) refreshed += 1;
+    else failed.push(ticker);
+  }
+  return { total: tickers.size, refreshed, failed };
+}
+
+const FX_TICKERS: Record<string, string> = { HKD: "HKDUSD=X", CNY: "CNYUSD=X" };
+
+export async function capturePortfolioSnapshots() {
+  const userIds = await listTenantIds();
+  const date = new Date().toISOString().slice(0, 10);
+  const fx: Record<string, string> = {};
+  for (const [currency, ticker] of Object.entries(FX_TICKERS)) {
+    const snapshot = await ensureFreshMarketSnapshot(ticker);
+    if (snapshot?.price != null) fx[currency] = String(snapshot.price);
+  }
+  const results = [];
+  for (const userId of userIds) {
+    const valuation = await computePortfolioValuationUsd(fx, userId);
+    if (!valuation.positionCount) continue;
+    if (valuation.missingPrice || valuation.missingFx || valuation.totalValueUsd == null) {
+      // 净值缺日即断口：价格或汇率未核到就不落当日快照，不插值、不回填。
+      results.push({ userId, date, skipped: true, missingPrice: valuation.missingPrice, missingFx: valuation.missingFx });
+      continue;
+    }
+    await upsertSnapshot({ date, totalValueUsd: valuation.totalValueUsd, totalCostUsd: valuation.totalCostUsd,
+      totalPnlUsd: valuation.totalPnlUsd, positionCount: valuation.positionCount, totals: valuation.totals }, userId);
+    results.push({ userId, date, totalValueUsd: valuation.totalValueUsd, positionCount: valuation.positionCount });
+  }
+  return results;
 }
 
 export async function createPostgresBackup(label: string) {

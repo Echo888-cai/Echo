@@ -6,6 +6,7 @@
  * commercial-mode-aware and quality-guarded.
  */
 import { postgresQuoteAdapter } from "./adapters/postgresQuoteAdapter.js";
+import { yahooQuoteAdapter } from "./adapters/yahooQuoteAdapter.js";
 import { postgresFundamentalsAdapter } from "./adapters/postgresFundamentalsAdapter.js";
 import { postgresFilingsAdapter } from "./adapters/postgresFilingsAdapter.js";
 import { postgresCalendarAdapter } from "./adapters/postgresCalendarAdapter.js";
@@ -18,6 +19,9 @@ import type { QuotePort, QuoteResult, FundamentalsPort, FilingsPort, CalendarPor
 // distributor feed) — add to the relevant array, nothing else in this file
 // changes; the router already re-ranks whatever's registered.
 const quoteAdapters: QuotePort[] = [postgresQuoteAdapter];
+// 真实外部行情源，供快照刷新链路使用；与读缓存的 postgresQuoteAdapter 分开注册，
+// 避免"读缓存→写缓存"的循环。新的付费源（Polygon/Wind 等）注册到这里。
+const liveQuoteAdapters: QuotePort[] = [yahooQuoteAdapter];
 const fundamentalsAdapters: FundamentalsPort[] = [postgresFundamentalsAdapter];
 const filingsAdapters: FilingsPort[] = [postgresFilingsAdapter];
 const calendarAdapters: CalendarPort[] = [postgresCalendarAdapter];
@@ -39,6 +43,15 @@ export async function getQuote(ticker: string, opts: SelectOptions = {}): Promis
   const market = detectMarket(ticker);
   const selection = selectAdapter(quoteAdapters, market, opts);
   if (!selection) throw new NoAuthorizedAdapterError("quote", market);
+  const result = await selection.adapter.fetchQuote(ticker);
+  return { result, adapterId: selection.adapter.id, quality: checkQuote(result) };
+}
+
+/** 直连外部行情源取实时报价（跳过 Postgres 缓存适配器），由快照刷新链路调用。 */
+export async function fetchLiveQuote(ticker: string, opts: SelectOptions = {}): Promise<Routed<QuoteResult>> {
+  const market = detectMarket(ticker);
+  const selection = selectAdapter(liveQuoteAdapters, market, opts);
+  if (!selection) throw new NoAuthorizedAdapterError("live-quote", market);
   const result = await selection.adapter.fetchQuote(ticker);
   return { result, adapterId: selection.adapter.id, quality: checkQuote(result) };
 }

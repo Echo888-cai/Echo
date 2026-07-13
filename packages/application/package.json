@@ -8,6 +8,7 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./market-data": "./src/marketData.ts",
     "./research": "./src/research.ts",
     "./temporal-config": "./src/temporal-config.ts"
   },
@@ -15,6 +16,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@echo/data-plane": "*",
     "@echo/db": "*",
     "@echo/domain": "*"
   },

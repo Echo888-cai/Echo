@@ -1,7 +1,8 @@
-import { startTelemetry } from "@echo/observability";
+import { loadRootEnv, startTelemetry } from "@echo/observability";
 import { temporalConnectionOptions, temporalNamespace, temporalTaskQueue } from "@echo/application/temporal-config";
 import { fileURLToPath } from "node:url";
 
+loadRootEnv();
 startTelemetry("echo-worker");
 
 const [{ NativeConnection, Worker }, activities] = await Promise.all([

@@ -30,7 +30,8 @@ import { clearResearchSessions, deleteResearchSession, getResearchSession, listC
 import { getCompanyProfile } from "@echo/db/repositories/companyProfilesRepository.js";
 import { deletePosition, listPositions, upsertPosition } from "@echo/db/repositories/portfolioRepository.js";
 import { listSnapshots as listPortfolioSnapshots } from "@echo/db/repositories/portfolioSnapshotsRepository.js";
-import { getCompanyByTickerComplete, getLatestMarketSnapshot } from "@echo/db/repositories/companyRepository.js";
+import { getCompanyByTickerComplete } from "@echo/db/repositories/companyRepository.js";
+import { ensureFreshMarketSnapshot } from "@echo/application/market-data";
 import { listRules } from "@echo/db/repositories/watchRulesRepository.js";
 import { evaluateRule } from "@echo/domain";
 import { computeGlobalScorecard, computeTickerScorecard } from "@echo/domain";
@@ -80,7 +81,7 @@ function tickerCurrency(ticker: string) {
 
 async function enrichPosition(position: any, userId: string) {
   const [snapshot, company, rules] = await Promise.all([
-    getLatestMarketSnapshot(position.ticker),
+    ensureFreshMarketSnapshot(position.ticker),
     getCompanyByTickerComplete(position.ticker),
     listRules(position.ticker, userId)
   ]);
@@ -161,7 +162,7 @@ async function watchDesk(userId: string) {
   const failures: unknown[] = [];
   const cards = await Promise.all([...tickers].map(async ([ticker, name]) => {
     try {
-      const [market, profile, rules] = await Promise.all([getLatestMarketSnapshot(ticker), getCompanyProfile(ticker, userId), listRules(ticker, userId)]);
+      const [market, profile, rules] = await Promise.all([ensureFreshMarketSnapshot(ticker), getCompanyProfile(ticker, userId), listRules(ticker, userId)]);
       const price = market?.price ?? null;
       const evaluations = price == null ? [] : rules.map((rule) => ({ rule, result: evaluateRule(rule, price) }));
       const falsified = evaluations.some(({ result }) => result.triggered);
@@ -181,7 +182,7 @@ async function watchDesk(userId: string) {
 }
 
 async function scorecardFor(ticker: string, userId: string) {
-  const [snapshots, market] = await Promise.all([listResearchSnapshots(ticker, userId), getLatestMarketSnapshot(ticker)]);
+  const [snapshots, market] = await Promise.all([listResearchSnapshots(ticker, userId), ensureFreshMarketSnapshot(ticker)]);
   return computeTickerScorecard(snapshots, { price: market?.price ?? null });
 }
 
@@ -296,7 +297,7 @@ export const appRouter = t.router({
   watch: t.router({
     desk: protectedProcedure.input(z.object({ events: z.boolean().default(true) })).query(async ({ ctx }) => ({ desk: await watchDesk(ctx.user.id) })),
     stock: protectedProcedure.input(tickerInput).query(async ({ ctx, input }) => {
-      const [company, profile, market, rules] = await Promise.all([getCompanyByTickerComplete(input.ticker), getCompanyProfile(input.ticker, ctx.user.id), getLatestMarketSnapshot(input.ticker), listRules(input.ticker, ctx.user.id)]);
+      const [company, profile, market, rules] = await Promise.all([getCompanyByTickerComplete(input.ticker), getCompanyProfile(input.ticker, ctx.user.id), ensureFreshMarketSnapshot(input.ticker), listRules(input.ticker, ctx.user.id)]);
       return { stock: { ticker: input.ticker, company, profile, market, rules } };
     }),
     track: protectedProcedure.input(watchTrackRequestSchema).mutation(async ({ ctx, input }) => {

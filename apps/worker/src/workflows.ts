@@ -49,6 +49,14 @@ export async function falsifierCheckWorkflow(input: { userId?: string } = {}) {
   return results;
 }
 
+export async function marketRefreshWorkflow() {
+  return activity.refreshMarketSnapshots();
+}
+
+export async function portfolioSnapshotWorkflow() {
+  return activity.capturePortfolioSnapshots();
+}
+
 export async function postgresBackupWorkflow(input: { label?: string } = {}) {
   return activity.createPostgresBackup(input.label || "scheduled");
 }

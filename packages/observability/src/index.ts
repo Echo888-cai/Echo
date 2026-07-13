@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { HttpInstrumentation } from "@opentelemetry/instrumentation-http";
@@ -8,6 +10,22 @@ import { NodeSDK } from "@opentelemetry/sdk-node";
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION, ATTR_DEPLOYMENT_ENVIRONMENT_NAME } from "@opentelemetry/semantic-conventions";
 
 let sdk: NodeSDK | undefined;
+
+/**
+ * 从 cwd 向上找最近的 .env 并载入。npm workspace 下各 app 的 cwd 在 apps/*，
+ * 根 .env 的密钥不会自动进入进程环境，必须在每个进程入口显式加载。
+ * shell 已导出的同名变量优先于文件值。
+ */
+export function loadRootEnv(): string | null {
+  for (let dir = process.cwd(); ; dir = dirname(dir)) {
+    const file = join(dir, ".env");
+    if (existsSync(file)) {
+      process.loadEnvFile(file);
+      return file;
+    }
+    if (dir === dirname(dir)) return null;
+  }
+}
 
 export function startTelemetry(serviceName: string) {
   const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.replace(/\/$/, "");

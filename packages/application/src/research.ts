@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { getCompanyByTickerComplete, getLatestMarketSnapshot, searchCompanies } from "@echo/db/repositories/companyRepository.js";
+import { getCompanyByTickerComplete, searchCompanies } from "@echo/db/repositories/companyRepository.js";
+import { ensureFreshMarketSnapshot } from "./marketData.js";
 import { getCompanyProfile, upsertCompanyProfile } from "@echo/db/repositories/companyProfilesRepository.js";
 import { saveResearchSession } from "@echo/db/repositories/researchSessionsRepository.js";
 import { getHkFinancials } from "@echo/db/repositories/hkFinancialsRepository.js";
@@ -115,7 +116,7 @@ export async function runResearch(input: ResearchInput, userId: string) {
   };
   const [profile, market, financials] = await Promise.all([
     getCompanyProfile(company.ticker, userId),
-    getLatestMarketSnapshot(company.ticker),
+    ensureFreshMarketSnapshot(company.ticker),
     company.ticker.endsWith(".HK") ? getHkFinancials(company.ticker) : /\.(SS|SZ)$/.test(company.ticker) ? getCnFinancials(company.ticker) : Promise.resolve([])
   ]);
   const fallback = deterministicAnswer(company, profile, market, financials, input.question);
