@@ -83,13 +83,13 @@ export async function insertSession(tokenHash: string, userId: string, expiresAt
 }
 
 export async function getLiveSession(tokenHash: string, nowIso = new Date().toISOString()) {
-  const result = await database().execute(sql`select * from authenticate_session(${tokenHash}, ${new Date(nowIso)})`);
+  const result = await database().execute(sql`select * from authenticate_session(${tokenHash}, ${nowIso})`);
   const row = Array.from(result)[0] as any;
   return row ? { tokenHash: row.token_hash, userId: row.user_id, expiresAt: new Date(row.expires_at).toISOString() } : null;
 }
 
 export async function refreshSession(tokenHash: string, newExpiresAtIso: string) {
-  await database().execute(sql`select refresh_auth_session(${tokenHash}, ${new Date(newExpiresAtIso)})`);
+  await database().execute(sql`select refresh_auth_session(${tokenHash}, ${newExpiresAtIso})`);
 }
 
 export async function deleteSessionByHash(tokenHash: string) {
@@ -102,6 +102,6 @@ export async function deleteSessionsForUser(userId: string) {
 }
 
 export async function pruneExpiredSessions(nowIso = new Date().toISOString()) {
-  const result = await database().execute(sql`select prune_auth_sessions(${new Date(nowIso)}) as count`);
+  const result = await database().execute(sql`select prune_auth_sessions(${nowIso}) as count`);
   return Number((Array.from(result)[0] as any)?.count || 0);
 }

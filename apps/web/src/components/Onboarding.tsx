@@ -22,7 +22,7 @@ export function Onboarding() {
     queryFn: () => preferencesApi.get()
   });
 
-  if (!preferencesQuery.data && preferencesQuery.isLoading) return null;
+  if (!preferencesQuery.isSuccess) return null;
   const preferences = preferencesQuery.data?.preferences;
   if (preferences?.onboardingCompleted) return null;
 

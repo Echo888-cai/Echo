@@ -42,7 +42,7 @@ npm run dev
 npm run worker
 ```
 
-Web 默认地址为 `http://127.0.0.1:5173`，API 默认地址为 `http://127.0.0.1:3000`。Temporal 地址可通过 `TEMPORAL_ADDRESS` 配置。
+Web 默认地址为 `http://localhost:5190`，API 默认地址为 `http://127.0.0.1:4180`。Temporal 地址可通过 `TEMPORAL_ADDRESS` 配置。
 
 ## 验收
 

@@ -25,7 +25,10 @@ export default defineConfig({
     }
   },
   server: {
-    port: 5173,
+    // Not Vite's default 5173: another local project on this machine binds
+    // 0.0.0.0:5173, and 127.0.0.1 vs localhost then resolve to two different
+    // servers depending on the client's DNS order — a silent wrong-app trap.
+    port: 5190,
     proxy: {
       "/api": {
         target: `http://127.0.0.1:${backendPort}`,
