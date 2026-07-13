@@ -1,7 +1,7 @@
 /**
  * auth repository — 用户 / 邀请码 / 登录会话（U-1，migration 017）。
  *
- * 只做 SQL，不做密码学——哈希/校验/发 token 在 services/authService.js。
+ * 只做 SQL，不做密码学——哈希/校验/发 token 在 services/auth.js。
  * 所有函数同步（better-sqlite3），无网络即可单测。
  */
 

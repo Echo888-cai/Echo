@@ -10,7 +10,7 @@
 import { z } from "zod";
 import { okEnvelope } from "./envelope.js";
 
-/** Mirrors repositories/portfolio.js hydrate() + services/portfolioEnrich.js enrichPosition(). */
+/** Mirrors repositories/portfolioRepository.js hydrate() + services/portfolioEnrich.js enrichPosition(). */
 export const portfolioPositionSchema = z.object({
   ticker: z.string(),
   companyName: z.string(),
@@ -63,7 +63,7 @@ export const portfolioReviewSchema = z.object({
 });
 export const portfolioReviewResponseSchema = okEnvelope(z.object({ review: portfolioReviewSchema }));
 
-/** services/portfolioSnapshot.js / repositories/portfolioSnapshots.js listSnapshots() rows — best-effort. */
+/** services/portfolioSnapshot.js / repositories/portfolioSnapshotsRepository.js listSnapshots() rows — best-effort. */
 export const portfolioSnapshotRowSchema = z.record(z.string(), z.unknown());
 export const portfolioSnapshotsResponseSchema = okEnvelope(
   z.object({ snapshots: z.array(portfolioSnapshotRowSchema) })
@@ -80,7 +80,6 @@ export const portfolioUpsertRequestSchema = z.object({
 });
 export const portfolioUpsertResponseSchema = okEnvelope(z.object({ position: portfolioPositionSchema }));
 
-export const portfolioDeleteQuerySchema = z.object({ ticker: z.string() });
 export const portfolioDeleteResponseSchema = okEnvelope(
   z.object({ deleted: z.literal(true), ticker: z.string() })
 );

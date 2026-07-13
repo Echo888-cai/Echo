@@ -4,7 +4,7 @@ import { getSourceHealthSummary, getLatestBatchId } from "../repositories/canary
 import { getHkFilingCoverage } from "../repositories/hkFinancialsRepository.js";
 import { getProviderCallStats } from "../repositories/llmAuditRepository.js";
 import { getFactGuardStats } from "../repositories/factGuardRepository.js";
-import { quotaStatus } from "../services/quotaService.js";
+import { quotaStatus } from "../services/quota.js";
 
 const fmpKey = () => process.env.FMP_API_KEY;
 const finnhubKey = () => process.env.FINNHUB_API_KEY;

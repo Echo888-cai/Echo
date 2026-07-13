@@ -1,8 +1,8 @@
 import { normalizeTicker } from "./data.js";
 import { detectMarket } from "./market.js";
 import { getUsFilings } from "./secFilings.js";
-import { searchHkexAllAnnouncements } from "./server/services/hkFilingsPipeline.js";
-import { searchCninfoReportsAnnouncements } from "./server/services/cnFilingsPipeline.js";
+import { searchHkexAllAnnouncements } from "../apps/worker/src/pipelines/hkFilingsPipeline.js";
+import { searchCninfoReportsAnnouncements } from "../apps/worker/src/pipelines/cnFilingsPipeline.js";
 
 /**
  * 统一出口：获取最近公告。

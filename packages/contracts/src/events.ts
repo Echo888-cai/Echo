@@ -6,11 +6,6 @@
 import { z } from "zod";
 import { okEnvelope } from "./envelope.js";
 
-export const eventsDigestQuerySchema = z.object({
-  slot: z.enum(["premarket", "afterhours"]).optional(),
-  tickers: z.string().optional()
-});
-
 export const digestSchema = z.object({
   generatedAt: z.string(),
   slot: z.enum(["premarket", "afterhours"]),

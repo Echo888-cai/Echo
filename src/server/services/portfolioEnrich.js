@@ -7,7 +7,7 @@
 import { getMarketSnapshot } from "../../marketData.js";
 import { marketCurrency } from "../../market.js";
 import { getCompanyByTickerComplete } from "../repositories/companyRepository.js";
-import { listRules } from "../repositories/watchRules.js";
+import { listRules } from "../repositories/watchRulesRepository.js";
 import { evaluateRule } from "./falsifyRules.js";
 import { getNextEarnings } from "./earningsCalendar.js";
 import { beijingDate } from "../utils/time.js";

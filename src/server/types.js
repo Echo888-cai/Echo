@@ -1,7 +1,7 @@
 /**
  * D1：跨模块传递的核心数据结构的类型声明（只声明形状，不含运行时代码）。
  *
- * 这些对象在服务端到处流动（agentService → chatOrchestrator → 前端 JSON），
+ * 这些对象在服务端到处流动（agent → chatOrchestrator → 前端 JSON），
  * 字段是逐次功能迭代里长出来的，从没有一个地方能一眼看全形状。这个文件不是新增行为，
  * 只是把已经存在的隐式契约写成 JSDoc typedef，供其他文件 `@param {import("../types.js").X}`
  * 引用，换取编辑器补全 + `checkJs` 静态检查（jsconfig.json）。
@@ -103,7 +103,7 @@
  */
 
 /**
- * dataSources.js collectDataSources() 的返回形状；也是 agentService.js runAgent() 结果里
+ * dataSources.js collectDataSources() 的返回形状；也是 agent.js runAgent() 结果里
  * result.marketSnapshot / financialsData / newsSnapshot / filingsData / estimatesData 的来源。
  * @typedef {Object} DataSources
  * @property {MarketSnapshot} marketSnapshot

@@ -12,12 +12,6 @@
 import { z } from "zod";
 import { okEnvelope } from "./envelope.js";
 
-export const watchDeskQuerySchema = z.object({
-  slot: z.enum(["premarket", "afterhours"]).optional(),
-  tickers: z.string().optional(),
-  events: z.string().optional()
-});
-
 export const watchDeskSchema = z.object({
   generatedAt: z.string(),
   slot: z.enum(["premarket", "afterhours"]),
@@ -33,7 +27,6 @@ export const watchDeskSchema = z.object({
 });
 export const watchDeskResponseSchema = okEnvelope(z.object({ desk: watchDeskSchema }));
 
-export const watchStockQuerySchema = z.object({ ticker: z.string() });
 export const watchStockResponseSchema = okEnvelope(
   z.object({ stock: z.record(z.string(), z.unknown()) })
 );

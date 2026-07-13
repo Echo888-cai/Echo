@@ -1,6 +1,6 @@
 import { readJsonBody, sendJson } from "../utils/async.js";
 import { runChat } from "../services/chatOrchestrator.js";
-import { quotaGuard } from "../services/quotaService.js";
+import { quotaGuard } from "../services/quota.js";
 
 export async function handleChatApi(req, res) {
   let payload;

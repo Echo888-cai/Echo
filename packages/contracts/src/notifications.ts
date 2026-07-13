@@ -10,7 +10,7 @@
 import { z } from "zod";
 import { okEnvelope } from "./envelope.js";
 
-/** Mirrors repositories/notifications.js hydrate(). */
+/** Mirrors repositories/notificationsRepository.js hydrate(). */
 export const notificationSchema = z.object({
   id: z.number(),
   kind: z.string(),

@@ -10,7 +10,7 @@
 import { z } from "zod";
 import { okEnvelope } from "./envelope.js";
 
-/** Mirrors repositories/companyProfiles.js listCompanyProfiles() (summary row). */
+/** Mirrors repositories/companyProfilesRepository.js listCompanyProfiles() (summary row). */
 export const profileSummarySchema = z.object({
   ticker: z.string(),
   companyName: z.string(),
@@ -33,7 +33,7 @@ const profileEventSchema = z.object({
   sessionId: z.string().nullable()
 });
 
-/** Mirrors repositories/companyProfiles.js hydrate() (full profile). */
+/** Mirrors repositories/companyProfilesRepository.js hydrate() (full profile). */
 export const companyProfileSchema = z.object({
   ticker: z.string(),
   companyName: z.string(),

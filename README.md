@@ -165,50 +165,11 @@ The public edge is deployment-ready for a single HK/SG VPS: Caddy TLS, loopback-
 
 ## Architecture
 
-Plain Node (single runtime dependency: `better-sqlite3`) and a build-less, framework-less native-ESM front end. No bundler, no transpile step — the browser loads `src/app.js` as a module directly.
+Echo Research is mid-way through a strangler-fig rewrite: **production traffic still runs entirely on the original monolith** (plain Node, single runtime dependency `better-sqlite3`, build-less native-ESM front end — the browser loads `src/app.js` as a module directly, no bundler, no transpile step), while the endgame stack is being assembled alongside it: `apps/web` (React 19 + Vite), `apps/api` (Hono + tRPC, step 2 of the plan), `apps/worker` (first-party filing pipelines today, Temporal workflows at step 4), and `packages/{domain,contracts,db,data-plane,ui}`. One plan document governs the whole migration — no parallel tracks.
 
-```text
-Echo Research
-├── index.html                     # SPA shell (loads src/app.js as an ES module)
-├── server.js                      # Thin HTTP router — only the endpoints the UI uses
-├── src/
-│   ├── app.js                     # Front-end entry: route dispatch + global event delegation
-│   ├── ui/                        # Modular front end (no framework)
-│   │   ├── state.js api.js resolve.js format.js markdown.js
-│   │   ├── shell.js research.js watch.js settings.js portfolio.js
-│   │   └── notifications.js components.js
-│   ├── styles/                    # Layered CSS (00-foundation → 07-brand)
-│   ├── market.js                  # HK/US/CN detection + per-provider symbol mapping
-│   ├── data.js marketData.js financialData.js newsData.js filingData.js
-│   ├── fmpClient.js secFilings.js documentParser.js prompts.js
-│   ├── server/
-│   │   ├── routes/                # chat · discover · companies · research (incl. FTS
-│   │   │                          #   search) · reports · documents · events · portfolio ·
-│   │   │                          #   portraits · watch · notifications · hkFinancials · status
-│   │   ├── services/              # agentService · answerComposer · valuationEngine ·
-│   │   │                          #   financialQuality · webEvidenceService · eventEngine ·
-│   │   │                          #   companyPortrait · discovery · intentClassifier ·
-│   │   │                          #   twoStageChat · scheduler · notifier · riskEngine ·
-│   │   │                          #   hkFilingsPipeline · modelGateway · decisionPanel ·
-│   │   │                          #   factGuard · earningsCalendar · falsifyRules ·
-│   │   │                          #   insiderActivity · historicalValuation · researchReview ·
-│   │   │                          #   dbBackup · …
-│   │   ├── repositories/          # SQLite access (sessions, profiles, portfolio, watch,
-│   │   │                          #   insiderActivity, hkBuyback, historicalValuation,
-│   │   │                          #   factGuardAudit, researchSnapshots, …)
-│   │   ├── schemas/               # structured-output validation
-│   │   └── utils/                 # time anchoring, async, env
-│   ├── data/                      # HK stock seed data
-│   └── db/
-│       ├── migrations/            # numbered, additive SQL migrations (see docs/DATABASE.md)
-│       └── migrate.js             # `PRAGMA user_version`-based migrator, runs on boot
-├── scripts/                       # seed-db, doctor, canary, hk-coverage, one-off migrations
-├── tests/                         # smoke · reliability · phase3/4/6/7 · notifications ·
-│                                  # phase-b/d/ea/g/r/f/p7 (one file per shipped phase)
-└── docs/                          # product, architecture, data-source & plan notes
-```
+See **[docs/PLAN.md](docs/PLAN.md)** for the endgame architecture, every ratified technology decision, and the 7-step execution plan.
 
-The chat route is thin: it orchestrates a single data+evidence pass, a two-stage model call (search-triage → **streamed** answer), and one DB write. Streaming and non-streaming requests share one `finalizeChat` post-processor, so both paths persist and render identically. All answer composition lives in `services/answerComposer.js`; every model call goes through `services/modelGateway.js` (provider priority + fallback).
+The chat route (the core of the monolith) is thin: it orchestrates a single data+evidence pass, a two-stage model call (search-triage → **streamed** answer), and one DB write. Streaming and non-streaming requests share one `finalizeChat` post-processor, so both paths persist and render identically. All answer composition lives in `services/answerComposer.js`; every model call goes through `services/modelGateway.js` (provider priority + fallback).
 
 ---
 
@@ -218,7 +179,9 @@ The chat route is thin: it orchestrates a single data+evidence pass, a two-stage
 npm install        # dependencies
 npm run seed       # seed the local SQLite DB
 npm run dev        # run → http://127.0.0.1:4173
-npm test           # smoke + reliability + phase/notification suites
+npm test           # all 42 domain-named test files
+npm run lint       # JavaScript + worker pipelines + TypeScript workspaces
+npm run typecheck:workspaces
 
 # Optional (HK first-party filing pipeline): Chinese-font CMap tables for the
 # HKEX results-announcement PDFs (Adobe-CNS1 CID, no ToUnicode).
@@ -228,7 +191,7 @@ pip3 install --user pdfminer.six
 The backend has **no hot reload** — after editing `src/server/**` or `src/*.js`, restart the node process. For isolated local runs against a throwaway DB:
 
 ```bash
-LUVIO_DB_PATH=$TMPDIR/x.db PORT=4199 node server.js
+ECHO_DB_PATH=$TMPDIR/x.db PORT=4199 node server.js
 ```
 
 ---
@@ -268,7 +231,7 @@ SERPAPI_API_KEY=
 
 **Working:** A/H/US research conversation · dual-listing routing · discovery layer (screener + macro) · market-aware quotes & first-party filings · evidence provenance · data-grounding and confidence · valuation range and odds · analyst consensus · structured streaming answers · event digest · scheduler and notification centre · earnings/falsification closed loops · factGuard shadow audit · research scorecard · portfolio and watch desk · company portraits · Markdown and branded PNG export · verified backups · responsive light/dark UI · invite-only authentication · per-user isolation, quotas and usage · onboarding, preferences and feedback · hardened single-VPS deployment assets.
 
-**Next:** run the free invite-only beta on an actual HK/SG VPS · obtain commercial licenses for quote/news data before charging or public promotion · promote factGuard from `shadow` only after real misclassification metrics support it · prioritize P15/P16/R13–R16 and PWA from observed beta feedback. See the plan docs below.
+**Next:** execute the single 1→7 plan in [docs/PLAN.md](docs/PLAN.md), strictly in order: extract the domain core, rebuild the backend on Hono + tRPC, cut the database over to Postgres, orchestrate pipelines with Temporal, finish the React + PWA experience, retire the old chassis, then deepen the financial engine and commercialize.
 
 ### Commercialization boundary
 
@@ -278,10 +241,8 @@ The application architecture is ready for a small commercial beta, but the bundl
 
 ## Documentation
 
-- **[主计划（愿景 + 分阶段路线图 + 历史记录 + 接手协议）](docs/PLAN.md)** ← start here to contribute
-- [Architecture](docs/ARCHITECTURE.md) · [Database](docs/DATABASE.md) · [Data Pipeline](docs/DATA_PIPELINE.md)
-- [Data Source Strategy](docs/DATA_SOURCE_STRATEGY.md) · [Product Requirements](docs/PRD.md)
-- [AI Integration](docs/AI_INTEGRATION.md) · [GitHub Workflow](docs/GITHUB_WORKFLOW.md)
+- **[终局计划（唯一计划：终局架构 + 已拍板决策 + 1→7 执行步骤 + 宪法红线）](docs/PLAN.md)** ← start here
+- [Deploy（当前生产底盘的部署运维手册）](docs/DEPLOY.md)
 
 ---
 

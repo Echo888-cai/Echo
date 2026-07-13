@@ -12,12 +12,10 @@
 
 import { RESEARCH_STATUS_VALUES, KEY_DRIVER_NAMES, RESEARCH_STATUS_LABELS } from "../schemas/agentPanel.js";
 import { hasUserContext, missingContextFields } from "./userContext.js";
-import { fmtPercent, missing, compactNumberServer, quoteStatusFor } from "../utils/format.js";
+import { fmtPercent, compactNumberServer, quoteStatusFor } from "../utils/format.js";
 import { buildRiskRadar } from "./riskEngine.js";
 
-const STATUS_PRESENT = "实时/盘中";
 const STATUS_DELAYED = "延迟/当日";
-const STATUS_HISTORY = "收盘/历史";
 const STATUS_MISSING = "缺失";
 
 /** Quick helper to make a single evidence entry. */
@@ -143,7 +141,7 @@ function buildKeyDrivers({ hasPrice, hasFinancials, hasFilings, hasEstimates, ne
  * @param {string[]} [input.filings] - imported filings
  */
 export function buildDecisionPanel(input) {
-  const { question = "", company, userContext = null, marketSnapshot = null, newsSnapshot = null, financialsData = null, filingsData = null, estimatesData = null, modelPanel = null, fullResearch = "", filings = [] } = input || {};
+  const { company, userContext = null, marketSnapshot = null, newsSnapshot = null, financialsData = null, filingsData = null, estimatesData = null, modelPanel = null, fullResearch = "", filings = [] } = input || {};
   const profile = company || { ticker: "unknown.HK", nameZh: "研究对象" };
   const hasPrice = marketSnapshot?.providerStatus === "ok" && marketSnapshot.price;
   const newsAvailable = newsSnapshot?.providerStatus === "ok" && (newsSnapshot.articles || []).length > 0;
@@ -263,7 +261,7 @@ export function buildDecisionPanel(input) {
   if (!modelPanel || typeof modelPanel !== "object") return basePanel;
   return {
     ...basePanel,
-    ...pickModelOverrides(modelPanel, basePanel),
+    ...pickModelOverrides(modelPanel),
     price: { ...basePanel.price, ...(modelPanel.price || {}) },
     metrics: Array.isArray(modelPanel.metrics) ? modelPanel.metrics.slice(0, 3) : basePanel.metrics,
     keyDrivers: normalizeKeyDrivers(modelPanel.keyDrivers, { hasPrice, hasFinancials, hasFilings, hasEstimates, newsAvailable, financialsData, marketSnapshot, profile, newsSnapshot, filingsData }),
@@ -276,7 +274,7 @@ export function buildDecisionPanel(input) {
   };
 }
 
-function pickModelOverrides(model, base) {
+function pickModelOverrides(model) {
   // "confidence" 特意不在这个白名单里：它已经在 buildDecisionPanel 里经过
   // reconcileConfidence() 核对过（模型自称的置信度不能超过真实数据接地程度支持的上限），
   // 这里再原样透传模型的 confidence 会把那道护栏架空——这正是过去"模型说高就是高，
@@ -329,14 +327,14 @@ export function reconcileConfidence(modelConfidence, groundedConfidence) {
   };
 }
 
-function deriveResearchStatus({ hasPrice, hasFinancials, hasFilings, hasEstimates, newsAvailable, userContext }) {
+function deriveResearchStatus({ hasPrice, hasFinancials, hasFilings, hasEstimates, newsAvailable: _newsAvailable, userContext }) {
   if (!hasPrice && !hasFilings && !hasFinancials) return "data_missing";
   if (!hasFinancials && !hasFilings) return "research_more";
   if (userContext && hasUserContext(userContext) && (!hasFinancials || !hasEstimates)) return "research_more";
   return "watch";
 }
 
-function composeOneLineView({ hasPrice, hasFinancials, hasFilings, hasEstimates, newsAvailable, profile, userContext }) {
+function composeOneLineView({ hasPrice, hasFinancials, hasFilings: _hasFilings, hasEstimates, newsAvailable: _newsAvailable, profile, userContext }) {
   const name = profile.nameZh || profile.ticker;
   if (hasFinancials) {
     return `${name} 已有财务数据，${hasEstimates ? "有一致预期" : "缺一致预期"}；${userContext && hasUserContext(userContext) ? "已记录用户持仓" : "缺用户持仓上下文"}。`;
@@ -347,7 +345,7 @@ function composeOneLineView({ hasPrice, hasFinancials, hasFilings, hasEstimates,
   return `${name} 行情和财务数据均不可用，无法形成投资结论。`;
 }
 
-function composeAction({ hasPrice, hasFinancials, hasFilings, hasEstimates, newsAvailable, userContext }) {
+function composeAction({ hasPrice, hasFinancials, hasFilings, hasEstimates, newsAvailable: _newsAvailable, userContext: _userContext }) {
   if (hasFinancials && hasEstimates) return "等财报/公告验证，等待分批信号";
   if (hasFilings) return "等待财务质量与回购数据验证";
   if (hasPrice) return "补齐财报解析与一致预期后再判断";

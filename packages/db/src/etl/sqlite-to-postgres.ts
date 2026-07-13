@@ -1,12 +1,12 @@
 /**
- * sqlite-to-postgres.ts — R-1 ETL proof: read the running app's luvio.db (SQLite,
+ * sqlite-to-postgres.ts — R-1 ETL proof: read the running app's echo.db (SQLite,
  * read-only) and load it into the local `echo_dev` Postgres database defined by the
  * Drizzle schema in ../schema/*.
  *
  * Idempotent: every table is upserted (ON CONFLICT DO UPDATE on the primary key, or
  * DO NOTHING for pure append-only logs), so re-running this script is safe.
  *
- * This script does NOT modify src/db/** or luvio.db — it opens the SQLite file in
+ * This script does NOT modify src/db/** or echo.db — it opens the SQLite file in
  * readonly mode and only writes to the separate Postgres database.
  */
 import Database from "better-sqlite3";
@@ -15,7 +15,7 @@ import * as schema from "../schema/index.js";
 import { sql } from "drizzle-orm";
 import { fileURLToPath } from "node:url";
 
-const SQLITE_PATH = process.env.LUVIO_DB_PATH || fileURLToPath(new URL("../../../../luvio.db", import.meta.url));
+const SQLITE_PATH = process.env.ECHO_DB_PATH || fileURLToPath(new URL("../../../../echo.db", import.meta.url));
 
 const { db, client } = createDb();
 const sqliteDb = new Database(SQLITE_PATH, { readonly: true });

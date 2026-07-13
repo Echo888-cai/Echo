@@ -8,7 +8,7 @@
  *     021_remove_research_session_fts.sql; the feature was decommissioned, so it is
  *     intentionally NOT reconstructed here)
  *   018_multiuser.sql (user_id columns + company_profiles PK rebuild to (user_id, ticker))
- *   src/server/repositories/companyProfiles.js, researchSessions.js,
+ *   src/server/repositories/companyProfilesRepository.js, researchSessions.js,
  *     researchSnapshotsRepository.js for JSON column shapes.
  */
 import { pgTable, text, integer, bigserial, numeric, timestamp, jsonb, index, primaryKey, date } from "drizzle-orm/pg-core";

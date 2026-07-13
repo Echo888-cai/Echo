@@ -9,22 +9,10 @@
 
 import { RESEARCH_STATUS_LABELS } from "../schemas/agentPanel.js";
 import { companyByTicker } from "../../data.js";
+import { beijingMinute } from "../utils/time.js";
 
 const DISCLAIMER =
   "\n\n---\n> 本报告仅供研究学习，不构成投资建议。请用公司原始公告核验关键数据，独立做出决定。";
-
-function beijingNow() {
-  try {
-    const parts = new Intl.DateTimeFormat("zh-CN", {
-      timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
-      hour: "2-digit", minute: "2-digit", hour12: false
-    }).formatToParts(new Date());
-    const pick = (t) => parts.find((p) => p.type === t)?.value || "";
-    return `${pick("year")}-${pick("month")}-${pick("day")} ${pick("hour")}:${pick("minute")}`;
-  } catch {
-    return "";
-  }
-}
 
 function clean(value) {
   return String(value || "").replace(/[。；;,\s]+$/g, "").trim();
@@ -79,7 +67,7 @@ export function composeReport(panel) {
 
   sections.push([
     `# ${name}（${panel.ticker || ""}）深度研究`,
-    `> 北京时间 ${beijingNow()} · 研究状态：${statusLabel} · 置信度：${panel.confidence || "中"}`
+    `> 北京时间 ${beijingMinute()} · 研究状态：${statusLabel} · 置信度：${panel.confidence || "中"}`
   ].join("\n"));
 
   sections.push([

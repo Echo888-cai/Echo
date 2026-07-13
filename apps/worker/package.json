@@ -3,20 +3,5 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "./src/main.ts",
-  "scripts": {
-    "dev": "tsx src/main.ts",
-    "start": "tsx src/main.ts",
-    "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/*.test.ts"
-  },
-  "dependencies": {
-    "bullmq": "^5.34.0",
-    "ioredis": "^5.4.2"
-  },
-  "devDependencies": {
-    "@types/node": "^26.1.0",
-    "tsx": "^4.19.2",
-    "typescript": "^6.0.3"
-  }
+  "description": "一手 filing 管道（CNINFO/HKEX PDF 抽取）的家：src/pipelines/ 被旧底盘生产代码直接 import，是共享资产。终局计划第 4 步在此落地 Temporal worker（BullMQ 壳已按终局计划删除，见 docs/PLAN.md §3）。"
 }

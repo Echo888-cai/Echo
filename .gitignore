@@ -1,13 +1,14 @@
 .env
 .DS_Store
 node_modules/
-luvio.db
-luvio.db-*
+echo.db
+echo.db-*
 backups/
 *.log
 .cache/
 dist/
 coverage/
+packages/contracts/openapi.json
 
 # local preview config
 .claude/

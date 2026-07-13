@@ -10,8 +10,6 @@
 import { z } from "zod";
 import { okEnvelope } from "./envelope.js";
 
-export const companySearchQuerySchema = z.object({ q: z.string().optional() });
-
 export const companySearchResultSchema = z.object({
   ticker: z.string(),
   nameZh: z.string().nullable(),
@@ -25,11 +23,6 @@ export const companySearchResponseSchema = okEnvelope(
   z.object({ companies: z.array(companySearchResultSchema), total: z.number() })
 );
 
-export const companyVerifyQuerySchema = z.object({
-  ticker: z.string().optional(),
-  q: z.string().optional()
-});
-
 export const companyVerifyResponseSchema = okEnvelope(
   z.object({
     status: z.enum(["verified", "not_found", "error"]),
@@ -37,8 +30,6 @@ export const companyVerifyResponseSchema = okEnvelope(
     suggestions: z.array(z.object({ ticker: z.string(), name: z.string() })).optional()
   })
 );
-
-export const companyResolveQuerySchema = z.object({ q: z.string().optional() });
 
 export const resolvedCompanySchema = z.object({
   ticker: z.string(),

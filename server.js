@@ -32,7 +32,7 @@ import { handleNotificationsList, handleNotificationsUnread, handleNotifications
 import { handleHkFinancialsList, handleHkFinancialsIngest } from "./src/server/routes/hkFinancials.js";
 import { handleAuthLogin, handleAuthRegister, handleAuthLogout, handleAuthMe, handleAuthInvite } from "./src/server/routes/auth.js";
 import { handlePreferencesGet, handlePreferencesUpdate, handleFeedbackCreate } from "./src/server/routes/preferences.js";
-import { resolveRequestUser } from "./src/server/services/authService.js";
+import { resolveRequestUser } from "./src/server/services/auth.js";
 import { startScheduler } from "./src/server/services/scheduler.js";
 import { enterRequestUser } from "./src/server/services/requestContext.js";
 
@@ -173,7 +173,7 @@ const server = createServer(async (req, res) => {
   }
 
   // ── Static files（E11 白名单，红线 19）────────────────────
-  // 名单内的真实文件才发；名单外（含 /.env、/luvio.db、docs/、src/server/**）与
+  // 名单内的真实文件才发；名单外（含 /.env、/echo.db、docs/、src/server/**）与
   // 不存在的路径一律回 SPA 壳——对外不区分"被拒"和"不存在"，不泄露文件布局。
   if (method === "GET" || method === "HEAD") {
     const pathname = normalizedPathname(url);
@@ -207,6 +207,6 @@ process.on("uncaughtException", (err) => console.error("[uncaughtException]", er
 
 server.listen(port, "127.0.0.1", () => {
   console.log(`Echo Research is running at http://127.0.0.1:${port}`);
-  // 定时任务（盘前速报/触线巡检）随服务启动；LUVIO_DISABLE_SCHEDULER=1 可关。
+  // 定时任务（盘前速报/触线巡检）随服务启动；ECHO_DISABLE_SCHEDULER=1 可关。
   startScheduler();
 });

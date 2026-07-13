@@ -3,9 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "R-0 contract layer: zod schemas + OpenAPI snapshot describing Echo Research's current HTTP API (src/server/routes/*.js). Descriptive only — not a spec for future behavior.",
+  "description": "Runtime Zod contracts for the Echo Research API.",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
     "generate-openapi": "tsx src/generate-openapi.ts",
     "test": "tsx --test src/contract-tests/*.test.ts"
   },
@@ -14,7 +15,7 @@
     "@asteasolutions/zod-to-openapi": "^7.3.0"
   },
   "devDependencies": {
-    "typescript": "^5.7.2",
+    "typescript": "^6.0.3",
     "tsx": "^4.19.2"
   }
 }

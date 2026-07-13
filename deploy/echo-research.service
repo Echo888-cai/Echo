@@ -16,8 +16,8 @@ ExecStart=/usr/bin/node server.js
 Restart=always
 RestartSec=3
 # 生产环境标记：信任 Caddy 的 X-Forwarded-For（限速按真实客户端 IP），cookie 带 Secure
-Environment=LUVIO_TRUST_PROXY=1
-Environment=LUVIO_BETA_MODE=1
+Environment=ECHO_TRUST_PROXY=1
+Environment=ECHO_BETA_MODE=1
 Environment=NODE_ENV=production
 # 资源护栏（2C4G VPS 够用；SQLite 单进程，不需要更多）
 MemoryMax=1500M

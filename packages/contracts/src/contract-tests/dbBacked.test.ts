@@ -15,7 +15,7 @@
  *     snapshots + news for each tracked ticker (slow, network-dependent).
  *   - /api/hk-financials/ingest                                 → scrapes HKEX PDFs.
  *   - /api/auth/login, /register, /invite                       → require
- *     multi-user mode (LUVIO_AUTH_DISABLED=1 keeps this suite in legacy mode);
+ *     multi-user mode (ECHO_AUTH_DISABLED=1 keeps this suite in legacy mode);
  *     already covered by tests/phase-u1.mjs.
  */
 import { test, before, after } from "node:test";

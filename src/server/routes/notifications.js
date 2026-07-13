@@ -8,7 +8,7 @@
  */
 
 import { readJsonBody, sendOk, sendError } from "../utils/async.js";
-import { listNotifications, unreadCount, markRead, markAllRead } from "../repositories/notifications.js";
+import { listNotifications, unreadCount, markRead, markAllRead } from "../repositories/notificationsRepository.js";
 import { notify, telegramConfigured } from "../services/notifier.js";
 import { schedulerStatus } from "../services/scheduler.js";
 import { beijingMinute } from "../utils/time.js";

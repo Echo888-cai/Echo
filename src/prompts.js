@@ -1,4 +1,4 @@
-export const PROMPT_VERSION = "luvio-prompts-v0.6";
+export const PROMPT_VERSION = "echo-prompts-v0.6";
 
 /**
  * 研究纪律宪法 —— 所有提示词共享的底层纪律（借鉴顶级投研范式）。
