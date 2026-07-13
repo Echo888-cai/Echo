@@ -46,6 +46,25 @@ export type PortfolioPosition = z.infer<typeof portfolioPositionSchema>;
 export type PortfolioReview = z.infer<typeof portfolioReviewSchema>;
 export type PortfolioSnapshot = z.infer<typeof portfolioSnapshotRowSchema>;
 export type PortfolioUpsertRequest = z.infer<typeof portfolioUpsertRequestSchema>;
+export type CompanySearchResult = z.infer<typeof companySearchResultSchema>;
+export type CompanyVerifyResult = z.infer<typeof companyVerifyResponseSchema>["data"];
+export type ResolvedCompany = z.infer<typeof resolvedCompanySchema>;
+export type CompanyProfile = z.infer<typeof companyProfileSchema>;
+export type TickerScorecard = z.infer<typeof tickerScorecardSchema>;
+// watch.js's routes/services build cards/stock from live market data + best-effort
+// portrait joins — the contract itself types them as z.record(string, unknown) (R-0
+// scope: loose, not field-exact), so the frontend treats them the same way rather
+// than pretending to a precision the contract doesn't have.
+export type WatchCard = Record<string, any>;
+export type WatchStock = Record<string, any>;
+export interface WatchDesk {
+  generatedAt: string;
+  slot: "premarket" | "afterhours";
+  cards: WatchCard[];
+  counts: { falsified: number; atRisk: number; intact: number; total: number };
+  failures: unknown[];
+  partial?: boolean;
+}
 
 /** Thrown for any non-2xx response; `.message` matches the legacy api.js contract. */
 export class ApiError extends Error {
@@ -205,6 +224,67 @@ export const portfolioApi = {
     return request<{ deleted: true; ticker: string }>(`/api/portfolio?ticker=${encodeURIComponent(ticker)}`, {
       method: "DELETE"
     });
+  }
+};
+
+/** src/server/routes/companies.js — company search/verify/resolve, used by resolve.ts. */
+export const companiesApi = {
+  async search(q: string) {
+    return request<{ companies: CompanySearchResult[]; total: number }>(
+      `/api/companies/search?q=${encodeURIComponent(q)}`,
+      { method: "GET" }
+    );
+  },
+  async verify(ticker: string) {
+    return request<CompanyVerifyResult>(`/api/companies/verify?ticker=${encodeURIComponent(ticker)}`, {
+      method: "GET"
+    });
+  },
+  async resolve(q: string) {
+    return request<{ company: ResolvedCompany | null; reason?: string; name?: string }>(
+      `/api/companies/resolve?q=${encodeURIComponent(q)}`,
+      { method: "GET" }
+    );
+  }
+};
+
+/** src/server/routes/watch.js — watch desk (list) + per-stock detail. */
+export const watchApi = {
+  async desk(events = true) {
+    return request<{ desk: WatchDesk }>(`/api/watch/desk${events ? "" : "?events=0"}`, { method: "GET" });
+  },
+  async stock(ticker: string) {
+    return request<{ stock: WatchStock }>(`/api/watch/stock?ticker=${encodeURIComponent(ticker)}`, {
+      method: "GET"
+    });
+  },
+  async track(ticker: string, name?: string) {
+    return request<{ tracked: true; ticker: string }>("/api/watch/track", {
+      method: "POST",
+      body: JSON.stringify({ ticker, name })
+    });
+  },
+  async untrack(ticker: string) {
+    return request<{ untracked: true; ticker: string }>("/api/watch/untrack", {
+      method: "POST",
+      body: JSON.stringify({ ticker })
+    });
+  }
+};
+
+/** src/server/routes/portraits.js — company profile (画像) + per-ticker research review. */
+export const portraitsApi = {
+  async profile(ticker: string) {
+    return request<{ profile: CompanyProfile; markdown: string }>(
+      `/api/company/profile?ticker=${encodeURIComponent(ticker)}`,
+      { method: "GET" }
+    );
+  },
+  async review(ticker: string) {
+    return request<{ ticker: string; scorecard: TickerScorecard }>(
+      `/api/company/review?ticker=${encodeURIComponent(ticker)}`,
+      { method: "GET" }
+    );
   }
 };
 

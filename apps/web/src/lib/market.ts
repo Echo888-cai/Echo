@@ -16,3 +16,10 @@ export function detectMarket(ticker: string | null | undefined): Market {
   if (/^[A-Z][A-Z.]{0,6}$/.test(t)) return "US";
   return "HK";
 }
+
+export function marketLabel(ticker: string | null | undefined): "美股" | "A股" | "港股" {
+  const m = detectMarket(ticker);
+  if (m === "US") return "美股";
+  if (m === "CN") return "A股";
+  return "港股";
+}

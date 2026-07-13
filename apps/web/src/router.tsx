@@ -8,6 +8,7 @@ import { LoginPage } from "./routes/login";
 import { PlaceholderPage } from "./routes/placeholder";
 import { SettingsPage } from "./routes/settings";
 import { PortfolioPage } from "./routes/portfolio";
+import { WatchListPage, StockDetailPage } from "./routes/watch";
 
 const rootRoute = createRootRoute({
   component: () => <Outlet />
@@ -28,16 +29,17 @@ const loginRoute = createRoute({
 const watchRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/watch",
-  component: () => <PlaceholderPage label="看盘" />
+  component: WatchListPage
 });
 
-// Per-ticker stock detail (watch.js's #/watch/:ticker) — still a stub until
-// the watch-page slice lands; wired up now so portfolio cards have somewhere
-// real to link to instead of a dead route.
+// Per-ticker stock detail (watch.js's #/watch/:ticker).
 const watchTickerRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/watch/$ticker",
-  component: () => <PlaceholderPage label="个股" />
+  component: () => {
+    const { ticker } = watchTickerRoute.useParams();
+    return <StockDetailPage ticker={ticker} />;
+  }
 });
 
 const portfolioRoute = createRoute({
