@@ -7,6 +7,7 @@ import { insertCanaryResult, getSourceHealthSummary, getLatestBatchId, getLatest
 import { upsertHkFilingIngestLog, getHkFilingCoverage } from "../src/server/repositories/hkFinancialsRepository.js";
 import { classifyIngestStatus, parseGeneralAnnouncements } from "../apps/worker/src/pipelines/hkFilingsPipeline.js";
 import { handleStatusApi } from "../src/server/routes/status.js";
+import { getCompanyByTickerComplete } from "../src/server/repositories/companyRepository.js";
 
 let passed = 0;
 let failed = 0;
@@ -102,6 +103,16 @@ console.log("[5] /api/status：canary + hkFilingCoverage 字段存在，不因�
   check("canary.sources 是数组", Array.isArray(body?.canary?.sources));
   check("响应里有 hkFilingCoverage 字段", body && "hkFilingCoverage" in body);
   check("hkFilingCoverage.totalHk 是数字", typeof body?.hkFilingCoverage?.totalHk === "number");
+}
+
+console.log("[6] companyRepository：三市场代码规范化（canary 只能走唯一仓储接口）");
+{
+  const db = getDb();
+  db.prepare(`INSERT INTO companies (ticker, name_zh) VALUES (?, ?)`).run("AAPL", "苹果");
+  db.prepare(`INSERT INTO companies (ticker, name_zh) VALUES (?, ?)`).run("600519.SS", "贵州茅台");
+  check("美股裸代码不被错误追加 .HK", getCompanyByTickerComplete("AAPL")?.ticker === "AAPL");
+  check("A 股裸代码能推断交易所后缀", getCompanyByTickerComplete("600519")?.ticker === "600519.SS");
+  check("港股裸代码仍正确补零", getCompanyByTickerComplete("700")?.ticker === "0700.HK");
 }
 
 console.log(`\nG-1: ${passed} passed, ${failed} failed`);

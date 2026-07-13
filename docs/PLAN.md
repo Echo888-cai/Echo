@@ -40,8 +40,8 @@ apps/
              盘前速报 / 备份 / 证伪核对 = Cron Workflow；一手管道代码住这里
 
 packages/
-├── domain     纯函数领域核心：估值/财务质量/证伪/factGuard/答案编排/事件分级
-│              零框架依赖、decimal 语义、100% 单测——十年后在任何运行时原样执行
+├── domain     TypeScript 领域门面：身份/意图/证伪/factGuard/答案编排/事件分级
+│              零框架依赖，只表达业务规则；所有金融数值经 finance-core，不自行算钱
 ├── contracts  zod schema 单一源 → tRPC procedure input + OpenAPI 导出 + 契约测试
 ├── db         Drizzle + PostgreSQL：结构化 schema、NUMERIC、RLS 兜底、
 │              双时态财务仓库（valid_time + knowledge_time，重述不覆盖）
@@ -49,13 +49,17 @@ packages/
 │              + 授权元数据路由（未授权源商用环境不可选）+ 质量守卫入库检查
 └── ui         design tokens + 组件；品牌资产的唯一来源
 
+crates/
+└── finance-core  Rust 金融数值内核：Money/Currency/Ratio、估值、组合与回测原语
+                  rust_decimal、无二进制浮点、黄金向量；经原生绑定只暴露窄 API
+
 基础设施：托管 Postgres（HK 区，多可用区 + PITR）· Temporal Cloud ·
 对象存储（备份/文档）· OTel 全链路 → 托管可观测平台 · IaC · CI/CD
 ```
 
 四个结构性的干净（技术美感的定义，验收时对照）：
 
-1. **领域核心零依赖**——`packages/domain` 不 import 数据库、HTTP、任何框架；
+1. **领域规则零框架、数值内核强类型**——`packages/domain` 不碰 IO，`finance-core` 不接受 JS `Number` 金额；
 2. **契约单一源**——端与端之间只有可 diff 的 zod schema，没有口头协议；
 3. **数据资产双时态**——系统永远记得"当时知道什么"，判断可复盘、可回测；
 4. **失败有形态**——每层降级行为声明式（诚实说"未核到"，不编数字），被测试演练过。
@@ -66,15 +70,15 @@ packages/
 
 | 决策 | 结论 | 一句话理由 / 被否决项 |
 |---|---|---|
-| 语言 | TypeScript 全栈 | 契约共享同语言最优雅；否决 Java/Go 重写 |
+| 语言 | **TypeScript 产品/控制面 + Rust 金融数值内核** | React、API、工作流、供应商与 LLM 需要迭代速度；金额、比率、估值、组合和回测需要十进制定点、强类型与跨运行时确定性。否决全栈 Rust（产品层收益不足），也否决 JS `Number` 承载金融计算 |
 | HTTP/RPC | **Hono + tRPC** | fetch-standard、零装饰器仪式、zod 直接复用、端到端类型推导；**否决 NestJS**（三套装饰器概念表达同一件横切逻辑，与"领域核心零框架"矛盾）——NestJS 版 `apps/api` 已于 2026-07-13 删除 |
 | 编排 | **Temporal（Temporal Cloud）** | 多步研究管线需要"从失败步重放"的 durable workflow 语义；**否决 BullMQ**（只有整任务重试）——BullMQ 壳已删除；不自托管 Temporal Server（不设成本约束时托管是更高可靠性） |
 | 数据库 | **托管 PostgreSQL + Drizzle**，AWS RDS 香港区（ap-east-1）多可用区 | RLS 兜底多租户、NUMERIC 承载金融数值、PITR；Drizzle 迁移是可审查纯 SQL；否决 Prisma / ClickHouse / 继续 SQLite（单机文件锁 + 无 RLS 是终局天花板） |
 | 前端 | React 19 + Vite + TanStack Query/Router + zustand（少量本地态） | 类型化契约直连 tRPC；否决 Next.js（登录后应用无 SEO 诉求，SPA+CDN 更简单稳定） |
 | 移动端 | **PWA 是唯一移动形态** | 研究札记场景 = 深度阅读，PWA（离线壳+推送+桌面图标）完整覆盖；**否决原生 App/Expo** |
-| 领域核心载体 | TypeScript + decimal 纪律 | **否决 Rust/WASM**——为不存在的回测需求预付复杂度；真跑批量回测时以"新增 WASM 编译目标"渐进引入 |
+| 领域核心载体 | `packages/domain` TypeScript 规则门面 + `crates/finance-core` Rust 内核；Node 走窄原生绑定，浏览器只消费服务端结果 | Rust 只占领正确性收益最高的数值边界；不在浏览器复制估值实现，不以 WASM 制造第二执行语义。迁移采用黄金向量双算，等价后删旧实现 |
 | 服务形态 | 模块化单体（api/worker 两个部署单元） | 否决微服务：可预见规模内单体+清晰模块边界更稳定 |
-| 行情数据商采购顺序 | A 股 **东方财富 Choice**（备选恒生聚源）；美股 **Polygon.io**；港股走**延迟行情授权档**（Finnhub/Twelve Data 付费授权，研究型产品不需要 tick 实时，延迟 15 分钟授权成本低一个量级）；自有一手管道永远是财报事实源与交叉验证层 | 免费腾讯/新浪源保留为**非商用环境**的开发兜底，授权路由保证商用环境不可选 |
+| 行情数据商采购顺序 | A 股 **东方财富 Choice**（备选恒生聚源）；美股 **Massive（原 Polygon.io）Business**；港股优先 **Twelve Data Venture/Enterprise 延迟或 EOD 授权档**；美股标准化基本面优先 **Intrinio US Fundamentals**；自有一手管道永远是财报事实源与交叉验证层 | 免费/个人档只留非商用 beta；Massive 已有质量优先适配入口，只有合同明确允许 display/commercial 才可把授权标记切为真 |
 | AI 平台 | modelGateway 独立模块：多供应商路由 + 每用户预算 + 语义缓存；黄金评测集（100–300 题）回归评分 | llm_audit / fact_guard_audit 既有积累直接成为评测基建 |
 | 部署 | 香港区托管云 + IaC；蓝绿发布；expand-contract 迁移法；每月恢复演练 | 环境是代码，不是某台服务器上的手工记忆 |
 
@@ -84,9 +88,9 @@ packages/
 
 ### 1 · 领域核心独立成包
 
-把 `src/server/services/` 里的纯判断逻辑（valuationEngine、financialQuality、falsifyRules、factGuard、answerComposer、eventEngine、companyPortrait、historicalValuation、insiderActivity、earningsCalendar）搬入 `packages/domain`——只搬家不重写，数据经端口注入，核心不碰 IO。旧 `server.js` 改为从 `packages/domain` import，行为零变化。
+把 `src/server/services/` 里的纯判断逻辑（valuationEngine、financialQuality、falsifyRules、factGuard、answerComposer、eventEngine、companyPortrait、historicalValuation、insiderActivity、earningsCalendar）搬入 `packages/domain`——只搬家不重写，数据经端口注入，规则层不碰 IO。同步建立 `crates/finance-core`：先接管 Money/Currency/Ratio、百分比与估值原语，以相同黄金向量和旧实现双算；原生绑定、跨平台构建和生产回滚线齐备后逐个切换，切一个删一个旧数值实现。
 
-**验收**：`npm test` 全绿（旧底盘行为等价）；`packages/domain` 零运行时依赖（package.json dependencies 为空或仅 decimal 库）；领域函数单测覆盖建立。
+**验收**：`npm test` 全绿（旧底盘行为等价）；`packages/domain` 零运行时依赖；`cargo fmt + clippy + test` 全绿；金融金额/比率路径无 JS `Number` 新增使用；TS/Rust 黄金向量逐项等价。
 
 ### 2 · 后端换轨：Hono + tRPC
 
@@ -146,7 +150,7 @@ repositories 以 Drizzle 重写（`packages/db` schema 已有底子）：金额/
 7. **factGuard 升档只认落库的真实误报率**，不认手感。
 8. **组合净值不造历史**——缺日就是断口，不插值不回填。
 9. **UI 改动必须三档视口 × 双主题实跑验收**；动效克制且可关闭。
-10. **金融数值不用浮点承载**——存储与计算 NUMERIC/decimal，浮点只许出现在展示层。
+10. **金融数值不用浮点承载**——存储用 PostgreSQL NUMERIC，计算用 Rust `rust_decimal`；JS `Number` 只许存在于尚未迁完的旧实现和展示边界，且每迁一处必须删除旧实现。
 11. **canary 与真实数据体检不进 CI**——CI 无 key、不烧配额。
 12. **任何时刻主干可发布**——领域逻辑只搬家不重写；每步有回滚线。
 
@@ -161,12 +165,13 @@ repositories 以 Drizzle 重写（`packages/db` schema 已有底子）：金额/
 | `apps/worker` | 一手 filing 管道（CNINFO/HKEX）住在 `src/pipelines/`，**旧底盘生产代码直接 import 它们**（这是共享资产不是遗留物）；BullMQ 壳已删除，Temporal 落地于第 4 步 |
 | `apps/api` | 已删除（原 NestJS 版）。第 2 步以 Hono + tRPC 重生 |
 | `packages/domain` | 第 1 步进行中：估值、财务质量、风险、证伪、factGuard、研究复盘、金融格式化、业绩惊喜与历史估值分位已有唯一实现；零运行时依赖、无数据库/HTTP/环境 IO，并有架构边界测试。下一动作继续拆出答案编排、事件分级与画像蒸馏的纯核心 |
+| `crates/finance-core` | 第 1 步已立 Rust 数值内核：固定 Rust 1.85 工具链，`rust_decimal`、Money/Currency、业绩 surprise、倍数估值与每股价值原语；fmt/clippy/test 已进入门禁。当前仍处黄金向量阶段，未切生产调用，避免原生绑定未完成时制造部署风险 |
 | `packages/contracts` | zod 单一源 + OpenAPI 导出 + 契约测试（测试挂在旧 server.js 上跑，第 2 步起双跑） |
 | `packages/db` | Drizzle + Postgres schema（含双时态财务表）+ ETL 脚本已有底子，未切流 |
 | `packages/data-plane` | 四端口适配器矩阵 + 授权路由 + 质量守卫已落地（曾当场抓到 A 股行情时间戳真实 bug） |
 | `packages/ui` | design tokens 已从旧 CSS 机械提取（数值逐字节一致） |
 | 工程治理基线 | 2026-07-13 完成：历史计划/ADR、废弃 NestJS/BullMQ 骨架、一次性脚本、生成物与零引用实现已删除；仓储/服务命名统一；重复 HTTP/时间/意图实现已收敛；路由与公司解析业务边界已纠正 |
-| 测试门禁 | `npm test` 自动运行 40 个旧底盘集成测试 + 3 个 `packages/domain` 单元/架构测试；lint 零 warning；旧底盘与全部 workspace 都进入 typecheck；契约测试与 React build 进入 CI |
+| 测试门禁 | `npm test` 自动运行 41 个 JavaScript 测试套件、`packages/domain` 单元/架构测试与 Rust finance-core 测试；lint 零 warning；旧底盘与全部 workspace 都进入 typecheck；契约测试与 React build 进入 CI |
 
 ---
 
@@ -178,6 +183,7 @@ npm run seed               # 建/重置本地 SQLite 种子库
 npm run dev                # 旧底盘 → http://127.0.0.1:4173（后端无热重载，改完重启）
 npm test                   # 全量门禁，必须 EXIT=0 再提交
 npm run lint && npm run typecheck && npm run typecheck:workspaces
+npm run lint:rust && npm run test:rust
 npm test --workspace @echo/contracts
 npm run build --workspace @echo/web
 npm run doctor             # 能力体检；npm run canary 真实数据体检（不进 CI）

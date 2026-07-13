@@ -47,7 +47,7 @@ function extractFinalPayload(res) {
   try { return JSON.parse(text); } catch { return null; }
 }
 
-console.log(`\nfactGuard 影子模式样本 — FACT_GUARD_MODE=${process.env.FACT_GUARD_MODE || "shadow"}\n`);
+console.log(`\nfactGuard 样本 — FACT_GUARD_MODE=${process.env.FACT_GUARD_MODE || "full"}\n`);
 
 // 持仓样本需要真实持仓记录，跑之前先写一条（跟真实用户记账走同一张表）。
 upsertPosition("0700.HK", { companyName: "腾讯控股", shares: 100, avgCost: 380 });

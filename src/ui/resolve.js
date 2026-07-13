@@ -1,6 +1,7 @@
 // ── 公司识别与解析：别名表 / 双重上市 / 美股代码 / 意图判定 ──
 import { api } from "./api.js";
 import { isMacroQuestion, isScreenerQuestion } from "./intentPatterns.js";
+import { extractHkTicker, extractUsTickerToken } from "../../packages/domain/src/companyIdentity.js";
 
 const companyAliases = [
   { pattern: /腾讯控股|腾讯|Tencent/i, ticker: "0700.HK" },
@@ -122,29 +123,12 @@ const US_STOPWORDS = new Set([
 export function resolveUsTicker(text = "") {
   const hit = usAliases.find((item) => item.pattern.test(text));
   if (hit) return { ticker: hit.ticker, name: hit.name };
-  const t = String(text).toUpperCase().trim();
-  // $TICKER or TICKER.US (explicit notation)
-  const m = t.match(/\$([A-Z]{1,5})\b/) || t.match(/\b([A-Z]{1,5})\.US\b/);
-  if (m && !US_STOPWORDS.has(m[1])) return { ticker: m[1], name: m[1] };
-  // Bare uppercase: entire query is the ticker (e.g. "RKLB", "PLTR")
-  if (/^[A-Z]{1,5}$/.test(t) && !US_STOPWORDS.has(t)) return { ticker: t, name: t };
-  // Bare uppercase word embedded in mixed text (e.g. "分析 RKLB 的基本面")。
-  // 但若它后面紧跟另一个拉丁词（"SPACE X"、"OPEN AI"），那是多词公司名的一部分、不是
-  // 代码——不能把 "Space X" 抠成 SPACE（截图里"SPACE SPACE"张冠李戴的根因）。这类多词名
-  // 交给下游权威解析（FMP 名称搜索 + LLM 校验）去查它真实的上市代码，而不是硬猜。
-  const w = t.match(/(?:^|[\s,])([A-Z]{2,5})(?:[\s,.]|$)/);
-  if (w && !US_STOPWORDS.has(w[1])) {
-    const after = t.slice(w.index + w[0].length);
-    if (!/^\s*[A-Za-z]/.test(after)) return { ticker: w[1], name: w[1] };
-  }
-  return null;
+  const ticker = extractUsTickerToken(text, US_STOPWORDS);
+  return ticker ? { ticker, name: ticker } : null;
 }
 
 export function extractTicker(text = "") {
-  const raw = String(text).toUpperCase();
-  const hk = raw.match(/\b(\d{1,5})(?:\.HK|HK)?\b/);
-  if (!hk) return "";
-  return `${hk[1].padStart(4, "0")}.HK`;
+  return extractHkTicker(text);
 }
 
 export function extractAliasTicker(text = "") {

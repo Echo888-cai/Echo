@@ -7,7 +7,7 @@ import {
   normalizeTicker
 } from "../src/data.js";
 import { PROMPT_VERSION, PROMPTS, buildPromptContext, promptNames } from "../src/prompts.js";
-import { marketSnapshotToMarkdown } from "../src/marketData.js";
+import { fetchMassiveQuote, marketSnapshotToMarkdown } from "../src/marketData.js";
 import { newsSnapshotToMarkdown } from "../src/newsData.js";
 import { beijingDate, anchorQueryToDate, hasRelativeTime } from "../src/server/utils/time.js";
 import { buildEvidenceQueries } from "../src/server/services/intentClassifier.js";
@@ -54,6 +54,44 @@ assert.match(
   /实时行情来源：Test/
 );
 assert.match(marketSnapshotToMarkdown({ providerStatus: "missing" }), /尚未接入/);
+
+// Massive（原 Polygon）签约源：Key 必须走 header，且纳秒时间戳正确降为 ISO 毫秒。
+await (async () => {
+  const realFetch = globalThis.fetch;
+  const previousKey = process.env.MASSIVE_API_KEY;
+  process.env.MASSIVE_API_KEY = "test-massive-key";
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, "https://api.massive.com/v2/snapshot/locale/us/markets/stocks/tickers/RKLB");
+    assert.equal(options.headers.Authorization, "Bearer test-massive-key");
+    assert.ok(!String(url).includes("test-massive-key"), "API key must never enter URLs/logs");
+    return {
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        status: "OK",
+        ticker: {
+          day: { o: 80, h: 83, l: 79, c: 81.04, v: 123456 },
+          prevDay: { c: 80 },
+          lastTrade: { p: 81.04 },
+          todaysChange: 1.04,
+          todaysChangePerc: 1.3,
+          updated: 1_605_195_918_306_274_000
+        }
+      })
+    };
+  };
+  try {
+    const snap = await fetchMassiveQuote("RKLB");
+    assert.equal(snap.source, "Massive");
+    assert.equal(snap.price, 81.04);
+    assert.equal(snap.previousClose, 80);
+    assert.match(snap.asOf, /^2020-11-12T/);
+  } finally {
+    globalThis.fetch = realFetch;
+    if (previousKey === undefined) delete process.env.MASSIVE_API_KEY;
+    else process.env.MASSIVE_API_KEY = previousKey;
+  }
+})();
 assert.match(
   newsSnapshotToMarkdown({
     providerStatus: "ok",

@@ -85,26 +85,28 @@ const SECTOR_MAP = [
   [/通信|电信/, { sector: "Communication Services", label: "通信" }]
 ];
 
-const LT = /(小于|低于|不到|少于|以下|<|＜|≤)/;
-const GT = /(大于|高于|超过|多于|以上|>|＞|≥)/;
+const COMPARE = "小于|低于|不到|少于|以下|<|＜|≤|大于|高于|超过|多于|以上|>|＞|≥";
+const LT_EXACT = /^(?:小于|低于|不到|少于|以下|<|＜|≤)$/;
 
 function numAfter(text, keyRe) {
-  // "PE小于20" / "PE < 20" / "市值大于500亿"
-  const re = new RegExp(`${keyRe.source}\\s*(?:${LT.source}|${GT.source})\\s*([0-9]+(?:\\.[0-9]+)?)`, "i");
-  const m = text.match(re);
+  // 同时接受 "PE小于20" 与更自然的 "PE 20以下"。
+  const prefix = new RegExp(`${keyRe.source}\\s*(?<op>${COMPARE})\\s*(?<value>[0-9]+(?:\\.[0-9]+)?)`, "i");
+  const postfix = new RegExp(`${keyRe.source}\\s*(?<value>[0-9]+(?:\\.[0-9]+)?)\\s*(?<op>${COMPARE})`, "i");
+  const m = text.match(prefix) || text.match(postfix);
   if (!m) return null;
-  const isLt = new RegExp(`${keyRe.source}\\s*${LT.source}`, "i").test(text);
-  return { value: Number(m[m.length - 1]), op: isLt ? "lt" : "gt" };
+  return { value: Number(m.groups.value), op: LT_EXACT.test(m.groups.op) ? "lt" : "gt" };
 }
 
 // 市值单位：亿（默认美元亿）/ 千亿 / 万亿。返回美元绝对值。
 function marketCapFrom(text) {
-  const m = text.match(new RegExp(`市值\\s*(?:${LT.source}|${GT.source})\\s*([0-9]+(?:\\.[0-9]+)?)\\s*(万亿|千亿|百亿|亿)`, "i"));
+  const prefix = new RegExp(`市值\\s*(?<op>${COMPARE})\\s*(?<value>[0-9]+(?:\\.[0-9]+)?)\\s*(?<unit>万亿|千亿|百亿|亿)`, "i");
+  const postfix = new RegExp(`市值\\s*(?<value>[0-9]+(?:\\.[0-9]+)?)\\s*(?<unit>万亿|千亿|百亿|亿)\\s*(?<op>${COMPARE})`, "i");
+  const m = text.match(prefix) || text.match(postfix);
   if (!m) return null;
-  const isLt = new RegExp(`市值\\s*${LT.source}`).test(text);
-  const unit = m[m.length - 1];
+  const isLt = LT_EXACT.test(m.groups.op);
+  const unit = m.groups.unit;
   const mult = unit === "万亿" ? 1e12 : unit === "千亿" ? 1e11 : unit === "百亿" ? 1e10 : 1e8;
-  return { value: Number(m[m.length - 2]) * mult, op: isLt ? "lt" : "gt" };
+  return { value: Number(m.groups.value) * mult, op: isLt ? "lt" : "gt" };
 }
 
 /** 把自然语言筛选句解析成结构化条件。纯函数，可测。 */

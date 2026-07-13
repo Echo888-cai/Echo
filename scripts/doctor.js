@@ -60,11 +60,18 @@ const CHECKS = [
   {
     name: "美股行情",
     check() {
-      const keys = ["FINNHUB_API_KEY", "ALPHAVANTAGE_API_KEY", "TWELVEDATA_API_KEY"].filter(has);
-      if (keys.length) return { mark: OK, detail: `已配置：${keys.join(", ")}（Yahoo 免 key 兜底仍在）` };
+      const keys = ["MASSIVE_API_KEY", "FINNHUB_API_KEY", "ALPHAVANTAGE_API_KEY", "TWELVEDATA_API_KEY"].filter(has);
+      if (keys.length) return { mark: OK, detail: `已配置：${keys.join(", ")}（Massive 优先；Yahoo 免 key 兜底仍在）` };
       return { mark: DEGRADED, detail: "无 key，仅靠 Yahoo 免费兜底，稳定性差" };
     },
     async liveProbe() {
+      if (has("MASSIVE_API_KEY")) {
+        const res = await fetch("https://api.massive.com/v2/snapshot/locale/us/markets/stocks/tickers/AAPL", {
+          headers: { Authorization: `Bearer ${process.env.MASSIVE_API_KEY}` }
+        });
+        const j = res.ok ? await res.json() : null;
+        return `Massive ${j?.ticker?.day?.c || j?.ticker?.lastTrade?.p ? "连通 ✓（AAPL 有价）" : `异常 ✗ (HTTP ${res.status})`}`;
+      }
       if (!has("FINNHUB_API_KEY")) return null;
       const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=AAPL&token=${process.env.FINNHUB_API_KEY}`);
       const j = res.ok ? await res.json() : null;
@@ -142,7 +149,7 @@ const CHECKS = [
     name: "SEC 一手文件",
     check() {
       if (has("SEC_USER_AGENT")) return { mark: OK, detail: `UA 已配置（SEC 要求带联系方式的 UA）` };
-      return { mark: DEGRADED, detail: "缺 SEC_USER_AGENT → EDGAR 请求可能被限流（格式：'名字 邮箱'）" };
+      return { mark: OK, detail: "使用公开项目 URL 作为声明式 UA；正式运营时建议改为真实运维联系邮箱" };
     }
   },
   {

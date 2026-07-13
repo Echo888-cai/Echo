@@ -11,7 +11,9 @@
   "scripts": {
     "dev": "node server.js",
     "seed": "node scripts/seed-db.js",
-    "test": "node tests/run.mjs && npm test --workspace @echo/domain",
+    "test": "node tests/run.mjs && npm test --workspace @echo/domain && cargo test --workspace",
+    "test:rust": "cargo test --workspace",
+    "lint:rust": "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit -p jsconfig.json",
     "typecheck:workspaces": "npm run typecheck --workspaces --if-present",

@@ -1,6 +1,5 @@
-// D3：从 src/server/routes/chat.js 内化进工具层的核心编排逻辑（~400 行，纯代码搬迁，
-// 行为逐字节不变）。路由层 chat.js 现在只负责解析请求体、调用 runChat；agentTools.js 的
-// compareCompanies 直接复用这里的 buildCompareSummary，不再反向依赖路由层。
+// 公司研究的唯一编排实现。路由层 chat.js 只负责解析请求体和调用 runChat；
+// agentTools.js 的 compareCompanies 直接复用这里的 buildCompareSummary，避免服务反向依赖路由。
 import { sendJson, withTimeout } from "../utils/async.js";
 import { runAgent } from "./agent.js";
 import { getProviderStatus, callModel } from "./modelGateway.js";
@@ -26,10 +25,9 @@ import { getMarketSnapshot, getRangeReturns } from "../../marketData.js";
 import { getFinancials, getAnalystEstimates } from "../../financialData.js";
 import { getNewsSnapshot } from "../../newsData.js";
 
-// R3：数字级防幻觉护栏的开关，三档递进上线，默认最保守（shadow：只打日志，不改变任何
-// 用户可见输出）。方案定的节奏是先用真实问题跑 shadow 调阈值，再开 soft（低调提示，不拦截），
-// 最后才开 full（hard-fail 触发一次定向重答，仍不过就确定性降级）——不是一次性开关。
-const FACT_GUARD_MODE = (process.env.FACT_GUARD_MODE || "shadow").toLowerCase();
+// 数字级防幻觉护栏默认 full：hard-fail 先定向修正，仍不过就退回确定性事实面板。
+// shadow/soft 只用于离线调试，生产不能把已识别的错误数字继续展示给用户。
+const factGuardMode = () => (process.env.FACT_GUARD_MODE || "full").toLowerCase();
 
 /** hard-fail 触发的一次定向重答：只允许模型改数字，不允许改结论方向或新增内容。 */
 async function repairHardFails({ content, verdict }) {
@@ -55,21 +53,22 @@ async function repairHardFails({ content, verdict }) {
  * shadow→soft→full 的升档才有真实误报率可依据，而不是靠人工翻 console 历史（红线 10）。
  */
 export async function applyFactGuard({ content, sources, fallback }) {
-  if (FACT_GUARD_MODE === "off") return { content, verdict: null, repaired: false, degraded: false };
+  const mode = factGuardMode();
+  if (mode === "off") return { content, verdict: null, repaired: false, degraded: false };
 
   const registry = buildFactsRegistry(sources);
   let verdict = verifyAnswerNumbers(content, registry);
   const summary = summarizeVerdict(verdict);
   // 影子模式的可读性入口仍保留（本机/scheduler 跑真实问题时人工看）；真正的升档依据是下面的落库。
-  console.log(`[factGuard:${FACT_GUARD_MODE}] ${sources.ticker || "?"}`, JSON.stringify(summary));
-  insertFactGuardAudit({ ticker: sources.ticker, mode: FACT_GUARD_MODE, summary });
-  if (FACT_GUARD_MODE === "shadow") return { content, verdict, repaired: false, degraded: false };
+  console.log(`[factGuard:${mode}] ${sources.ticker || "?"}`, JSON.stringify(summary));
+  insertFactGuardAudit({ ticker: sources.ticker, mode, summary });
+  if (mode === "shadow") return { content, verdict, repaired: false, degraded: false };
 
   let finalContent = content;
   let repaired = false;
   let degraded = false;
 
-  if (FACT_GUARD_MODE === "full" && verdict.hasHardFail) {
+  if (mode === "full" && verdict.hasHardFail) {
     const repairedText = await repairHardFails({ content, verdict });
     const reVerdict = repairedText ? verifyAnswerNumbers(repairedText, registry) : null;
     if (repairedText && !reVerdict.hasHardFail) {
@@ -85,7 +84,9 @@ export async function applyFactGuard({ content, sources, fallback }) {
     }
   }
 
-  if (verdict.softCount || verdict.hardCount) finalContent += buildSoftNote(verdict);
+  // fallback 完全由已核事实面板拼接；不要再对它展示模型校验告警，避免把保守降级误写成
+  // “仍有错误”。校验摘要照常留在审计记录和响应元数据中。
+  if (!degraded && (verdict.softCount || verdict.hardCount)) finalContent += buildSoftNote(verdict);
   return { content: finalContent, verdict, repaired, degraded };
 }
 

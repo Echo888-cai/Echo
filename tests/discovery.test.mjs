@@ -15,6 +15,7 @@ function check(name, cond, detail = "") {
 console.log("[1] 发现层意图路由");
 check("筛选：帮我筛美股半导体 PE<20", classifyDiscoveryIntent("帮我筛美股半导体 PE小于20") === "screener");
 check("筛选：条件式（市值大于500亿的科技股）", classifyDiscoveryIntent("市值大于500亿的科技股有哪些") === "screener");
+check("筛选：后置条件（市值500亿以下）", classifyDiscoveryIntent("市值500亿以下的港股有哪些") === "screener");
 check("宏观：美股今晚有什么关键事件", classifyDiscoveryIntent("美股今晚有什么关键事件") === "macro");
 check("宏观：美联储议息怎么看", classifyDiscoveryIntent("美联储这次议息怎么看") === "macro");
 check("宏观：恒指最近怎么走", classifyDiscoveryIntent("恒指最近走势如何") === "macro");
@@ -42,6 +43,11 @@ console.log("[2] 筛选条件解析（parseScreenerQuery）");
   const f = parseScreenerQuery("筛一下 PE 大于 30 股息率超过3% 的美股");
   check("PE 下限 30", f.peMin === 30);
   check("股息率条件被诚实忽略并注明", f.ignored.some((s) => s.includes("股息率")));
+}
+{
+  const f = parseScreenerQuery("市值500亿以下、PE 20以下的港股有哪些");
+  check("后置条件：市值上限 500 亿", f.mcapMax === 5e10);
+  check("后置条件：PE 上限 20", f.peMax === 20);
 }
 
 console.log("[3] 宏观纯函数");

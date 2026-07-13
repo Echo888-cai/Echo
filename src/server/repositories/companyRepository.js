@@ -6,6 +6,7 @@
  */
 
 import { getDb } from "../../db/index.js";
+import { bareSymbol, cnTicker, detectMarket, hkCode } from "../../market.js";
 
 export function searchCompanies(query, { limit = 20 } = {}) {
   const db = getDb();
@@ -97,9 +98,11 @@ export function getAllCompanies() {
 
 function normalizeTicker(input) {
   if (!input) return "";
-  let ticker = String(input).trim().toUpperCase();
-  if (!ticker.includes(".")) ticker += ".HK";
-  return ticker;
+  const ticker = String(input).trim().toUpperCase();
+  const market = detectMarket(ticker);
+  if (market === "US") return bareSymbol(ticker);
+  if (market === "CN") return cnTicker(ticker);
+  return `${hkCode(ticker)}.HK`;
 }
 
 function hydrateCompany(row) {

@@ -4,6 +4,7 @@
 // as-is since this is exactly the kind of hand-tuned heuristic table that must
 // not drift from the legacy behavior it's replacing.
 import { companiesApi, type ResolvedCompany } from "./api";
+import { extractHkTicker, extractUsTickerToken } from "@echo/domain/company-identity";
 
 const companyAliases: { pattern: RegExp; ticker: string }[] = [
   { pattern: /腾讯控股|腾讯|Tencent/i, ticker: "0700.HK" },
@@ -136,27 +137,12 @@ const US_STOPWORDS = new Set([
 export function resolveUsTicker(text = ""): { ticker: string; name: string } | null {
   const hit = usAliases.find((item) => item.pattern.test(text));
   if (hit) return { ticker: hit.ticker, name: hit.name };
-  const t = String(text).toUpperCase().trim();
-  const m = t.match(/\$([A-Z]{1,5})\b/) || t.match(/\b([A-Z]{1,5})\.US\b/);
-  if (m && !US_STOPWORDS.has(m[1])) return { ticker: m[1], name: m[1] };
-  if (/^[A-Z]{1,5}$/.test(t) && !US_STOPWORDS.has(t)) return { ticker: t, name: t };
-  // Bare uppercase word embedded in mixed text (e.g. "分析 RKLB 的基本面"). But if
-  // followed by another Latin word ("SPACE X", "OPEN AI"), that's part of a
-  // multi-word company name, not a ticker — defer to the downstream authoritative
-  // resolver (FMP name search + LLM check) rather than guessing.
-  const w = t.match(/(?:^|[\s,])([A-Z]{2,5})(?:[\s,.]|$)/);
-  if (w && !US_STOPWORDS.has(w[1])) {
-    const after = t.slice((w.index || 0) + w[0].length);
-    if (!/^\s*[A-Za-z]/.test(after)) return { ticker: w[1], name: w[1] };
-  }
-  return null;
+  const ticker = extractUsTickerToken(text, US_STOPWORDS);
+  return ticker ? { ticker, name: ticker } : null;
 }
 
 export function extractTicker(text = ""): string {
-  const raw = String(text).toUpperCase();
-  const hk = raw.match(/\b(\d{1,5})(?:\.HK|HK)?\b/);
-  if (!hk) return "";
-  return `${hk[1].padStart(4, "0")}.HK`;
+  return extractHkTicker(text);
 }
 
 export function extractAliasTicker(text = ""): string {

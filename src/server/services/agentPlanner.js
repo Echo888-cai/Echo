@@ -11,10 +11,10 @@
 import { getTool } from "./agentTools.js";
 
 const COMPARE_VERB = /谁(的)?(赔率|胜率|更值得|机会|更好|风险回报|更稳)|哪(个|家)更(好|值得|稳)|哪个更值得买|对比一下|比较一下|谁更好|谁更值得买|\bvs\.?\b|\bpk\b/i;
-const LIST_SPLIT = /[、，,&]|和|与|跟|以及|还有|及/;
-const TRAILING_NOISE = /(谁|哪个|哪家)?(的)?(赔率|胜率|更值得买|更值得|机会|更好|风险回报|更稳|怎么样|好)?[?？!！。.\s]*$/;
+const LIST_SPLIT = /\s+vs\.?\s+|\s+pk\s+|[、，,&]|和|与|跟|以及|还有|及/i;
+const TRAILING_NOISE = /(?:谁|哪个|哪家)?(?:的)?(?:赔率|胜率|机会|风险回报)?(?:更好|更高|更稳|更值得买|更值得|怎么样|好)?[?？!！。.\s]*$/;
 
-function candidateSegments(question = "") {
+export function comparisonCandidates(question = "") {
   return String(question || "")
     .split(LIST_SPLIT)
     .map((s) => s.replace(COMPARE_VERB, "").replace(TRAILING_NOISE, "").trim())
@@ -23,7 +23,7 @@ function candidateSegments(question = "") {
 
 /** 纯文本判定：句子里是否含比较句式词汇（"谁更好""对比一下"…）。无网络，可单测。 */
 export function looksLikeCompareQuestion(question = "") {
-  return COMPARE_VERB.test(String(question || "")) && candidateSegments(question).length >= 1;
+  return COMPARE_VERB.test(String(question || "")) && comparisonCandidates(question).length >= 1;
 }
 
 /**
@@ -36,7 +36,7 @@ export function looksLikeCompareQuestion(question = "") {
 export async function planCompare(question, { primaryCompany = null } = {}) {
   const text = String(question || "");
   if (!COMPARE_VERB.test(text)) return null;
-  const segments = candidateSegments(text).slice(0, 3);
+  const segments = comparisonCandidates(text).slice(0, 3);
   const need = primaryCompany ? 1 : 2;
   if (segments.length < need) return null;
   const resolveCompany = getTool("resolveCompany");

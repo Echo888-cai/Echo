@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@echo/contracts": "*",
+    "@echo/domain": "*",
     "@echo/ui": "*",
     "@tanstack/react-query": "^5.62.0",
     "@tanstack/react-router": "^1.95.0",

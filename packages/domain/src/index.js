@@ -1,4 +1,5 @@
 export * from "./earnings.js";
+export * from "./companyIdentity.js";
 export * from "./factGuard.js";
 export * from "./falsifyRules.js";
 export * from "./financialQuality.js";

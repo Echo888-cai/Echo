@@ -24,15 +24,22 @@ const { ingestHkFinancials } = await import("../apps/worker/src/pipelines/hkFili
 const { ingestCnFinancials } = await import("../apps/worker/src/pipelines/cnFilingsPipeline.js");
 const { getNextEarnings } = await import("../src/server/services/earningsCalendar.js");
 const { getComparableCompanies } = await import("../src/server/services/compPeers.js");
-const { getCompanyByTicker } = await import("../src/db/index.js");
+const { getCompanyByTickerComplete } = await import("../src/server/repositories/companyRepository.js");
 const { detectMarket } = await import("../src/market.js");
 const { insertCanaryResult } = await import("../src/server/repositories/canaryRepository.js");
 
-const TICKERS = ["0700.HK", "9988.HK", "9868.HK", "AAPL", "NVDA", "600519.SS", "000001.SZ"];
+const DEFAULT_TICKERS = ["0700.HK", "9988.HK", "9868.HK", "AAPL", "NVDA", "600519.SS", "000001.SZ"];
+// 本机排障可聚焦一两个标的，避免为了验证一个适配器烧完整套外部配额。
+// 例：ECHO_CANARY_TICKERS=RKLB,0700.HK npm run canary
+const TICKERS = (process.env.ECHO_CANARY_TICKERS || "")
+  .split(",")
+  .map((ticker) => ticker.trim().toUpperCase())
+  .filter(Boolean);
+if (!TICKERS.length) TICKERS.push(...DEFAULT_TICKERS);
 const batchId = new Date().toISOString();
 
 function companyFor(ticker) {
-  return getCompanyByTicker(ticker) || { ticker, nameZh: ticker, nameEn: ticker };
+  return getCompanyByTickerComplete(ticker) || { ticker, nameZh: ticker, nameEn: ticker };
 }
 
 /** 包一层：记时长、抓异常，统一落库，探测函数互相独立不因一个挂了连锁失败。 */

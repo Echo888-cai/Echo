@@ -13,7 +13,9 @@ import { bareSymbol } from "./market.js";
 import { normalizeTicker } from "./data.js";
 import { fetchJson as requestJson } from "./server/utils/http.js";
 
-const SEC_UA = process.env.SEC_USER_AGENT || "Echo Research research@echoresearch.app";
+// Public project URL is a real, durable contact surface; never send a fabricated
+// mailbox when the operator has not configured a private SEC contact address.
+const SEC_UA = process.env.SEC_USER_AGENT || "EchoResearch/0.1 (+https://github.com/EchoResearchLab/Echo)";
 // Forms worth surfacing: current reports, quarterly/annual, foreign-issuer equivalents.
 const FORMS_OF_INTEREST = new Set(["8-K", "10-Q", "10-K", "10-K/A", "10-Q/A", "6-K", "20-F", "40-F", "8-K/A"]);
 

@@ -241,6 +241,37 @@ async function fetchFinnhub(ticker) {
   });
 }
 
+// Massive（原 Polygon.io）美股快照。签约后它是美股行情的质量优先源：直连交易所、
+// 单标的快照同时给当日/前日 bar 与最新成交。Key 走 Authorization header，避免出现在
+// URL、反代访问日志和错误追踪里。未配置时完全不进入请求路径。
+export async function fetchMassiveQuote(ticker) {
+  if (detectMarket(ticker) !== "US") throw new Error("Massive quote 仅支持美股");
+  const apiKey = env("MASSIVE_API_KEY");
+  if (!apiKey) throw new Error("missing MASSIVE_API_KEY");
+  const symbol = toYahooSymbol(ticker);
+  const data = await fetchJson(
+    `https://api.massive.com/v2/snapshot/locale/us/markets/stocks/tickers/${encodeURIComponent(symbol)}`,
+    { headers: { Authorization: `Bearer ${apiKey}` } }
+  );
+  const quote = data?.ticker;
+  const price = numberOrNull(quote?.lastTrade?.p ?? quote?.day?.c);
+  if (!quote || !price) throw new Error("Massive 没有返回有效快照");
+  const updated = numberOrNull(quote.updated);
+  const updatedMs = updated == null ? null : updated > 1e15 ? updated / 1e6 : updated > 1e12 ? updated : updated * 1000;
+  return buildSnapshot("Massive", ticker, {
+    currency: "USD",
+    price,
+    previousClose: quote.prevDay?.c,
+    change: quote.todaysChange,
+    changePercent: quote.todaysChangePerc,
+    open: quote.day?.o,
+    high: quote.day?.h,
+    low: quote.day?.l,
+    volume: quote.day?.v,
+    asOf: updatedMs ? new Date(updatedMs).toISOString() : undefined
+  });
+}
+
 async function fetchYahooChart(ticker) {
   const symbol = toYahooSymbol(ticker);
   const chart = await fetchJson(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=5d&interval=1d`);
@@ -270,6 +301,13 @@ export async function getMarketSnapshot(ticker) {
   // A 股：Finnhub/AlphaVantage/TwelveData 免费档基本不覆盖，主力是腾讯+新浪两个免费源；
   // 其余国际源仍保留在兜底链尾部（万一某天覆盖到了，白拿；拿不到就诚实报错，不额外处理）。
   const market = detectMarket(ticker);
+  // 质量优先于竞速：配置 Massive 即代表已选择更高质量的美股源，先给它一个正常请求窗口；
+  // 失败才降级到免费源竞速，不能让“谁快几十毫秒”决定事实来源。
+  if (market === "US" && env("MASSIVE_API_KEY")) {
+    try {
+      return await fetchMassiveQuote(ticker);
+    } catch { /* 进入下面现有的多源降级链 */ }
+  }
   const fast =
     market === "US" ? [fetchFinnhub, fetchTwelveData]
     : market === "CN" ? [fetchTencentQuote, fetchSinaQuote]

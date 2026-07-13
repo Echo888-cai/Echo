@@ -5,6 +5,7 @@
 import { fmpGet, FMP_TTL } from "../../fmpClient.js";
 import { callModel, getProviderStatus } from "./modelGateway.js";
 import { cnTicker } from "../../market.js";
+import { extractUsTickerToken } from "@echo/domain/company-identity";
 
 // 主板交易所优先级（越小越优先）。FMP 搜索会混进 OTC / 海外同名小票，按这个排序挑主板。
 const US_EXCHANGE_RANK = { NASDAQ: 0, NYSE: 0, AMEX: 1, BATS: 2, CBOE: 2 };
@@ -310,8 +311,8 @@ export async function resolveCompanyFromQuery(query = "") {
   //    这里走与【新建研究】verify 闸门完全一致的 verifyUsTicker（FMP 精确符号 + Finnhub
   //    profile 新上市自愈），确认上市就直接放行，根除"对话里提到的裸代码识别不出→模型凭旧
   //    知识硬答它不是股票"的幻觉。only-uppercase 门控避免把普通英文名（Apple）误当代码。
-  const bareTicker = String(q).replace(TRAILING_QUERY_WORDS, "").trim();
-  if (/^[A-Z][A-Z.-]{0,6}$/.test(bareTicker)) {
+  const bareTicker = extractUsTickerToken(String(q).replace(TRAILING_QUERY_WORDS, "").trim());
+  if (bareTicker) {
     const check = await verifyUsTicker(bareTicker);
     if (check.status === "verified") {
       // 已知品牌别名的目标代码（SPCX=SpaceX）用品牌规范名，避免误显同名衍生品/ETF 名。

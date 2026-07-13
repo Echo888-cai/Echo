@@ -78,6 +78,11 @@ it("parses '我买了 2万股，成本 8.3' (万 → 20000)", () => {
   assert.equal(ctx.cost, "8.3");
   assert.equal(ctx.shares, "20000");
 });
+it("parses natural US holding: '86 美元买了 120 股 RKLB'", () => {
+  const ctx = parseUserContext("我 86 美元买了 120 股 RKLB");
+  assert.equal(ctx.cost, "86");
+  assert.equal(ctx.shares, "120");
+});
 it("parses '持有 1,500 股' (comma-formatted)", () => {
   const ctx = parseUserContext("持有 1,500 股");
   assert.equal(ctx.shares, "1500");

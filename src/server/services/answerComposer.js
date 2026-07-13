@@ -240,20 +240,22 @@ function evidenceSignalsFromNews(newsSnapshot = null) {
 function validatedSignalLines(context = {}, limit = 3) {
   const out = [];
   const seen = new Set();
-  const push = (title, src, date, url) => {
+  const push = (title, src, date) => {
     const key = String(title || "").trim().toLowerCase();
     if (!title || seen.has(key)) return;
     seen.add(key);
-    out.push(`${title}（${src}${date ? `，${date}` : ""}）${url ? `：${url}` : ""}`);
+    // 这里只做行内摘要；完整链接在下方“来源”独占一行。把多个 URL 塞进同一段并以中文
+    // 分号连接会被 Markdown 自动链接器误吞，生成不可点击的拼接 URL。
+    out.push(`${title}（${src}${date ? `，${date}` : ""}）`);
   };
   for (const item of Array.isArray(context.webEvidence?.evidence) ? context.webEvidence.evidence : []) {
     if (out.length >= limit) break;
-    push(item.title || item.url, item.source || item.sourceType || "网页证据", item.publishedAt, item.url);
+    push(item.title || item.url, item.source || item.sourceType || "网页证据", item.publishedAt);
   }
   if (out.length < limit && context.newsSnapshot?.providerStatus === "ok") {
     for (const a of context.newsSnapshot.articles || []) {
       if (out.length >= limit) break;
-      push(a.title, a.source || "新闻", a.publishedAt, a.url);
+      push(a.title, a.source || "新闻", a.publishedAt);
     }
   }
   return out;

@@ -10,7 +10,7 @@
 //     同时尊重前端已算好的 kind 提示（前端 discoveryKindOf 已先排除点名公司的情况）。
 //
 // 旧的 /api/chat、/api/discover 暂保留为内部实现，对外主推 /api/ask。
-// D3：runChat 的核心编排已内化进 services/chatOrchestrator.js，chat.js 现在只是 HTTP 薄封装。
+// runChat 的核心编排只存在于 services/chatOrchestrator.js；chat.js 是 HTTP 薄封装。
 import { readJsonBody, sendJson } from "../utils/async.js";
 import { runChat } from "../services/chatOrchestrator.js";
 import { runDiscover } from "./discover.js";

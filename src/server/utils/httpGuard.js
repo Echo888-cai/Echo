@@ -7,7 +7,7 @@
  *    旧行为是"项目根目录下任何可读文件都发"——本机 127.0.0.1 时代无所谓，
  *    公网暴露后 /.env（全部 API key）和 /echo.db（整库）会被直接下载。
  *    改成显式白名单：前端真正需要的只有 index.html、src/app.js、src/ui/*.js、
- *    src/styles/*.css 和 /assets/**（图标/未来 PWA manifest）。名单外的 GET
+ *    src/styles/*.css、单个领域身份纯函数和 /assets/**（图标/未来 PWA manifest）。名单外的 GET
  *    一律回 SPA 壳（index.html），跟不存在的路径同样待遇——不泄露"文件存在但被拒"。
  *
  * 2. 令牌桶限速 TokenBucket：
@@ -33,6 +33,9 @@ export function isAllowedStaticPath(pathname) {
   if (pathname === "/src/app.js") return true;
   // 两个前端模块直接复用纯函数 market.js；它不读 env/DB/服务端代码，必须显式放行。
   if (pathname === "/src/market.js") return true;
+  // 旧 SPA 与 React 迁移壳共用的唯一证券身份规则。该模块经 domain 边界测试保证无 IO；
+  // 只精确放行这一文件，不开放 packages 目录。
+  if (pathname === "/packages/domain/src/companyIdentity.js") return true;
   // 前端模块与样式：只认这两个目录的对应扩展名（src/server/** 永不可达）
   if (/^\/src\/ui\/[\w.-]+\.js$/.test(pathname)) return true;
   if (/^\/src\/styles\/[\w.-]+\.css$/.test(pathname)) return true;
