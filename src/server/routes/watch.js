@@ -11,7 +11,7 @@
 
 import { sendOk, sendError, readJsonBody } from "../utils/async.js";
 import { buildWatchDesk, buildStockView, trackedUniverse } from "../services/watchDesk.js";
-import { addToWatch, removeFromWatch } from "../repositories/watchlist.js";
+import { addToWatch, removeFromWatch } from "../repositories/watchlistRepository.js";
 
 const userId = (req) => req.echoUser?.id || "local";
 

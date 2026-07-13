@@ -16,7 +16,7 @@ import { runChat } from "../services/chatOrchestrator.js";
 import { runDiscover } from "./discover.js";
 import { classifyDiscoveryIntent } from "../services/intentClassifier.js";
 import { planCompare } from "../services/agentPlanner.js";
-import { quotaGuard } from "../services/quotaService.js";
+import { quotaGuard } from "../services/quota.js";
 
 /**
  * 决定一条 /api/ask 请求走哪条路由。纯函数，可单测。

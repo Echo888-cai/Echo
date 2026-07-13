@@ -9,6 +9,13 @@ import {
   twelveDataSymbol as toTwelveDataSymbol,
   yahooSymbol as toYahooSymbol
 } from "./market.js";
+import { fetchJson as requestJson } from "./server/utils/http.js";
+
+const fetchJson = (url, options = {}) => requestJson(url, {
+  timeoutMs: 4500,
+  userAgent: "EchoResearch/1.0 research data adapter",
+  ...options
+});
 
 function env(name) {
   return process.env[name] || "";
@@ -17,6 +24,23 @@ function env(name) {
 function numberOrNull(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+// Tencent's field[30] timestamp comes in two different formats depending on
+// market: HK/US quotes use "YYYY/MM/DD HH:MM:SS", but A股 (CN) quotes use a
+// compact 14-digit "YYYYMMDDHHMMSS" with no separators — feeding the latter
+// through the slash/space replace produced an unparseable string (digits
+// glued straight to "+08:00"), so every CN quote's asOf silently fell back to
+// buildSnapshot()'s `new Date().toISOString()` default without anyone
+// noticing (found via packages/data-plane's quality guard, not a report).
+function tencentAsOf(raw) {
+  if (!raw) return undefined;
+  if (/^\d{14}$/.test(raw)) {
+    const y = raw.slice(0, 4), mo = raw.slice(4, 6), d = raw.slice(6, 8);
+    const h = raw.slice(8, 10), mi = raw.slice(10, 12), s = raw.slice(12, 14);
+    return `${y}-${mo}-${d}T${h}:${mi}:${s}+08:00`;
+  }
+  return `${raw.replaceAll("/", "-").replace(" ", "T")}+08:00`;
 }
 
 function compactNumber(value) {
@@ -49,29 +73,6 @@ function buildSnapshot(source, ticker, data) {
     asOf: data.asOf || new Date().toISOString(),
     providerStatus: "ok"
   };
-}
-
-async function fetchJson(url, options = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs || 4500);
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal,
-      headers: {
-        "User-Agent": "EchoResearch/1.0 research data adapter",
-        Accept: "application/json",
-        ...(options.headers || {})
-      }
-    });
-    const text = await response.text();
-    if (!response.ok) {
-      throw new Error(`${response.status} ${text.slice(0, 160)}`);
-    }
-    return JSON.parse(text);
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 async function fetchText(url, options = {}) {
@@ -119,7 +120,7 @@ async function fetchTencentQuote(ticker) {
     marketCap: fields[44] ? Number(fields[44]) * 100000000 : null,
     week52High: fields[48],
     week52Low: fields[49],
-    asOf: fields[30] ? `${fields[30].replaceAll("/", "-").replace(" ", "T")}+08:00` : undefined
+    asOf: tencentAsOf(fields[30])
   });
 }
 

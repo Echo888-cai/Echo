@@ -2,20 +2,23 @@ name: CI
 
 on:
   push:
-    branches: [main, "cleanup/**"]
+    branches: [main]
   pull_request:
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
+      - run: npm run typecheck:workspaces
       # 测试不需要任何 API key：模型层与数据层都有本地兜底
       - run: npm test
+      - run: npm test --workspace @echo/contracts
+      - run: npm run build --workspace @echo/web

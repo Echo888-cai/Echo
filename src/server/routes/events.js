@@ -10,8 +10,8 @@
 
 import { sendOk, sendError } from "../utils/async.js";
 import { buildDigest } from "../services/eventEngine.js";
-import { listCompanyProfiles } from "../repositories/companyProfiles.js";
-import { listPositions } from "../repositories/portfolio.js";
+import { listCompanyProfiles } from "../repositories/companyProfilesRepository.js";
+import { listPositions } from "../repositories/portfolioRepository.js";
 import { companyByTicker } from "../../data.js";
 
 const userId = (req) => req.echoUser?.id || "local";

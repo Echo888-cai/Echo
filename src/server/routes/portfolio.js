@@ -12,7 +12,7 @@
  */
 
 import { sendOk, sendError, readJsonBody } from "../utils/async.js";
-import { listPositions, upsertPosition, deletePosition } from "../repositories/portfolio.js";
+import { listPositions, upsertPosition, deletePosition } from "../repositories/portfolioRepository.js";
 import { computePortfolioReview } from "../services/portfolioReview.js";
 import { enrichPosition } from "../services/portfolioEnrich.js";
 import { getPortfolioSnapshots } from "../services/portfolioSnapshot.js";

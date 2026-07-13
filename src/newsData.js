@@ -444,7 +444,7 @@ function withJobTimeout(promise, ms, onTimeout = []) {
 }
 
 async function fetchBroadNews(company) {
-  const enableGoogleNews = process.env.LUVIO_ENABLE_GOOGLE_NEWS === "1";
+  const enableGoogleNews = process.env.ECHO_ENABLE_GOOGLE_NEWS === "1";
   const collect = (results, articles, errors) => {
     for (const result of results) {
       if (result.status === "fulfilled") articles.push(...(result.value || []));

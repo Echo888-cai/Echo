@@ -1,19 +1,19 @@
 import { readJsonBody, sendJson, withTimeout } from "../utils/async.js";
-import { runAgent } from "../services/agentService.js";
+import { runAgent } from "../services/agent.js";
 import { callModel, getProviderStatus } from "../services/modelGateway.js";
 import { companyByTicker } from "../../data.js";
 import { classifyResearchIntent } from "../services/intentClassifier.js";
 import { researchWebEvidence } from "../services/webEvidenceService.js";
 import { buildReportPrompt, mergeEvidenceIntoPanel } from "../services/answerComposer.js";
-import { displayValuation } from "../services/valuationEngine.js";
+import { displayValuation } from "@echo/domain";
 import { getComparableCompanies } from "../services/compPeers.js";
 import { composeReport, reportPreview } from "../services/reportComposer.js";
-import { saveResearchSession } from "../repositories/researchSessions.js";
-import { quotaGuard } from "../services/quotaService.js";
+import { saveResearchSession } from "../repositories/researchSessionsRepository.js";
+import { quotaGuard } from "../services/quota.js";
 import { applyFactGuard } from "../services/chatOrchestrator.js";
-import { extractStructuredFalsifiers } from "../services/falsifyRules.js";
+import { extractStructuredFalsifiers } from "@echo/domain";
 import { updatePortraitFromPanel } from "../services/companyPortrait.js";
-import { summarizeVerdict } from "../services/factGuard.js";
+import { summarizeVerdict } from "@echo/domain";
 
 const DISCLAIMER =
   "\n\n---\n> 本报告仅供研究学习，不构成投资建议。请用公司原始公告核验关键数据，独立做出决定。";

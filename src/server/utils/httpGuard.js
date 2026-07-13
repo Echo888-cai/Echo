@@ -5,7 +5,7 @@
  *
  * 1. 静态文件白名单 isAllowedStaticPath：
  *    旧行为是"项目根目录下任何可读文件都发"——本机 127.0.0.1 时代无所谓，
- *    公网暴露后 /.env（全部 API key）和 /luvio.db（整库）会被直接下载。
+ *    公网暴露后 /.env（全部 API key）和 /echo.db（整库）会被直接下载。
  *    改成显式白名单：前端真正需要的只有 index.html、src/app.js、src/ui/*.js、
  *    src/styles/*.css 和 /assets/**（图标/未来 PWA manifest）。名单外的 GET
  *    一律回 SPA 壳（index.html），跟不存在的路径同样待遇——不泄露"文件存在但被拒"。
@@ -87,30 +87,30 @@ export class TokenBucket {
 // ── 客户端标识 ────────────────────────────────────────────────
 
 /**
- * 取限速用的客户端 key。生产在 Caddy 反代后面（LUVIO_TRUST_PROXY=1 才信
+ * 取限速用的客户端 key。生产在 Caddy 反代后面（ECHO_TRUST_PROXY=1 才信
  * X-Forwarded-For 的第一跳），本机直连用 socket 地址。
  * @param {import("node:http").IncomingMessage} req
  */
 export function clientKey(req) {
-  if (process.env.LUVIO_TRUST_PROXY === "1") {
+  if (process.env.ECHO_TRUST_PROXY === "1") {
     const xff = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
     if (xff) return xff;
   }
   return req.socket?.remoteAddress || "unknown";
 }
 
-// ── server.js 用的现成实例（env 可调；LUVIO_RATE_LIMIT_DISABLED=1 全关） ──
+// ── server.js 用的现成实例（env 可调；ECHO_RATE_LIMIT_DISABLED=1 全关） ──
 
-const disabled = process.env.LUVIO_RATE_LIMIT_DISABLED === "1";
+const disabled = process.env.ECHO_RATE_LIMIT_DISABLED === "1";
 const num = (name, fallback) => {
   const v = Number(process.env[name]);
   return Number.isFinite(v) && v >= 0 ? v : fallback;
 };
 
 /** 普通 API：读列表/状态类，默认 240/分钟。 */
-export const generalBucket = new TokenBucket({ perMinute: disabled ? 0 : num("LUVIO_RATE_GENERAL_PER_MIN", 240), burst: 80 });
+export const generalBucket = new TokenBucket({ perMinute: disabled ? 0 : num("ECHO_RATE_GENERAL_PER_MIN", 240), burst: 80 });
 /** 重型 API（LLM/文档解析/一手管道触发）：默认 12/分钟。 */
-export const heavyBucket = new TokenBucket({ perMinute: disabled ? 0 : num("LUVIO_RATE_HEAVY_PER_MIN", 12), burst: 6 });
+export const heavyBucket = new TokenBucket({ perMinute: disabled ? 0 : num("ECHO_RATE_HEAVY_PER_MIN", 12), burst: 6 });
 
 /** 重型端点前缀（POST 才算重：GET /api/chat 不存在）。 */
 const HEAVY_PREFIXES = ["/api/ask", "/api/chat", "/api/report/generate", "/api/parse-document", "/api/hk-financials/ingest", "/api/discover"];

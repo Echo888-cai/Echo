@@ -3,32 +3,36 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "description": "An evidence-first AI research desk for public-market investors.",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
     "dev": "node server.js",
     "seed": "node scripts/seed-db.js",
-    "test": "node tests/smoke.mjs && node tests/reliability.mjs && node tests/phase3.mjs && node tests/phase4.mjs && node tests/notifications.mjs && node tests/phase6.mjs && node tests/phase7.mjs && node tests/phase-ea0.mjs && node tests/phase-ea1.mjs && node tests/phase-ea2.mjs && node tests/phase-ea3.mjs && node tests/phase-ea4.mjs && node tests/phase-ea5-1.mjs && node tests/phase-b1.mjs && node tests/phase-b2.mjs && node tests/phase-b3.mjs && node tests/phase-b4.mjs && node tests/phase-b5.mjs && node tests/phase-b6.mjs && node tests/phase-b7.mjs && node tests/phase-d2.mjs && node tests/phase-g1.mjs && node tests/phase-g3.mjs && node tests/phase-r3.mjs && node tests/phase-e4.mjs && node tests/phase-r7.mjs && node tests/phase-f1.mjs && node tests/phase-f2.mjs && node tests/phase-f3.mjs && node tests/phase-f4.mjs && node tests/phase-f4b.mjs && node tests/phase-f5.mjs && node tests/phase-m1.mjs && node tests/phase-m3.mjs && node tests/phase-m4.mjs && node tests/phase-cn1.mjs && node tests/phase-cn2.mjs && node tests/phase-cn3.mjs && node tests/phase-u0.mjs && node tests/phase-u1.mjs && node tests/phase-u2.mjs && node tests/phase-u3.mjs && node tests/phase-u4.mjs && node tests/phase-p14.mjs",
-    "lint": "eslint .",
+    "test": "node tests/run.mjs && npm test --workspace @echo/domain",
+    "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit -p jsconfig.json",
+    "typecheck:workspaces": "npm run typecheck --workspaces --if-present",
     "doctor": "node scripts/doctor.js",
     "doctor:prod": "node scripts/doctor.js --production",
     "canary": "node scripts/canary.js",
     "factguard-sample": "node scripts/factguard-sample.js",
-    "hk-coverage": "node scripts/hk-coverage.js",
-    "cn-coverage": "node scripts/cn-coverage.js",
-    "clean:portraits": "node scripts/clean-portrait-noise.js",
-    "clean:thesis-fragments": "node scripts/clean-thesis-fragments.js",
-    "test:smoke": "node tests/smoke.mjs",
-    "test:reliability": "node tests/reliability.mjs",
-    "test:phase3": "node tests/phase3.mjs"
+    "coverage:hk": "node scripts/coverage.js --market=hk",
+    "coverage:cn": "node scripts/coverage.js --market=cn"
   },
   "dependencies": {
+    "@echo/domain": "*",
     "better-sqlite3": "^12.11.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.1.0",
     "eslint": "^10.6.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.7.0",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.63.0"
   }
 }

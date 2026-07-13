@@ -3,7 +3,6 @@
  */
 
 import { getDb } from "../../db/index.js";
-import { randomUUID } from "node:crypto";
 
 export function addDocument({ ticker = null, name, mimeType = null, size = null, parser = null, text = null, summary = null, sourceType = "upload", sourceUrl = null, userId = "local" }) {
   const db = getDb();

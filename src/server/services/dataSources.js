@@ -10,18 +10,19 @@
 import { withTimeout } from "../utils/async.js";
 import { getMarketSnapshot, getRangeReturns } from "../../marketData.js";
 import { getNewsSnapshot } from "../../newsData.js";
-import { getFinancials, getAnalystEstimates, getCompanyProfile, getDividendHistory, getRevenueSegments } from "../../financialData.js";
+import { getFinancials, getAnalystEstimates, getCompanyProfile, getRevenueSegments } from "../../financialData.js";
 import { getRecentFilings } from "../../filingData.js";
 import { enrich8K } from "../../secFilings.js";
 import { isUS, detectMarket } from "../../market.js";
-import { saveMarketSnapshot } from "../../db/index.js";
+import { saveMarketSnapshot } from "../repositories/companyRepository.js";
 import { getHkFinancials } from "../repositories/hkFinancialsRepository.js";
-import { hkRowToFinancials, refreshHkFinancialsInBackground, refreshHkBuybacksInBackground } from "./hkFilingsPipeline.js";
+import { hkRowToFinancials, refreshHkFinancialsInBackground, refreshHkBuybacksInBackground } from "../../../apps/worker/src/pipelines/hkFilingsPipeline.js";
 import { getCnFinancials } from "../repositories/cnFinancialsRepository.js";
-import { cnRowToFinancials, refreshCnFinancialsInBackground } from "./cnFilingsPipeline.js";
+import { cnRowToFinancials, refreshCnFinancialsInBackground } from "../../../apps/worker/src/pipelines/cnFilingsPipeline.js";
 import { listRecentHkBuybacks, getLatestHkBuybackFetchedAt } from "../repositories/hkBuybackRepository.js";
 import { getInsiderActivity } from "./insiderActivity.js";
-import { getHistoricalValuationSeries, computeHistoricalValuationPercentile } from "./historicalValuation.js";
+import { getHistoricalValuationSeries } from "./historicalValuation.js";
+import { computeHistoricalValuationPercentile } from "@echo/domain";
 
 // B-5：展示级近似汇率（人民币列报 → 港元，估值口径用；非交易口径），与 portfolioReview.js
 // 的 FX_TO_USD 同一处理原则——不接汇率 API，只求量级不失真。

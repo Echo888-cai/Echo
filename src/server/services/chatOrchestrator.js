@@ -2,25 +2,25 @@
 // 行为逐字节不变）。路由层 chat.js 现在只负责解析请求体、调用 runChat；agentTools.js 的
 // compareCompanies 直接复用这里的 buildCompareSummary，不再反向依赖路由层。
 import { sendJson, withTimeout } from "../utils/async.js";
-import { runAgent } from "./agentService.js";
+import { runAgent } from "./agent.js";
 import { getProviderStatus, callModel } from "./modelGateway.js";
-import { buildFactsRegistry, verifyAnswerNumbers, buildSoftNote, summarizeVerdict, renderHardFailIssues } from "./factGuard.js";
+import { buildFactsRegistry, verifyAnswerNumbers, buildSoftNote, summarizeVerdict, renderHardFailIssues } from "@echo/domain";
 import { insertFactGuardAudit } from "../repositories/factGuardRepository.js";
-import { extractStructuredFalsifiers } from "./falsifyRules.js";
+import { extractStructuredFalsifiers } from "@echo/domain";
 import { companyByTicker } from "../../data.js";
-import { saveResearchSession } from "../repositories/researchSessions.js";
+import { saveResearchSession } from "../repositories/researchSessionsRepository.js";
 import { classifyResearchIntent } from "./intentClassifier.js";
 import { researchWebEvidence } from "./webEvidenceService.js";
 import { researchReplyFromPanel, normalizeResearchAnswer, mergeEvidenceIntoPanel } from "./answerComposer.js";
-import { displayValuation } from "./valuationEngine.js";
+import { displayValuation } from "@echo/domain";
 import { getComparableCompanies } from "./compPeers.js";
 import { getNextEarnings } from "./earningsCalendar.js";
-import { computeFinancialQuality } from "./financialQuality.js";
+import { computeFinancialQuality } from "@echo/domain";
 import { PROMPTS } from "../../prompts.js";
 import { loadPortraitContext, updatePortraitFromPanel } from "./companyPortrait.js";
-import { addToWatch, getHiddenTickers, listWatchAdds } from "../repositories/watchlist.js";
+import { addToWatch, getHiddenTickers, listWatchAdds } from "../repositories/watchlistRepository.js";
 import { runTwoStageChat, runTwoStageChatStream } from "./twoStageChat.js";
-import { upsertPosition, getPosition } from "../repositories/portfolio.js";
+import { upsertPosition, getPosition } from "../repositories/portfolioRepository.js";
 import { extractOtherHoldings } from "./entityExtractor.js";
 import { getMarketSnapshot, getRangeReturns } from "../../marketData.js";
 import { getFinancials, getAnalystEstimates } from "../../financialData.js";

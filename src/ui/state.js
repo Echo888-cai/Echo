@@ -3,13 +3,13 @@
 import { uid } from "./format.js";
 
 export const storeKeys = {
-  thread: "luvio.v3.thread",
-  company: "luvio.v3.company",
-  panel: "luvio.v3.panel",
-  documents: "luvio.v3.documents",
-  sessionId: "luvio.v3.sessionId",
-  conversationId: "luvio.v3.conversationId",
-  theme: "luvio.v3.theme"
+  thread: "echo.v3.thread",
+  company: "echo.v3.company",
+  panel: "echo.v3.panel",
+  documents: "echo.v3.documents",
+  sessionId: "echo.v3.sessionId",
+  conversationId: "echo.v3.conversationId",
+  theme: "echo.v3.theme"
 };
 
 // ── render 注册表：app.js 启动时注册真正的 render；其它模块统一 import { render } 调用 ──

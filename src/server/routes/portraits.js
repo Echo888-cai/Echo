@@ -9,9 +9,9 @@
  */
 
 import { sendOk, sendError } from "../utils/async.js";
-import { listCompanyProfiles, getCompanyProfile, deleteCompanyProfile, renderProfileMarkdown } from "../repositories/companyProfiles.js";
+import { listCompanyProfiles, getCompanyProfile, deleteCompanyProfile, renderProfileMarkdown } from "../repositories/companyProfilesRepository.js";
 import { listSnapshots, listSnapshotTickers } from "../repositories/researchSnapshotsRepository.js";
-import { computeTickerScorecard, computeGlobalScorecard } from "../services/researchReview.js";
+import { computeTickerScorecard, computeGlobalScorecard } from "@echo/domain";
 import { getMarketSnapshot } from "../../marketData.js";
 import { getEarningsCalendarRow } from "../repositories/earningsCalendarRepository.js";
 

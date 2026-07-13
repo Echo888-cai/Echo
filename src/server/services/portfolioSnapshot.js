@@ -10,10 +10,10 @@
  */
 
 import { beijingDate } from "../utils/time.js";
-import { listPositions } from "../repositories/portfolio.js";
+import { listPositions } from "../repositories/portfolioRepository.js";
 import { enrichPosition } from "./portfolioEnrich.js";
 import { FX_TO_USD } from "./portfolioReview.js";
-import { upsertSnapshot, listSnapshots } from "../repositories/portfolioSnapshots.js";
+import { upsertSnapshot, listSnapshots } from "../repositories/portfolioSnapshotsRepository.js";
 
 const usdValue = (p) => (p.marketValue != null ? p.marketValue * (FX_TO_USD[p.currency] || 1) : null);
 const usdCost = (p) => (p.costValue != null ? p.costValue * (FX_TO_USD[p.currency] || 1) : null);

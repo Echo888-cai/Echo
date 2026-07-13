@@ -1,6 +1,13 @@
 import { normalizeTicker } from "./data.js";
 import { fmpSymbol, finnhubSymbol, tencentSymbol, detectMarket, marketCurrency, marketLabel } from "./market.js";
 import { fmpGet, FMP_TTL } from "./fmpClient.js";
+import { fetchJson as requestJson } from "./server/utils/http.js";
+
+const fetchJson = (url, options = {}) => requestJson(url, {
+  timeoutMs: 5000,
+  userAgent: "EchoResearch/1.0 financial data adapter",
+  ...options
+});
 
 function env(name) {
   return process.env[name] || "";
@@ -73,27 +80,6 @@ export function trendFromAnnualSeries(seriesArr) {
     if (prior !== null && cur !== null && prior !== 0) growthSeries.push(((cur - prior) / Math.abs(prior)) * 100);
   }
   return classifyTrend(growthSeries);
-}
-
-async function fetchJson(url, options = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs || 5000);
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal,
-      headers: {
-        "User-Agent": "EchoResearch/1.0 financial data adapter",
-        Accept: "application/json",
-        ...(options.headers || {})
-      }
-    });
-    const text = await response.text();
-    if (!response.ok) throw new Error(`${response.status} ${text.slice(0, 160)}`);
-    return JSON.parse(text);
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 // ─── Financial Modeling Prep ──────────────────────────────────────────
@@ -607,27 +593,6 @@ function decodeGb2312(buffer) {
   }
 }
 
-async function fetchText(url, options = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs || 5000);
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal,
-      headers: {
-        "User-Agent": "Mozilla/5.0 EchoResearch/1.0",
-        Accept: "text/plain,*/*",
-        ...(options.headers || {})
-      }
-    });
-    const text = await response.text();
-    if (!response.ok) throw new Error(`${response.status} ${text.slice(0, 160)}`);
-    return text;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 // ─── 统一出口 ────────────────────────────────────────────────────────
 
 async function tryProviders(providers) {
@@ -814,25 +779,6 @@ export function hkBuybackToMarkdown(rows) {
   return `\n\n港股回购（HKEX 翌日披露报表，近 ${rows.length} 次真实场内购回，${oldest.trade_date}~${latest.trade_date}）：\n- 累计购回 ${totalShares.toLocaleString("en-US")} 股，总代价约 ${compactNumber(totalConsideration)} ${currency}${shareTrend}`;
 }
 
-export function companyProfileToMarkdown(profile) {
-  if (!profile || profile.providerStatus !== "ok") {
-    return "公司画像：尚未接入数据源。";
-  }
-
-  return [
-    `公司画像来源：${profile.source}`,
-    profile.companyName ? `公司名：${profile.companyName}` : "",
-    profile.description ? `简介：${profile.description.slice(0, 500)}` : "",
-    profile.industry ? `行业：${profile.industry}` : "",
-    profile.sector ? `板块：${profile.sector}` : "",
-    profile.employees ? `全职员工：${profile.employees.toLocaleString()}` : "",
-    profile.ceo ? `CEO：${profile.ceo}` : "",
-    profile.forwardPE ? `Forward PE：${profile.forwardPE}` : "",
-    profile.dividendYield ? `股息率：${profile.dividendYield.toFixed(2)}%` : "",
-    profile.beta ? `Beta：${profile.beta.toFixed(2)}` : ""
-  ].filter(Boolean).join("\n");
-}
-
 export function analystEstimatesToMarkdown(estimates) {
   if (!estimates || estimates.providerStatus !== "ok") {
     return "分析师评级：尚未接入数据源。模型不能编造评级信息。";
@@ -861,19 +807,5 @@ export function analystEstimatesToMarkdown(estimates) {
     lines.push(`买入 ${estimates.strongBuy + estimates.buy} / 持有 ${estimates.hold} / 卖出 ${estimates.strongSell + estimates.sell}`);
   }
 
-  return lines.join("\n");
-}
-
-export function dividendHistoryToMarkdown(dividends) {
-  if (!dividends || dividends.providerStatus !== "ok") {
-    return "分红历史：尚未接入数据源。";
-  }
-
-  const lines = [`分红历史来源：${dividends.source}`];
-  if (dividends.dividends?.length) {
-    for (const d of dividends.dividends) {
-      lines.push(`- ${d.date}：${d.dividend ?? d.adjDividend ?? "缺失"}`);
-    }
-  }
   return lines.join("\n");
 }

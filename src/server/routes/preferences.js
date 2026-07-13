@@ -1,5 +1,5 @@
 import { readJsonBody, sendOk, sendError } from "../utils/async.js";
-import { getUserPreferences, updateUserPreferences } from "../repositories/userPreferences.js";
+import { getUserPreferences, updateUserPreferences } from "../repositories/userPreferencesRepository.js";
 import { insertFeedback } from "../repositories/feedbackRepository.js";
 
 const userId = (req) => req.echoUser?.id || "local";

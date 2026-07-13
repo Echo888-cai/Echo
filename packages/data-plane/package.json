@@ -1,0 +1,17 @@
+{
+  "name": "@echo/data-plane",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Licensed market-data ports, routing policy and quality guards.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "verify": "tsx src/verify.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "tsx": "^4.19.2"
+  }
+}

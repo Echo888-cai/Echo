@@ -2,9 +2,10 @@ import { RESEARCH_STATUS_LABELS } from "../schemas/agentPanel.js";
 import { companies, companyByTicker } from "../../data.js";
 import { classifyResearchIntent, RESEARCH_INTENTS } from "./intentClassifier.js";
 import { webEvidenceToPrompt } from "./webEvidenceService.js";
-import { computeFinancialQuality } from "./financialQuality.js";
+import { computeFinancialQuality } from "@echo/domain";
 import { financialsToMarkdown } from "../../financialData.js";
 import { detectMarket } from "../../market.js";
+import { beijingMinute } from "../utils/time.js";
 
 const COMPETITOR_MAP = {
   "0992.HK": [
@@ -31,20 +32,6 @@ const COMPETITOR_MAP = {
 
 function cleanSentence(value) {
   return String(value || "").replace(/[。；;,\s]+$/g, "").trim();
-}
-
-function formatBeijingMinute(date = new Date()) {
-  const parts = new Intl.DateTimeFormat("zh-CN", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  }).formatToParts(date);
-  const pick = (type) => parts.find((part) => part.type === type)?.value || "";
-  return `${pick("year")}-${pick("month")}-${pick("day")} ${pick("hour")}:${pick("minute")}`;
 }
 
 function driver(panel, name) {
@@ -272,7 +259,7 @@ function validatedSignalLines(context = {}, limit = 3) {
   return out;
 }
 
-function competitorReplyFromPanel(panel, question = "", dataSources = {}, context = {}) {
+function competitorReplyFromPanel(panel, _question = "", dataSources = {}, context = {}) {
   const profile = companyByTicker(panel?.ticker) || {};
   const name = panel?.companyName || profile.nameZh || panel?.ticker || "这家公司";
   const competitors = competitorSetFor({ ...profile, ticker: panel?.ticker || profile.ticker });
@@ -282,7 +269,7 @@ function competitorReplyFromPanel(panel, question = "", dataSources = {}, contex
   const evidenceSignals = [...evidenceSignalsFromWeb(context.webEvidence), ...evidenceSignalsFromNews(context.newsSnapshot)].slice(0, 5);
 
   return [
-    `北京时间 ${formatBeijingMinute()}，${name}的竞争对手不能只按“同一个行业”列名字，要按它在哪些利润池里赚钱来拆。`,
+    `北京时间 ${beijingMinute()}，${name}的竞争对手不能只按“同一个行业”列名字，要按它在哪些利润池里赚钱来拆。`,
     "",
     "简单结论",
     `${name}的竞争不是单线竞争，而是多战场竞争。真正要看的是：哪些对手在抢收入，哪些对手在压利润率，哪些对手会削弱它的估值叙事。`,
@@ -315,7 +302,7 @@ function competitorReplyFromPanel(panel, question = "", dataSources = {}, contex
   ].join("\n");
 }
 
-function businessModelReplyFromPanel(panel, question = "", dataSources = {}) {
+function businessModelReplyFromPanel(panel, _question = "", dataSources = {}) {
   const profile = companyByTicker(panel?.ticker) || {};
   const name = panel?.companyName || profile.nameZh || panel?.ticker || "这家公司";
   const rawBusiness = Array.isArray(profile.businessModel) ? profile.businessModel : [];
@@ -335,7 +322,7 @@ function businessModelReplyFromPanel(panel, question = "", dataSources = {}) {
     : "竞争、监管、利润率和现金流波动";
 
   return [
-    `北京时间 ${formatBeijingMinute()}，${name} 靠什么赚钱，核心不是一句“做平台”，而是看哪些业务真正贡献高质量利润。`,
+    `北京时间 ${beijingMinute()}，${name} 靠什么赚钱，核心不是一句“做平台”，而是看哪些业务真正贡献高质量利润。`,
     "",
     "简单说",
     `${name} 的经营赚钱机制主要来自：${businessLines.map(cleanSentence).join("；")}。`,
@@ -354,7 +341,7 @@ function businessModelReplyFromPanel(panel, question = "", dataSources = {}) {
   ].join("\n");
 }
 
-function moatReplyFromPanel(panel, question = "", dataSources = {}) {
+function moatReplyFromPanel(panel, _question = "", dataSources = {}) {
   const profile = companyByTicker(panel?.ticker);
   const name = panel?.companyName || profile?.nameZh || panel?.ticker || "这家公司";
   const moat = profile?.moat?.length ? profile.moat : ["用户/客户关系", "规模效应", "品牌与渠道", "技术或数据积累"];
@@ -363,7 +350,7 @@ function moatReplyFromPanel(panel, question = "", dataSources = {}) {
   const sources = sourceLines(panel, dataSources);
 
   return [
-    `北京时间 ${formatBeijingMinute()}，${name} 的护城河不能只看“规模大”，要看它能不能持续带来定价权、用户留存、低获客成本和现金流。`,
+    `北京时间 ${beijingMinute()}，${name} 的护城河不能只看“规模大”，要看它能不能持续带来定价权、用户留存、低获客成本和现金流。`,
     "",
     "结论",
     `${name} 的护城河是“多层叠加型”，不是单一技术壁垒。最核心的是：${moat.slice(0, 3).join("、")}。但护城河强不等于利润永远稳定，关键要看这些优势能不能继续转化成利润率、现金流和股东回报。`,
@@ -393,7 +380,7 @@ function moatReplyFromPanel(panel, question = "", dataSources = {}) {
   ].join("\n");
 }
 
-function financialQualityReplyFromPanel(panel, question = "", dataSources = {}, context = {}) {
+function financialQualityReplyFromPanel(panel, _question = "", dataSources = {}, context = {}) {
   const profile = companyByTicker(panel?.ticker) || {};
   const name = panel?.companyName || profile.nameZh || panel?.ticker || "这家公司";
   const financialsData = context.financialsData || null;
@@ -433,7 +420,7 @@ function financialQualityReplyFromPanel(panel, question = "", dataSources = {}, 
     : "完整三表还没核到，财务质量先做低置信度判断";
 
   const lines = [
-    `北京时间 ${formatBeijingMinute()}，${name} 赚不赚钱，要分三层看：靠什么赚钱、利润是不是高质量、现金流能不能兜住。`,
+    `北京时间 ${beijingMinute()}，${name} 赚不赚钱，要分三层看：靠什么赚钱、利润是不是高质量、现金流能不能兜住。`,
     "",
     "我的判断",
     `${name} 的赚钱机制${earnLines.length ? "本身成立" : "需要用最新财报进一步确认"}：${qualityVerdict}。真正决定它“值不值钱”的，不是有没有收入，而是高毛利业务占比、经营现金流和股东回报能不能同向兑现。`,
@@ -466,7 +453,7 @@ function financialQualityReplyFromPanel(panel, question = "", dataSources = {}, 
   return lines.filter((line) => line !== null && line !== undefined).join("\n");
 }
 
-function falsifyReplyFromPanel(panel, question = "", dataSources = {}, context = {}) {
+function falsifyReplyFromPanel(panel, _question = "", dataSources = {}, context = {}) {
   const profile = companyByTicker(panel?.ticker) || {};
   const name = panel?.companyName || profile.nameZh || panel?.ticker || "这家公司";
   const bear = Array.isArray(profile.bear) && profile.bear.length
@@ -480,7 +467,7 @@ function falsifyReplyFromPanel(panel, question = "", dataSources = {}, context =
   const triggers = [...bear, ...risks].filter((item, index, arr) => item && arr.indexOf(item) === index).slice(0, 6);
 
   const lines = [
-    `北京时间 ${formatBeijingMinute()}，要把 ${name} 的多头逻辑证伪，关键不是“出利空”，而是看到下面这些事实真正发生、并且改变利润池。`,
+    `北京时间 ${beijingMinute()}，要把 ${name} 的多头逻辑证伪，关键不是“出利空”，而是看到下面这些事实真正发生、并且改变利润池。`,
     "",
     "我的判断",
     `${name} 当前逻辑成立的前提是：${bull}。一旦这个前提被下面任意一两条打穿，就不该再用“便宜/被低估”来安慰自己，而要按逻辑重估。`,
@@ -546,7 +533,7 @@ export function researchReplyFromPanel(panel, question = "", dataSources = {}, c
     : null;
 
   const lines = [
-    `北京时间 ${formatBeijingMinute()}，${name} 最近的状态是：${String(panel.oneLineView || panel.dataReadiness || `研究状态为${status}`).replace(/。$/, "")}。我不会因为数据缺口就停止判断，但会把置信度和证据缺口说清楚。`,
+    `北京时间 ${beijingMinute()}，${name} 最近的状态是：${String(panel.oneLineView || panel.dataReadiness || `研究状态为${status}`).replace(/。$/, "")}。我不会因为数据缺口就停止判断，但会把置信度和证据缺口说清楚。`,
     "",
     "结论",
     `${name} 当前更适合归为“${status}”，不是一句买或卖能解决的问题。核心矛盾是：${fundamentalText}；同时 ${valuationText}。${holding}`,
@@ -601,7 +588,7 @@ export function normalizeResearchAnswer(content, panel, dataSources = {}) {
   // 防止重复塞前缀。oneLineView 已自带句号，先去掉避免出现"。。"。
   if (!/^北京时间\s*\d{4}-\d{2}-\d{2}/.test(text)) {
     const view = String(panel.oneLineView || panel.dataReadiness || "需要继续验证").replace(/。+$/, "");
-    text = `北京时间 ${formatBeijingMinute()}，${panel.companyName || panel.ticker} 最近的状态是：${view}。\n\n${text}`;
+    text = `北京时间 ${beijingMinute()}，${panel.companyName || panel.ticker} 最近的状态是：${view}。\n\n${text}`;
   }
   if (!/来源[:：]/.test(text)) {
     text += `\n\n来源：\n${sourceLines(panel, dataSources).join("\n")}`;
@@ -764,7 +751,7 @@ ${historyBlock}${portraitBlock}
 数据完整度：${panel.dataCompleteness}%
 一句话判断：${panel.oneLineView || "尚无——请基于下方材料自行形成（不要把数据可用性描述当判断）"}
 用户上下文：成本 ${panel.userContext?.cost || "未提供"}，持股 ${panel.userContext?.shares || "未提供"}，周期 ${panel.userContext?.horizon || "未提供"}
-北京时间：${formatBeijingMinute()}
+北京时间：${beijingMinute()}
 
 关键卡片：
 ${drivers}
@@ -795,7 +782,7 @@ ${webEvidencePrompt}
 
 回答规则：
 - 输出中文纯文本，可以用短标题，但不要 Markdown 表格。
-- 第一行必须以“北京时间 ${formatBeijingMinute()}，”开头。若是泛研究问题，用“${panel.companyName} 最近的状态是：……”；若是单点追问，直接回答用户问的那个点。
+- 第一行必须以“北京时间 ${beijingMinute()}，”开头。若是泛研究问题，用“${panel.companyName} 最近的状态是：……”；若是单点追问，直接回答用户问的那个点。
 - 保持像真实投研对话，不要写成产品说明，不要说“我将/我会获取”。
 - ${context.compare ? `本轮是【对比任务】：把当前研究对象 ${panel.companyName} 与上面"对比对象 ${context.compare.name}"并排比较。段落固定用：简单结论、现价与估值、利润质量、护城河与商业模式、区间回报与动量、分析师预期、风险与赔率、我的判断。每个维度都要两家都讲、点明谁更优及原因；"我的判断"明确给出谁的赔率/质量更好以及成立前提。只用两家已核到的真实数据，缺的维度说一句即可。禁止买卖建议。不要输出单公司的完整研究模板。` : hasHoldings ? `本轮用户同时问了多只持仓/标的，这是【多标的/组合任务】。必须**逐只**基于上面"本轮已核到的其他标的"的真实行情/估值给判断，并给出**组合合计**视角。段落固定用：结论（点明组合整体盈亏方向 + 各标的浮动）、分标的看（每只一段：性质/估值/赔率/各自浮动盈亏）、组合视角（集中度与风险结构、谁稳谁弹）、动作（研究语言、禁买卖建议）、证伪条件、来源。合计盈亏要把当前研究对象的成本/持股 + 上面其他标的的成本/持股一起算。严禁因旧知识否定任何已核到的标的（例如说某股"还没上市"）。不要输出单公司的完整研究模板。` : businessMode ? "用户问的是靠什么赚钱/商业模式/收入来源。只回答这个问题，段落用：简单说、拆开看、关键判断、主要风险、来源。不要输出完整研究模板。" : competitorMode ? "用户问的是竞争对手/竞品/竞争格局。只回答竞争格局，段落用：简单结论、主要竞争对手、怎么理解竞争格局、我的判断、接下来重点看、来源。不要输出完整研究模板，不要写估值/动作大模板。" : moatMode ? "用户问的是护城河/竞争优势。只围绕护城河回答，段落用：结论、护城河拆解、商业模式、我的判断、风险 / 证伪、下一步看什么、来源。不要输出完整行情模板。" : financialMode ? "用户问的是赚不赚钱/盈利质量/利润/现金流。只回答财务质量，段落用：我的判断、靠什么赚钱、利润质量、现金流、主要风险、下一步看什么、来源。先给判断再讲依据，优先使用上面‘已核到的实时财务口径’，缺数据只说一句、放到末尾，不要输出完整研究模板。" : falsifyMode ? "用户问的是什么情况会证伪/会推翻逻辑。只回答证伪，段落用：我的判断、会推翻逻辑的关键事实、怎么提前观察、来源。先点明当前多头逻辑成立的前提，再列出哪些事实出现就要重估，使用 Bull/Bear/监控项档案，不要输出完整研究模板。" : "必须包含这些段落，顺序固定：结论、事实、推断、估值 / 风险、动作、证伪条件、我的判断、还缺什么（折叠在末尾、只影响置信度）、来源。"}
 - “事实”尽量编号，引用当前可用数据；不能编造具体数值。若某项缺失，写“当前未核到/来源缺失”，但继续给推断。
@@ -916,7 +903,7 @@ export function buildReportPrompt(question, panel, dataSources = {}, context = {
 
   return `请基于以下材料，为 ${name}（${panel.ticker}）写一份资深买方研究员风格的深度研究报告。
 用户问题：${question || `${name} 值不值得研究`}
-北京时间：${formatBeijingMinute()}
+北京时间：${beijingMinute()}
 当前价格口径：${price}（来源 ${panel.price?.source || dataSources.market?.provider || "公开行情"}）
 一句话判断（参考，可改写）：${panel.oneLineView || "尚无既有判断，请基于本轮证据自行给出"}
 

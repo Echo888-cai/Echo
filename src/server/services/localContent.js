@@ -5,7 +5,7 @@
  * "缺失 —— [原因]".
  */
 
-import { compactNumberServer, missing, fmtPercent, quoteStatusFor } from "../utils/format.js";
+import { compactNumberServer, fmtPercent, quoteStatusFor } from "@echo/domain";
 
 function quoteStatus(snapshot) {
   return quoteStatusFor(snapshot);
@@ -15,7 +15,7 @@ function quoteLine(article, index) {
   return `${index + 1}. ${article.source || "News"}｜${article.publishedAt || "时间缺失"}｜${article.title}${article.url ? `｜${article.url}` : ""}`;
 }
 
-export function buildLocalContent({ question, company, filings = [], marketSnapshot = null, newsSnapshot = null, documents = [], memory = {}, financialsData = null, filingsData = null, estimatesData = null, userContext = null }) {
+export function buildLocalContent({ question, company, filings = [], marketSnapshot = null, newsSnapshot = null, documents: _documents = [], memory: _memory = {}, financialsData = null, filingsData = null, estimatesData = null, userContext = null }) {
   const profile = company || { ticker: "unknown.HK", nameZh: "研究对象" };
   const summary = profile.summary || [];
   const risks = profile.risks || [];
@@ -31,12 +31,6 @@ export function buildLocalContent({ question, company, filings = [], marketSnaps
   const userLine = userContext && (userContext.cost || userContext.shares || userContext.horizon)
     ? `用户持仓：成本 ${userContext.cost || "未提供"}，持股 ${userContext.shares || "未提供"} 股，周期 ${userContext.horizon || "未提供"}。`
     : "未录入持仓。添加成本价和仓位后，可生成分批和止错计划。";
-
-  const headline = hasFinancials
-    ? `${profile.nameZh} 当前价格 ${currentPrice}，收入增速 ${fmtPercent(financialsData.revenueGrowth)}，${hasEstimates ? "已有分析师覆盖" : "分析师评级待接入"}。`
-    : hasPrice
-    ? `${profile.nameZh} 当前价格 ${currentPrice}（${quoteMode}），行情已接入，财务数据待接入。`
-    : `${profile.nameZh} 行情和财务数据暂不可用。`;
 
   const priceSummary = hasPrice
     ? `当前价格 ${currentPrice}（${quoteMode}），日内 ${marketSnapshot.changePercent !== null ? fmtPercent(marketSnapshot.changePercent) : "待确认"}。`

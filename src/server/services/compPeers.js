@@ -20,8 +20,9 @@
 import { getMarketSnapshot } from "../../marketData.js";
 import { getFinancials } from "../../financialData.js";
 import { adrOrBareSymbol, isUS, bareSymbol, hkCode, detectMarket } from "../../market.js";
-import { classifyAssetStage } from "./valuationEngine.js";
+import { classifyAssetStage } from "@echo/domain";
 import { withTimeout } from "../utils/async.js";
+import { fetchJson as requestJson } from "../utils/http.js";
 import { getCompPeersRow, upsertCompPeers } from "../repositories/compPeersRepository.js";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
@@ -38,18 +39,10 @@ function numOrNull(value) {
   return Number.isFinite(n) ? n : null;
 }
 
-async function fetchJson(url, timeoutMs = 6000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "EchoResearch/1.0 comp peers", Accept: "application/json" } });
-    const text = await response.text();
-    if (!response.ok) throw new Error(`${response.status} ${text.slice(0, 160)}`);
-    return JSON.parse(text);
-  } finally {
-    clearTimeout(timer);
-  }
-}
+const fetchJson = (url, timeoutMs = 6000) => requestJson(url, {
+  timeoutMs,
+  userAgent: "EchoResearch/1.0 comp peers"
+});
 
 /** 阶段 → 倍数桶：只有同桶的 peer 才能拿来互相对照。 */
 function bucketOf(stage) {

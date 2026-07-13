@@ -14,12 +14,12 @@ import { getDb, dbPath } from "../../db/index.js";
 
 const execFileAsync = promisify(execFile);
 
-const FILE_PREFIX = "luvio-";
+const FILE_PREFIX = "echo-";
 const FILE_SUFFIX = ".db";
 
-/** 备份目录：可用 LUVIO_BACKUP_DIR 覆盖，默认是数据库文件所在目录下的 backups/。 */
+/** 备份目录：可用 ECHO_BACKUP_DIR 覆盖，默认是数据库文件所在目录下的 backups/。 */
 export function backupDir() {
-  return process.env.LUVIO_BACKUP_DIR || join(dirname(dbPath()), "backups");
+  return process.env.ECHO_BACKUP_DIR || join(dirname(dbPath()), "backups");
 }
 
 function timestampName(now = new Date()) {
@@ -46,7 +46,7 @@ export function verifyBackup(path) {
   try {
     const integrity = db.pragma("integrity_check", { simple: true });
     if (integrity !== "ok") throw new Error(`integrity_check 未通过：${integrity}`);
-    const row = db.prepare("SELECT COUNT(*) AS n FROM companies").get();
+    const row = /** @type {{n: number}|undefined} */ (db.prepare("SELECT COUNT(*) AS n FROM companies").get());
     return { ok: true, companies: row?.n ?? 0 };
   } finally {
     db.close();
@@ -78,12 +78,12 @@ export async function runBackup({ retain = 14 } = {}) {
 
 /**
  * U-3（E14）：备份校验通过后的异地推送钩子。服务器挂了本地备份一起挂——
- * 生产必须有异地副本（PLAN v5 E14）。命令由 LUVIO_BACKUP_PUSH_CMD 提供，
+ * 生产必须有异地副本（PLAN v5 E14）。命令由 ECHO_BACKUP_PUSH_CMD 提供，
  * 备份文件路径以 {file} 占位（如 `rclone copy {file} b2:echo-backups/`）。
  * 未配置 = 跳过（本机开发不需要）；推送失败不影响备份本身的成功状态，但如实上报。
  */
 async function pushOffsite(dest) {
-  const template = process.env.LUVIO_BACKUP_PUSH_CMD;
+  const template = process.env.ECHO_BACKUP_PUSH_CMD;
   if (!template) return "";
   const parts = template.split(/\s+/).map((p) => (p === "{file}" ? dest : p));
   try {

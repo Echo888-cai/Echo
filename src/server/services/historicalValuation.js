@@ -15,6 +15,7 @@
  * 分布——跟当前正 PE 比较没有意义。
  */
 import { adrOrBareSymbol, detectMarket } from "../../market.js";
+import { fetchJson as requestJson } from "../utils/http.js";
 import { getHistoricalValuationRow, upsertHistoricalValuationSeries } from "../repositories/historicalValuationRepository.js";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
@@ -25,18 +26,10 @@ function env(name) {
   return process.env[name] || "";
 }
 
-async function fetchJson(url, timeoutMs) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "EchoResearch/1.0 historical valuation", Accept: "application/json" } });
-    const text = await response.text();
-    if (!response.ok) throw new Error(`${response.status} ${text.slice(0, 160)}`);
-    return JSON.parse(text);
-  } finally {
-    clearTimeout(timer);
-  }
-}
+const fetchJson = (url, timeoutMs) => requestJson(url, {
+  timeoutMs,
+  userAgent: "EchoResearch/1.0 historical valuation"
+});
 
 /** Finnhub 年度 PE 序列（新→旧），过滤掉亏损年份（PE<=0）和非有限值。 */
 async function fetchAnnualPeSeries(symbol) {
@@ -97,52 +90,4 @@ export async function getHistoricalValuationSeries(ticker) {
     upsertHistoricalValuationSeries({ ticker: t, series: [], providerStatus: "error", detail });
     return { series: [], providerStatus: "error", detail, stale: false };
   }
-}
-
-function percentileOf(current, sortedValues) {
-  if (!sortedValues.length) return null;
-  const below = sortedValues.filter((v) => v <= current).length;
-  return Math.round((below / sortedValues.length) * 100);
-}
-
-/**
- * 用调用方传入的实时 PE 对历史年度序列现算百分位（纯函数，不碰网络）。
- * @param {{series: Array<{period:string, value:number}>, providerStatus:string, detail:string|null, stale:boolean}} seriesResult
- * @param {number|null} currentPe
- * @returns {{providerStatus:string, metric:"pe", currentValue, percentile, sampleYears, min, max, median, oldestPeriod, newestPeriod, detail, stale}}
- */
-export function computeHistoricalValuationPercentile(seriesResult, currentPe) {
-  const { series = [], providerStatus, detail, stale = false } = seriesResult || {};
-  const sortedPeriods = [...series].sort((a, b) => (a.period < b.period ? 1 : -1)); // 新→旧
-  const oldestPeriod = sortedPeriods.at(-1)?.period || null;
-  const newestPeriod = sortedPeriods[0]?.period || null;
-
-  if (providerStatus !== "ok" || !Number.isFinite(currentPe) || currentPe <= 0) {
-    return {
-      providerStatus: providerStatus === "ok" ? "missing" : providerStatus,
-      metric: "pe",
-      currentValue: Number.isFinite(currentPe) ? currentPe : null,
-      percentile: null,
-      sampleYears: series.length,
-      min: null, max: null, median: null,
-      oldestPeriod, newestPeriod,
-      detail: providerStatus === "ok" ? "当前 PE 不可用，无法计算历史分位" : detail,
-      stale
-    };
-  }
-
-  const values = series.map((s) => s.value).sort((a, b) => a - b);
-  return {
-    providerStatus: "ok",
-    metric: "pe",
-    currentValue: currentPe,
-    percentile: percentileOf(currentPe, values),
-    sampleYears: values.length,
-    min: values[0],
-    max: values.at(-1),
-    median: values[Math.floor(values.length / 2)],
-    oldestPeriod, newestPeriod,
-    detail: null,
-    stale
-  };
 }

@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS cn_financials (
 CREATE INDEX IF NOT EXISTS idx_cn_financials_ticker ON cn_financials(ticker, period_end);
 
 -- A 股一手财报（巨潮资讯网公告）摄取尝试留痕，同 hk_filing_ingest_log 的角色，
--- 供 scripts/cn-coverage.js 增量扫描 + 健康面板覆盖率统计用。
+-- 供 scripts/coverage.js --market=cn 增量扫描与健康面板覆盖率统计使用。
 CREATE TABLE IF NOT EXISTS cn_filing_ingest_log (
   ticker               TEXT PRIMARY KEY,
   status               TEXT NOT NULL,

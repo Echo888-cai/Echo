@@ -1,0 +1,7 @@
+{
+  "name": "@echo/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "一手 filing 管道（CNINFO/HKEX PDF 抽取）的家：src/pipelines/ 被旧底盘生产代码直接 import，是共享资产。终局计划第 4 步在此落地 Temporal worker（BullMQ 壳已按终局计划删除，见 docs/PLAN.md §3）。"
+}

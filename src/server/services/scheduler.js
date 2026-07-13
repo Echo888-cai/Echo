@@ -11,7 +11,7 @@
  *     就补跑（比如 09:00 的港股速报，用户 10 点开机也能收到）。只补今天，不追历史。
  *   - 任务串行跑（for...await），一个任务失败不影响下一个，状态与错误落库可查。
  *
- * 环境开关：LUVIO_DISABLE_SCHEDULER=1 完全禁用（CI/测试里用）。
+ * 环境开关：ECHO_DISABLE_SCHEDULER=1 完全禁用（CI/测试里用）。
  *
  * 测试性：isDue / inTradingWindow 是纯函数导出；tickOnce 可注入 now。
  */
@@ -20,18 +20,18 @@ import { getDb } from "../../db/index.js";
 import { beijingDate, beijingMinute } from "../utils/time.js";
 import { notify } from "./notifier.js";
 import { buildDigest, buildPositionAlerts } from "./eventEngine.js";
-import { listCompanyProfiles, getCompanyProfile, appendProfileEvent } from "../repositories/companyProfiles.js";
-import { listPositions } from "../repositories/portfolio.js";
-import { listWatchAdds, getHiddenTickers } from "../repositories/watchlist.js";
-import { listAllActiveRules, listRules, markTriggered } from "../repositories/watchRules.js";
-import { evaluateRule, evaluateFundamentalRule, FUNDAMENTAL_METRIC_LABELS } from "./falsifyRules.js";
+import { listCompanyProfiles, getCompanyProfile, appendProfileEvent } from "../repositories/companyProfilesRepository.js";
+import { listPositions } from "../repositories/portfolioRepository.js";
+import { listWatchAdds, getHiddenTickers } from "../repositories/watchlistRepository.js";
+import { listAllActiveRules, listRules, markTriggered } from "../repositories/watchRulesRepository.js";
+import { evaluateRule, evaluateFundamentalRule, FUNDAMENTAL_METRIC_LABELS } from "@echo/domain";
 import { getMarketSnapshot } from "../../marketData.js";
 import { getFinancials } from "../../financialData.js";
 import { listSnapshotTickers } from "../repositories/researchSnapshotsRepository.js";
 import { runBackup } from "./dbBackup.js";
 import { getNextEarnings } from "./earningsCalendar.js";
 import { listWithLastReported } from "../repositories/earningsCalendarRepository.js";
-import { compactNumberServer } from "../utils/format.js";
+import { compactNumberServer } from "@echo/domain";
 import { recordDailySnapshot } from "./portfolioSnapshot.js";
 import { listUsers } from "../repositories/authRepository.js";
 
@@ -332,11 +332,11 @@ export const JOBS = [
 
 // ── 引擎 ─────────────────────────────────────────────────────
 
-function getState(jobId) {
+export function getState(jobId) {
   return getDb().prepare("SELECT * FROM scheduler_state WHERE job_id = ?").get(jobId) || null;
 }
 
-function setState(jobId, { lastRunAt, status, detail }) {
+export function setState(jobId, { lastRunAt, status, detail }) {
   getDb().prepare(`
     INSERT INTO scheduler_state (job_id, last_run_at, last_status, last_detail)
     VALUES (@jobId, @lastRunAt, @status, @detail)
@@ -369,8 +369,8 @@ let timer = null;
 
 /** 启动调度器：立即 tick 一次（misfire 补跑），之后每分钟一次。 */
 export function startScheduler() {
-  if (process.env.LUVIO_DISABLE_SCHEDULER === "1") {
-    console.log("[scheduler] LUVIO_DISABLE_SCHEDULER=1，调度器未启动");
+  if (process.env.ECHO_DISABLE_SCHEDULER === "1") {
+    console.log("[scheduler] ECHO_DISABLE_SCHEDULER=1，调度器未启动");
     return false;
   }
   if (timer) return true;
@@ -386,7 +386,7 @@ export function startScheduler() {
 /** 调度器状态（设置页展示用）。 */
 export function schedulerStatus() {
   return {
-    enabled: process.env.LUVIO_DISABLE_SCHEDULER !== "1",
+    enabled: process.env.ECHO_DISABLE_SCHEDULER !== "1",
     running: Boolean(timer),
     jobs: JOBS.map((job) => {
       const state = getState(job.id);

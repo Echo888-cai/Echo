@@ -12,7 +12,7 @@
  * - 任何失败/超时都降级成 []，绝不阻断主作答。
  */
 import { callModel, getProviderStatus } from "./modelGateway.js";
-import { resolveCompanyFromQuery } from "../routes/companies.js";
+import { resolveCompanyFromQuery } from "./companyResolver.js";
 
 // 列举标记（和/与/跟/、/，/, /以及/还有/及/&）。
 const LIST_MARK = /[、,，&]|和|与|跟|以及|还有|及/;

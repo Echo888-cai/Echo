@@ -1,5 +1,10 @@
 # CLAUDE.md — Claude Code Instructions
 
+## Project
+
+- **唯一计划文档：`docs/PLAN.md`**（终局架构 + 已拍板决策 + 1→7 执行步骤 + 宪法红线）。做任何改动前先读它；不要创建新计划、分轨、ADR 或候选方案。
+- 生产在旧底盘（`server.js` + `src/` + SQLite，后端无热重载）；`npm run lint`、`npm run typecheck`、`npm run typecheck:workspaces`、`npm test`、契约测试和 React build 必须全绿再提交。
+
 ## Effort Policy
 
 - **Default to medium effort** for normal work.
