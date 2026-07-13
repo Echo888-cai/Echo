@@ -30,18 +30,26 @@ src/
 
 ## 新底盘（正在接管的这一半）
 
+> **技术栈进行中调整**（[ADR-0003](adr/0003-hono-trpc-temporal-pivot.md)，2026-07-13）：`apps/api`/`apps/worker` 下方标的"当前实现"是已验证落地、测试全绿的代码；"计划替换"是一轮不考虑成本、只考虑技术审美的复核后的方向，尚未动工。已验证的模块和契约测试不作废——迁移是逐模块替换底层框架，不是推倒重来，路线表见 ADR-0003。
+
 ```
 apps/
-├── api/     @echo/api    — NestJS 模块化单体，17 个业务模块（auth/chat/research/portfolio/
-│                            watch/companies/hkFinancials/discover/events/notifications/…），
+├── api/     @echo/api    — 当前实现：NestJS 模块化单体，17 个业务模块（auth/chat/research/
+│                            portfolio/watch/companies/hkFinancials/discover/events/…），
 │                            controller 用 packages/contracts 的 zod schema 做输入校验
+│                            计划替换：Hono（HTTP 层，无装饰器仪式）+ tRPC（RPC 契约，直接复用
+│                            现有 zod schema 做 procedure input parser，无需独立 OpenAPI 生成步骤）
 ├── web/     @echo/web    — React 19 + Vite + TS，router.tsx 按路由代码分割（login/research/
 │                            portfolio/watch/settings），组件消费 @echo/ui 的 design tokens
-└── worker/  @echo/worker — BullMQ 消费者；processor.ts 复用 scheduler.js 的 isDue/JOBS 定义，
-                             不重新实现调度逻辑，只换"谁来触发"
+└── worker/  @echo/worker — 当前实现：BullMQ 消费者；processor.ts 复用 scheduler.js 的
+                             isDue/JOBS 定义，不重新实现调度逻辑，只换"谁来触发"
+                             计划替换：Temporal——多步研究管线（深度研究报告生成/filing 抓取/
+                             业绩闭环）需要的是可重放、可观测的 workflow 语义，不是"任务失败就整体
+                             重试"；纯周期任务是否折进 Temporal Cron Workflow 视实测收益决定
 
 packages/
-├── contracts/  @echo/contracts — zod schema 单一源，前后端共享类型 + OpenAPI 生成
+├── contracts/  @echo/contracts — zod schema 单一源，前后端共享类型 + OpenAPI 生成；
+│                                  tRPC 迁移后仍是 procedure input parser 与对外 OpenAPI 的共同源头
 ├── db/         @echo/db        — Drizzle + Postgres schema（core/auth/financials/portfolio/
 │                                  research/notifications），sqlite-to-postgres.ts 做 ETL
 ├── data-plane/ @echo/data-plane — 供应商适配器矩阵：Quote/Fundamentals/Filings/Calendar 四个
@@ -49,6 +57,8 @@ packages/
 └── ui/         @echo/ui        — design tokens（tokens.css/tokens.ts），从旧底盘的
                                    00-foundation.css 机械提取，数值逐字节一致
 ```
+
+领域核心（valuationEngine/factGuard/falsifyRules 等纯函数）保持 TypeScript，Rust/WASM 化明确列为远期选项——只有量化回测变成真实路线图项才启动，不是预防性投入（ADR-0003 §4）。
 
 新底盘的每一层都是"搬家不重写"：`apps/api` 的 controller 结构和旧 `src/server/routes` 一一对应；`packages/data-plane` 的适配器包一层现有抓取函数，不重新实现行情/财报逻辑；`apps/worker` 复用 `scheduler.js` 的 `JOBS` 注册表，只是换了触发机制（BullMQ repeatable job 代替 60s 轮询）。这是 REFACTOR_PROPOSAL §1.2"结构的必然性"的具体执行：换底盘不等于推倒重来。
 
