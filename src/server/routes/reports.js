@@ -1,5 +1,5 @@
 import { readJsonBody, sendJson, withTimeout } from "../utils/async.js";
-import { runAgent } from "../services/agentService.js";
+import { runAgent } from "../services/agent.js";
 import { callModel, getProviderStatus } from "../services/modelGateway.js";
 import { companyByTicker } from "../../data.js";
 import { classifyResearchIntent } from "../services/intentClassifier.js";
@@ -8,8 +8,8 @@ import { buildReportPrompt, mergeEvidenceIntoPanel } from "../services/answerCom
 import { displayValuation } from "../services/valuationEngine.js";
 import { getComparableCompanies } from "../services/compPeers.js";
 import { composeReport, reportPreview } from "../services/reportComposer.js";
-import { saveResearchSession } from "../repositories/researchSessions.js";
-import { quotaGuard } from "../services/quotaService.js";
+import { saveResearchSession } from "../repositories/researchSessionsRepository.js";
+import { quotaGuard } from "../services/quota.js";
 import { applyFactGuard } from "../services/chatOrchestrator.js";
 import { extractStructuredFalsifiers } from "../services/falsifyRules.js";
 import { updatePortraitFromPanel } from "../services/companyPortrait.js";

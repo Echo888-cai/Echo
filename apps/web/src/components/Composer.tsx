@@ -2,7 +2,7 @@
 // quick-reply chips + file upload + busy status + send button.
 import { useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from "react";
 import type { ResearchCompany } from "../lib/researchStore";
-import { activeRun, isViewBusy, busyElapsedSeconds } from "../lib/researchStore";
+import { activeRun, isViewBusy } from "../lib/researchStore";
 import { generateDeepResearch, parseFiles } from "../lib/researchActions";
 
 export function Composer({ company, resolvingLabel, busySeconds, onSubmit }: { company: ResearchCompany | null; resolvingLabel: string; busySeconds: number; onSubmit: (q: string) => void }) {

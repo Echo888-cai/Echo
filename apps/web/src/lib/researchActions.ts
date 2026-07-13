@@ -16,7 +16,6 @@ import {
   setDocuments,
   getSessionId,
   setSessionId,
-  getConversationId,
   setConversationId,
   ensureSessionId,
   ensureConversationId,
@@ -39,7 +38,7 @@ import {
   type ResearchCompany,
   type Message
 } from "./researchStore";
-import { askApi, reportsApi, researchSessionsApi, documentsApi, watchApi, chatStream, ApiError } from "./api";
+import { askApi, reportsApi, researchSessionsApi, documentsApi, chatStream, ApiError } from "./api";
 import {
   resolveCompany,
   stripCompanyMentions,

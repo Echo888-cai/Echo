@@ -1,7 +1,8 @@
-# 部署手册（U-3 / E14，PLAN v5）
+# 部署手册（当前生产底盘：Node + SQLite + Caddy）
 
 把 Echo Research 从本机搬到一台小 VPS，开给 ≤10 人的邀请制 beta。全程零新增运行时依赖，
-Node + SQLite + Caddy 三件套。**前置：E11 安全底座与 U-1 鉴权必须已合入 main（红线 19）。**
+Node + SQLite + Caddy 三件套。这份手册服务**当前生产底盘**（`server.js` + `src/`）；
+终局计划第 6 步切流后部署形态收敛为 IaC + 托管云，届时本手册整体替换（见 docs/PLAN.md §4）。
 
 ## 0. 选机器
 
@@ -20,7 +21,7 @@ sudo -u echo npm install --omit=dev
 sudo -u echo npm run seed          # 首次建库（生产库就是 /opt/echo-research/echo.db）
 ```
 
-`.env` 手工放到 `/opt/echo-research/.env`（**scp 传，不进 git，红线 20**），内容同本机，另加：
+`.env` 手工放到 `/opt/echo-research/.env`（**scp 传，不进 git，宪法红线 5**），内容同本机，另加：
 
 ```text
 ECHO_TRUST_PROXY=1                # 信任 Caddy 的 X-Forwarded-For；cookie 带 Secure
@@ -43,6 +44,8 @@ sudo systemctl reload caddy
 ```
 
 域名 A 记录指到 VPS IP，Caddy 自动签 HTTPS。Node 只听 127.0.0.1:4173，公网只见 Caddy。
+域名还没到手时可先用 `deploy/Caddyfile.ip-only`（裸 IP + 自签证书的过渡配置，
+生成证书的 openssl 命令和注意事项写在该文件头部注释里），域名就位后切回正式 Caddyfile。
 
 ## 3. 开启多用户模式 + 发邀请
 
@@ -59,7 +62,7 @@ sudo -u echo npm run doctor:prod   # 必须 0 退出后再开放域名
 `invite-batch` 生成的是一次性注册码，不会替任何人设置或保存密码；若严格控制总人数为 10，
 owner 也算一人，请只发 9 枚邀请码。
 
-**红线 17**：beta 免费、邀请制、不公开宣传（Caddyfile 已带 `X-Robots-Tag: noindex`），
+**宪法红线 6**：beta 免费、邀请制、不公开宣传（Caddyfile 已带 `X-Robots-Tag: noindex`），
 直到拿到可商用行情授权。
 
 ## 4. 异地备份（必须做）
@@ -94,13 +97,13 @@ scp echo.db 服务器:/opt/echo-research/echo.db
 - [ ] `curl https://域名/.env` → 返回 SPA 壳 HTML 而不是密钥（E11 白名单生效）
 - [ ] `curl https://域名/echo.db` → 同上
 - [ ] 未登录访问 `/api/portfolio` → 401（多用户模式生效）
-- [ ] 两人各自登录后互看不到对方的持仓/研究（U-2 隔离，红线 18）
+- [ ] 两人各自登录后互看不到对方的持仓/研究（跨用户隔离，宪法红线 3）
 - [ ] 设置页 scheduler 状态：8 个任务正常，备份"异地推送 ✓"
 - [ ] Telegram 通知通路正常（生产 .env 里配了 bot token 的话）
-- [ ] 手机 375px 实跑一遍看盘/持仓（M-2 修复面）
+- [ ] 手机 375px 实跑一遍看盘/持仓核心链路
 
 ## 7. 日常运维
 
 - 发版：`git pull && npm install --omit=dev && systemctl restart echo-research`（无热重载）
 - 看日志：`journalctl -u echo-research -f`；Caddy 访问日志在 /var/log/caddy/
-- 值守：beta 期两人按周轮换（PLAN v5 §3.5），报警通道 = Telegram 错误通知
+- 报警通道：Telegram 错误通知；每次发布后检查任务状态与异地备份结果

@@ -11,6 +11,7 @@
 
 import { bareSymbol } from "./market.js";
 import { normalizeTicker } from "./data.js";
+import { fetchJson as requestJson } from "./server/utils/http.js";
 
 const SEC_UA = process.env.SEC_USER_AGENT || "Echo Research research@echoresearch.app";
 // Forms worth surfacing: current reports, quarterly/annual, foreign-issuer equivalents.
@@ -19,22 +20,11 @@ const FORMS_OF_INTEREST = new Set(["8-K", "10-Q", "10-K", "10-K/A", "10-Q/A", "6
 let tickerMapCache = null;
 let tickerMapFetchedAt = 0;
 const TICKER_MAP_TTL_MS = 24 * 60 * 60 * 1000;
-
-async function fetchJson(url, timeoutMs = 8000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: { "User-Agent": SEC_UA, Accept: "application/json" }
-    });
-    const text = await response.text();
-    if (!response.ok) throw new Error(`${response.status} ${text.slice(0, 120)}`);
-    return JSON.parse(text);
-  } finally {
-    clearTimeout(timer);
-  }
-}
+const fetchJson = (url, timeoutMs = 8000) => requestJson(url, {
+  timeoutMs,
+  userAgent: SEC_UA,
+  errorPreviewLength: 120
+});
 
 /** Build a { TICKER → 10-digit CIK } lookup from SEC's company_tickers.json (pure). */
 export function buildTickerCikMap(raw) {

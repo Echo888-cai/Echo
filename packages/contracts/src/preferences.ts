@@ -8,7 +8,7 @@
 import { z } from "zod";
 import { okEnvelope } from "./envelope.js";
 
-/** Mirrors repositories/userPreferences.js DEFAULTS/hydrate(). */
+/** Mirrors repositories/userPreferencesRepository.js DEFAULTS/hydrate(). */
 export const userPreferencesSchema = z.object({
   onboardingCompleted: z.boolean(),
   notifyDigest: z.boolean(),

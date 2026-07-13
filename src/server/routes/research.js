@@ -9,7 +9,7 @@
  */
 
 import { readJsonBody, sendOk, sendError } from "../utils/async.js";
-import { listResearchSessions, listConversations, getResearchSession, saveResearchSession, deleteResearchSession, clearResearchSessions } from "../repositories/researchSessions.js";
+import { listResearchSessions, listConversations, getResearchSession, saveResearchSession, deleteResearchSession, clearResearchSessions } from "../repositories/researchSessionsRepository.js";
 import { composeReport } from "../services/reportComposer.js";
 
 const userId = (req) => req.echoUser?.id || "local";

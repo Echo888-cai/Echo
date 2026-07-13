@@ -15,6 +15,7 @@
  * 分布——跟当前正 PE 比较没有意义。
  */
 import { adrOrBareSymbol, detectMarket } from "../../market.js";
+import { fetchJson as requestJson } from "../utils/http.js";
 import { getHistoricalValuationRow, upsertHistoricalValuationSeries } from "../repositories/historicalValuationRepository.js";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
@@ -25,18 +26,10 @@ function env(name) {
   return process.env[name] || "";
 }
 
-async function fetchJson(url, timeoutMs) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "EchoResearch/1.0 historical valuation", Accept: "application/json" } });
-    const text = await response.text();
-    if (!response.ok) throw new Error(`${response.status} ${text.slice(0, 160)}`);
-    return JSON.parse(text);
-  } finally {
-    clearTimeout(timer);
-  }
-}
+const fetchJson = (url, timeoutMs) => requestJson(url, {
+  timeoutMs,
+  userAgent: "EchoResearch/1.0 historical valuation"
+});
 
 /** Finnhub 年度 PE 序列（新→旧），过滤掉亏损年份（PE<=0）和非有限值。 */
 async function fetchAnnualPeSeries(symbol) {

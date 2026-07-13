@@ -28,6 +28,7 @@
  */
 import { detectMarket, adrOrBareSymbol } from "../../market.js";
 import { getEarningsCalendarRow, upsertEarningsCalendar } from "../repositories/earningsCalendarRepository.js";
+import { fetchJson as requestJson } from "../utils/http.js";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 const LOOKAHEAD_DAYS = 180;
@@ -67,18 +68,10 @@ function env(name) {
   return process.env[name] || "";
 }
 
-async function fetchJson(url, timeoutMs = 6000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "EchoResearch/1.0 earnings calendar", Accept: "application/json" } });
-    const text = await response.text();
-    if (!response.ok) throw new Error(`${response.status} ${text.slice(0, 160)}`);
-    return JSON.parse(text);
-  } finally {
-    clearTimeout(timer);
-  }
-}
+const fetchJson = (url, timeoutMs = 6000) => requestJson(url, {
+  timeoutMs,
+  userAgent: "EchoResearch/1.0 earnings calendar"
+});
 
 function isoDate(d) {
   return d.toISOString().slice(0, 10);

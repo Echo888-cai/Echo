@@ -165,9 +165,9 @@ The public edge is deployment-ready for a single HK/SG VPS: Caddy TLS, loopback-
 
 ## Architecture
 
-Echo Research is mid-way through a strangler-fig rewrite: **production traffic still runs entirely on the original monolith** (plain Node, single runtime dependency `better-sqlite3`, build-less native-ESM front end — the browser loads `src/app.js` as a module directly, no bundler, no transpile step), while a parallel new stack (`apps/api` NestJS · `apps/web` React+Vite · `apps/worker` BullMQ · `packages/{contracts,db,data-plane,ui}`) has been built out module-for-module alongside it and hasn't been cut over yet. Both are real, both are tested, only one currently serves users — deliberately, so the main branch is always shippable and either side can be rolled back independently.
+Echo Research is mid-way through a strangler-fig rewrite: **production traffic still runs entirely on the original monolith** (plain Node, single runtime dependency `better-sqlite3`, build-less native-ESM front end — the browser loads `src/app.js` as a module directly, no bundler, no transpile step), while the endgame stack is being assembled alongside it: `apps/web` (React 19 + Vite), `apps/api` (Hono + tRPC, step 2 of the plan), `apps/worker` (first-party filing pipelines today, Temporal workflows at step 4), and `packages/{domain,contracts,db,data-plane,ui}`. One plan document governs the whole migration — no parallel tracks.
 
-See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full picture (current layout, target layout, data-layer present/future, the design-token pipeline shared by both front ends) and [REFACTOR_PROPOSAL.md](docs/REFACTOR_PROPOSAL.md) for why and on what timeline.
+See **[docs/PLAN.md](docs/PLAN.md)** for the endgame architecture, every ratified technology decision, and the 7-step execution plan.
 
 The chat route (the core of the monolith) is thin: it orchestrates a single data+evidence pass, a two-stage model call (search-triage → **streamed** answer), and one DB write. Streaming and non-streaming requests share one `finalizeChat` post-processor, so both paths persist and render identically. All answer composition lives in `services/answerComposer.js`; every model call goes through `services/modelGateway.js` (provider priority + fallback).
 
@@ -179,7 +179,9 @@ The chat route (the core of the monolith) is thin: it orchestrates a single data
 npm install        # dependencies
 npm run seed       # seed the local SQLite DB
 npm run dev        # run → http://127.0.0.1:4173
-npm test           # smoke + reliability + phase/notification suites
+npm test           # all 42 domain-named test files
+npm run lint       # JavaScript + worker pipelines + TypeScript workspaces
+npm run typecheck:workspaces
 
 # Optional (HK first-party filing pipeline): Chinese-font CMap tables for the
 # HKEX results-announcement PDFs (Adobe-CNS1 CID, no ToUnicode).
@@ -229,7 +231,7 @@ SERPAPI_API_KEY=
 
 **Working:** A/H/US research conversation · dual-listing routing · discovery layer (screener + macro) · market-aware quotes & first-party filings · evidence provenance · data-grounding and confidence · valuation range and odds · analyst consensus · structured streaming answers · event digest · scheduler and notification centre · earnings/falsification closed loops · factGuard shadow audit · research scorecard · portfolio and watch desk · company portraits · Markdown and branded PNG export · verified backups · responsive light/dark UI · invite-only authentication · per-user isolation, quotas and usage · onboarding, preferences and feedback · hardened single-VPS deployment assets.
 
-**Next:** run the free invite-only beta on an actual HK/SG VPS · obtain commercial licenses for quote/news data before charging or public promotion · promote factGuard from `shadow` only after real misclassification metrics support it · prioritize P15/P16/R13–R16 and PWA from observed beta feedback. See the plan docs below.
+**Next:** execute the single 1→7 plan in [docs/PLAN.md](docs/PLAN.md), strictly in order: extract the domain core, rebuild the backend on Hono + tRPC, cut the database over to Postgres, orchestrate pipelines with Temporal, finish the React + PWA experience, retire the old chassis, then deepen the financial engine and commercialize.
 
 ### Commercialization boundary
 
@@ -239,10 +241,8 @@ The application architecture is ready for a small commercial beta, but the bundl
 
 ## Documentation
 
-- **[主计划（愿景 + 分阶段路线图 + 历史记录 + 接手协议）](docs/PLAN.md)** ← start here to contribute
-- [Refactor Proposal（重构提案：目标架构 + 六阶段路线 + 决策清单）](docs/REFACTOR_PROPOSAL.md)
-- [Architecture（当前底盘 + 新底盘 + 数据层/数据平面/前端设计语言）](docs/ARCHITECTURE.md)
-- [ADR（重大技术决策留痕）](docs/adr/) · [Deploy](docs/DEPLOY.md) · [GitHub Workflow](docs/GITHUB_WORKFLOW.md)
+- **[终局计划（唯一计划：终局架构 + 已拍板决策 + 1→7 执行步骤 + 宪法红线）](docs/PLAN.md)** ← start here
+- [Deploy（当前生产底盘的部署运维手册）](docs/DEPLOY.md)
 
 ---
 

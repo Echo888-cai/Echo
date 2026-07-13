@@ -3,7 +3,7 @@
  *
  * Source: 001_init.sql, 009_watch_rules_metric.sql, 014_portfolio_snapshots.sql,
  * 018_multiuser.sql (PK rebuilds to (user_id, ticker) / (user_id, snapshot_date)),
- * src/server/repositories/portfolioSnapshots.js for totals_json shape.
+ * src/server/repositories/portfolioSnapshotsRepository.js for totals_json shape.
  */
 import { pgTable, text, integer, bigserial, numeric, boolean, timestamp, date, index, uniqueIndex, primaryKey } from "drizzle-orm/pg-core";
 import { users } from "./auth";

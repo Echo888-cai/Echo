@@ -88,7 +88,7 @@ export function hasCnFinancialsForUrl(sourceUrl) {
   return !!db.prepare("SELECT 1 FROM cn_financials WHERE source_url = ?").get(sourceUrl);
 }
 
-// ─── 摄取留痕：同 hk_filing_ingest_log 的角色，供 scripts/cn-coverage.js 增量扫描 +
+// ─── 摄取留痕：同 hk_filing_ingest_log 的角色，供 coverage.js 中国市场增量扫描 +
 // 健康面板覆盖率统计用。
 
 export function upsertCnFilingIngestLog({ ticker, status, detail, announcementsFound = 0, ingestedCount = 0 }) {

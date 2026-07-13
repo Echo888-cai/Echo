@@ -15,7 +15,7 @@
  */
 import { insertLlmAudit } from "../repositories/llmAuditRepository.js";
 import { currentUserId } from "./requestContext.js";
-import { estimateModelCost } from "./quotaService.js";
+import { estimateModelCost } from "./quota.js";
 
 const PROVIDER_TIMEOUT_MS = 45000;
 

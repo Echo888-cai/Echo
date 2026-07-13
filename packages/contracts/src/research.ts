@@ -12,11 +12,6 @@
 import { z } from "zod";
 import { okEnvelope } from "./envelope.js";
 
-export const sessionListQuerySchema = z.object({
-  ticker: z.string().optional(),
-  limit: z.string().optional()
-});
-
 /** Mirrors research.js handleSessionList's mapped row (listResearchSessions() raw row + derived fields). */
 export const sessionSummarySchema = z
   .object({
@@ -53,7 +48,7 @@ const conversationSessionSchema = z.object({
   updatedAt: z.string()
 });
 
-/** Mirrors repositories/researchSessions.js listConversations(). */
+/** Mirrors repositories/researchSessionsRepository.js listConversations(). */
 export const conversationGroupSchema = z.object({
   conversationId: z.string(),
   title: z.string(),
@@ -70,7 +65,7 @@ export const sessionClearResponseSchema = okEnvelope(
   z.object({ deleted: z.number(), cleared: z.literal(true) })
 );
 
-/** Mirrors repositories/researchSessions.js getResearchSession(). */
+/** Mirrors repositories/researchSessionsRepository.js getResearchSession(). */
 export const researchSessionSchema = z.object({
   id: z.string(),
   ticker: z.string(),

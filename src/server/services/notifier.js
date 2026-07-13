@@ -12,8 +12,8 @@
  *                       https://api.telegram.org/bot<token>/getUpdates 取 chat.id
  */
 
-import { insertNotification } from "../repositories/notifications.js";
-import { notificationEnabled } from "../repositories/userPreferences.js";
+import { insertNotification } from "../repositories/notificationsRepository.js";
+import { notificationEnabled } from "../repositories/userPreferencesRepository.js";
 
 const TG_TIMEOUT_MS = 8000;
 

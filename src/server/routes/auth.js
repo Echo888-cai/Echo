@@ -7,7 +7,7 @@
  * GET  /api/auth/me                                        → {user, multiUser}（登录页判断入口）
  * POST /api/auth/invite   {note?}（仅 owner）              → {code}
  *
- * 业务规则全在 services/authService.js；这里只做 IO 与 cookie。
+ * 业务规则全在 services/auth.js；这里只做 IO 与 cookie。
  */
 
 import { randomBytes } from "node:crypto";
@@ -15,7 +15,7 @@ import { sendOk, sendError, readJsonBody } from "../utils/async.js";
 import {
   loginWithPassword, registerWithInvite, destroySession, requestToken, sessionCookie,
   resolveRequestUser, multiUserEnabled
-} from "../services/authService.js";
+} from "../services/auth.js";
 import { createInvite } from "../repositories/authRepository.js";
 
 export async function handleAuthLogin(req, res) {

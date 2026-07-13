@@ -18,7 +18,7 @@ loadEnvFile(root);
 const { runChat } = await import("../src/server/services/chatOrchestrator.js");
 const { getComparableCompanies } = await import("../src/server/services/compPeers.js");
 const { getNextEarnings } = await import("../src/server/services/earningsCalendar.js");
-const { upsertPosition } = await import("../src/server/repositories/portfolio.js");
+const { upsertPosition } = await import("../src/server/repositories/portfolioRepository.js");
 
 // 覆盖 R3 方案要求的样本范围：美股 + 港股、估值/同业/持仓/财报日历/基本面几类问法。
 const SAMPLES = [

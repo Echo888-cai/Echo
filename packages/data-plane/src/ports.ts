@@ -1,5 +1,5 @@
 /**
- * Port interfaces (REFACTOR_PROPOSAL.md §4.5's "统一端口（Quote/Fundamentals/
+ * Port interfaces (docs/PLAN.md §2 数据平面's "统一端口（Quote/Fundamentals/
  * News/Filings/Calendar）"). Only QuotePort has a registered adapter in this
  * slice (see adapters/legacyFreeQuoteAdapter.ts + registry.ts); the other four
  * are declared here so the matrix's target shape is visible and the next

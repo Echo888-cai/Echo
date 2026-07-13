@@ -13,7 +13,7 @@ import { fmpGet, FMP_TTL } from "../../fmpClient.js";
 import { companies } from "../../data.js";
 import { getFinancials } from "../../financialData.js";
 import { computeFinancialQuality } from "./financialQuality.js";
-import { listCompanyProfiles } from "../repositories/companyProfiles.js";
+import { listCompanyProfiles } from "../repositories/companyProfilesRepository.js";
 import { macroWebEvidence, webEvidenceToPrompt } from "./webEvidenceService.js";
 import { callModel, getProviderStatus } from "./modelGateway.js";
 import { PROMPTS } from "../../prompts.js";

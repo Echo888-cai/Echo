@@ -16,8 +16,6 @@ import {
 import { refreshSessions, deleteSession, clearAllSessions, loadSession, clearResearch } from "../lib/researchActions";
 import { marketLabelOf, isNum, fmtSigned, dirClass, fmtPct, pnlDir } from "../lib/format";
 
-const PLACEHOLDER_INDUSTRY = new Set(["美股", "港股", "A股", "待补充", "待定", ""]);
-
 function SnapshotCard({ company, panel, thread }: { company: any; panel: any; thread: any[] }) {
   const name = panel?.companyName || company?.nameZh || "未选择公司";
   const ticker = company?.ticker || panel?.ticker || "";
@@ -225,7 +223,6 @@ function SessionHistory() {
     // Runs once per Shell mount (route navigation), not once-per-app-boot like
     // legacy — an intentional upgrade: the sidebar history stays current after
     // e.g. deleting/loading a session on another tab.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const toggle = (

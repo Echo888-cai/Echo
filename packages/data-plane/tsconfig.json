@@ -4,8 +4,6 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "outDir": "dist",
-    "allowJs": true,
-    "checkJs": false,
     "noImplicitAny": false
   },
   "include": ["src/**/*.ts"]

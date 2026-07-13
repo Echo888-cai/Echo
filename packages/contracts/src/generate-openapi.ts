@@ -13,10 +13,10 @@ const generator = new OpenApiGeneratorV3(registry.definitions);
 const document = generator.generateDocument({
   openapi: "3.0.0",
   info: {
-    title: "Echo Research API (R-0 snapshot)",
+    title: "Echo Research API (contract snapshot)",
     version: "0.1.0",
     description:
-      "Descriptive snapshot of the current Node.js HTTP API (src/server/routes/*.js), generated for the NestJS migration (docs/REFACTOR_PROPOSAL.md). Not a forward-looking spec."
+      "Descriptive snapshot of the current Node.js HTTP API (src/server/routes/*.js), the behavioral reference for the Hono + tRPC rebuild (docs/PLAN.md §4 step 2). Not a forward-looking spec."
   },
   servers: [{ url: "http://127.0.0.1:4173" }]
 });

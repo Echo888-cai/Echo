@@ -10,11 +10,11 @@
 import { withTimeout } from "../utils/async.js";
 import { getMarketSnapshot, getRangeReturns } from "../../marketData.js";
 import { getNewsSnapshot } from "../../newsData.js";
-import { getFinancials, getAnalystEstimates, getCompanyProfile, getDividendHistory, getRevenueSegments } from "../../financialData.js";
+import { getFinancials, getAnalystEstimates, getCompanyProfile, getRevenueSegments } from "../../financialData.js";
 import { getRecentFilings } from "../../filingData.js";
 import { enrich8K } from "../../secFilings.js";
 import { isUS, detectMarket } from "../../market.js";
-import { saveMarketSnapshot } from "../../db/index.js";
+import { saveMarketSnapshot } from "../repositories/companyRepository.js";
 import { getHkFinancials } from "../repositories/hkFinancialsRepository.js";
 import { hkRowToFinancials, refreshHkFinancialsInBackground, refreshHkBuybacksInBackground } from "../../../apps/worker/src/pipelines/hkFilingsPipeline.js";
 import { getCnFinancials } from "../repositories/cnFinancialsRepository.js";

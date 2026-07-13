@@ -243,7 +243,10 @@ export function WatchListBody({ desk, loaded, onRefetch }: { desk: WatchDesk | n
   // "insert a minimal card immediately, backfill in the background").
   const [optimisticCards, setOptimisticCards] = useState<WatchCard[] | null>(null);
 
-  const cards: WatchCard[] = optimisticCards ?? desk?.cards ?? [];
+  const cards: WatchCard[] = useMemo(
+    () => optimisticCards ?? desk?.cards ?? [],
+    [optimisticCards, desk?.cards]
+  );
 
   async function handleOpen(ticker: string) {
     navigate({ to: "/watch/$ticker", params: { ticker } });

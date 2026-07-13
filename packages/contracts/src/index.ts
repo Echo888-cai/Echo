@@ -3,8 +3,8 @@
  *
  * Zod schemas describing Echo Research's CURRENT HTTP API (as implemented in
  * src/server/routes/*.js and wired in server.js). This is a descriptive snapshot,
- * not a forward-looking spec: it exists so future refactors (e.g. the NestJS
- * migration) have something concrete to diff behavior against.
+ * not a forward-looking spec: it exists so the Hono + tRPC rebuild (docs/PLAN.md
+ * §4 step 2) has something concrete to diff behavior against.
  */
 export * from "./envelope.js";
 export * from "./auth.js";

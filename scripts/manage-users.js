@@ -10,7 +10,7 @@
  *
  * 说明：owner 的 id 固定为 'local'——所有既有私有数据（user_id DEFAULT 'local'）
  * 自动归属 owner，不需要数据搬家。建 owner 之前服务器是单用户 legacy 模式，
- * 建完的下一个请求起自动要求登录（见 services/authService.js resolveRequestUser）。
+ * 建完的下一个请求起自动要求登录（见 services/auth.js resolveRequestUser）。
  */
 
 import { randomBytes } from "node:crypto";
@@ -20,7 +20,7 @@ import { join, dirname } from "node:path";
 
 loadEnvFile(join(dirname(fileURLToPath(import.meta.url)), ".."));
 
-const { createOwner, hashPassword, OWNER_USER_ID } = await import("../src/server/services/authService.js");
+const { createOwner, hashPassword, OWNER_USER_ID } = await import("../src/server/services/auth.js");
 const { createInvite, listInvites, listUsers, getUserById, countUsers, createUser } = await import("../src/server/repositories/authRepository.js");
 
 const [, , command, ...args] = process.argv;

@@ -46,7 +46,7 @@ export function verifyBackup(path) {
   try {
     const integrity = db.pragma("integrity_check", { simple: true });
     if (integrity !== "ok") throw new Error(`integrity_check 未通过：${integrity}`);
-    const row = db.prepare("SELECT COUNT(*) AS n FROM companies").get();
+    const row = /** @type {{n: number}|undefined} */ (db.prepare("SELECT COUNT(*) AS n FROM companies").get());
     return { ok: true, companies: row?.n ?? 0 };
   } finally {
     db.close();

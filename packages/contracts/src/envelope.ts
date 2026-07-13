@@ -37,11 +37,6 @@ export const apiErrorSchema = z.object({
   meta: z.object({ requestId: z.string() }).catchall(z.unknown())
 });
 
-/** Flat (non-enveloped) success shape used by ask/chat/discover/report/status handlers. */
-export function flatOk<T extends z.ZodRawShape>(shape: T) {
-  return z.object(shape);
-}
-
 /** Flat error shape used by the sendJson(res, status, { error }) handlers (ask/chat/discover/report). */
 export const flatErrorSchema = z.object({
   error: z.string(),

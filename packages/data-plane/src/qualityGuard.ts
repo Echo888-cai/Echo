@@ -1,5 +1,5 @@
 /**
- * Data quality guard (REFACTOR_PROPOSAL.md §4.5: "所有外部响应进入数据平面前过
+ * Data quality guard (docs/PLAN.md §2 数据平面: "所有外部响应进入数据平面前过
  * 数据质量守卫...量纲、币种、可比性、异常跳变检查，带质量评分入库"). This is new
  * logic — nothing in the legacy code validates a quote's shape before use today
  * (marketData.js reports providerStatus:"missing" on fetch failure, but never

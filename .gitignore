@@ -8,6 +8,7 @@ backups/
 .cache/
 dist/
 coverage/
+packages/contracts/openapi.json
 
 # local preview config
 .claude/

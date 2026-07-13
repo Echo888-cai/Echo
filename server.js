@@ -32,7 +32,7 @@ import { handleNotificationsList, handleNotificationsUnread, handleNotifications
 import { handleHkFinancialsList, handleHkFinancialsIngest } from "./src/server/routes/hkFinancials.js";
 import { handleAuthLogin, handleAuthRegister, handleAuthLogout, handleAuthMe, handleAuthInvite } from "./src/server/routes/auth.js";
 import { handlePreferencesGet, handlePreferencesUpdate, handleFeedbackCreate } from "./src/server/routes/preferences.js";
-import { resolveRequestUser } from "./src/server/services/authService.js";
+import { resolveRequestUser } from "./src/server/services/auth.js";
 import { startScheduler } from "./src/server/services/scheduler.js";
 import { enterRequestUser } from "./src/server/services/requestContext.js";
 

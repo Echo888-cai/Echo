@@ -3,10 +3,10 @@
 // 不重复实现业务逻辑，出错时 run() 返回 { status: "error", error } 而不是抛出，
 // 让规划器能拿"已取到的部分 + 诚实缺口"降级作答，而不是整轮失败。
 import { findCompany, companyByTicker } from "../../data.js";
-import { runAgent } from "./agentService.js";
+import { runAgent } from "./agent.js";
 import { runScreener, runMacro } from "./discovery.js";
 import { buildCompareSummary } from "./chatOrchestrator.js";
-import { resolveCompanyFromQuery } from "../routes/companies.js";
+import { resolveCompanyFromQuery } from "./companyResolver.js";
 import { researchWebEvidence } from "./webEvidenceService.js";
 
 async function safeRun(fn) {

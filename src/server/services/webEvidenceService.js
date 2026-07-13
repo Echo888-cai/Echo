@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { buildEvidenceQueries, classifyResearchIntent } from "./intentClassifier.js";
 import { listWebEvidence, saveWebEvidence } from "../repositories/webEvidenceRepository.js";
+import { fetchWithTimeout as requestText } from "../utils/http.js";
 
 const SEARCH_TIMEOUT_MS = 6000;
 const TRUSTED_HOSTS = [
@@ -75,26 +76,12 @@ function tagValue(xml, tag) {
   return match ? decodeXml(match[1]) : "";
 }
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = SEARCH_TIMEOUT_MS) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal,
-      headers: {
-        "User-Agent": "Mozilla/5.0 EchoResearch/1.0",
-        Accept: "application/json, application/rss+xml, application/xml, text/html, */*",
-        ...(options.headers || {})
-      }
-    });
-    const text = await response.text();
-    if (!response.ok) throw new Error(`${response.status} ${text.slice(0, 160)}`);
-    return text;
-  } finally {
-    clearTimeout(timer);
-  }
-}
+const fetchWithTimeout = (url, options = {}, timeoutMs = SEARCH_TIMEOUT_MS) => requestText(url, {
+  ...options,
+  timeoutMs,
+  userAgent: "Mozilla/5.0 EchoResearch/1.0",
+  headers: { Accept: "application/json, application/rss+xml, application/xml, text/html, */*", ...(options.headers || {}) }
+});
 
 function hostOf(url = "") {
   try {
@@ -536,7 +523,7 @@ export async function researchWebEvidence({ company, question = "", intent = cla
 // ── P6 宏观网页证据：不绑定公司，直接用给定的宏观查询组检索 ──
 // 复用同一套搜索源/去重/存活校验管线，但跳过公司相关性打分（宏观没有"这家公司"可对齐），
 // 只按来源可信度排序。不落库（宏观新闻时效短，缓存意义小）。
-export async function macroWebEvidence({ question = "", queries = [] } = {}) {
+export async function macroWebEvidence({ question: _question = "", queries = [] } = {}) {
   const searchedAt = nowIso();
   const list = queries.slice(0, 4);
   const queryResults = await Promise.allSettled(list.map((query) => searchOneQuery(query).then((result) => ({ query, ...result }))));

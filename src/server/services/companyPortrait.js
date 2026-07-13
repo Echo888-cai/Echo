@@ -8,8 +8,8 @@
  *    蒸馏出"当前 view"并回写；投资主线/状态/置信度变化时追加一条事件日志。
  */
 
-import { getCompanyProfile, upsertCompanyProfile } from "../repositories/companyProfiles.js";
-import { replaceFalsifierRules, listRules } from "../repositories/watchRules.js";
+import { getCompanyProfile, upsertCompanyProfile } from "../repositories/companyProfilesRepository.js";
+import { replaceFalsifierRules, listRules } from "../repositories/watchRulesRepository.js";
 import { parseFalsifierRules, parseFalsifierRule } from "./falsifyRules.js";
 import { companyByTicker } from "../../data.js";
 import { beijingDate } from "../utils/time.js";

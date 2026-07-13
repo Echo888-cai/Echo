@@ -33,5 +33,15 @@ export default defineConfig({
         changeOrigin: true
       }
     }
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          tanstack: ["@tanstack/react-query", "@tanstack/react-router"],
+          validation: ["zod"]
+        }
+      }
+    }
   }
 });

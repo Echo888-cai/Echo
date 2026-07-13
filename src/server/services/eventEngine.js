@@ -24,9 +24,9 @@ import { getNewsSnapshot } from "../../newsData.js";
 import { getMarketSnapshot } from "../../marketData.js";
 import { detectMarket, bareSymbol } from "../../market.js";
 import { beijingDate } from "../utils/time.js";
-import { getPosition } from "../repositories/portfolio.js";
+import { getPosition } from "../repositories/portfolioRepository.js";
 import { getNextEarnings } from "./earningsCalendar.js";
-import { listRules } from "../repositories/watchRules.js";
+import { listRules } from "../repositories/watchRulesRepository.js";
 
 // 1. 律所/股东诉讼广告反模板 → 强制丢弃（PR wire 噪音，不是公司事件）。
 const LEGAL_AD_PATTERNS = [

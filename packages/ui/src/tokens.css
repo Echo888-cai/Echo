@@ -5,9 +5,8 @@
    src/styles/00-foundation.css (:root / [data-theme="dark"] blocks).
    Values are byte-identical to the original — do NOT "clean up" or
    rename anything here; this file is the single source of truth for
-   CSS custom properties, and packages/ui/src/tokens.ts mirrors these
-   same values for JS/TS consumers (see the comment at the top of
-   tokens.ts). If a value ever needs to change, change it here first.
+   CSS custom properties. This file is the only token source of truth;
+   if a value ever needs to change, change it here.
 
    Only the token declarations were extracted — base-layer rules that
    consume them (body background, scrollbars, keyframes, dark-mode

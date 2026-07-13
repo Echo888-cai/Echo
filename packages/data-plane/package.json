@@ -3,14 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "R-4 first slice: the supplier adapter matrix (REFACTOR_PROPOSAL.md §4.5) — port interfaces + authorization metadata + a router that picks by authorization -> quality -> latency. Wraps the existing tested fetch logic in src/*.js rather than re-implementing it; today only one adapter per port exists (the legacy free-tier composite), so the router is a no-op in practice until a licensed adapter is registered alongside it.",
+  "description": "Licensed market-data ports, routing policy and quality guards.",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
     "verify": "tsx src/verify.ts"
   },
   "dependencies": {},
   "devDependencies": {
-    "typescript": "^5.7.2",
+    "typescript": "^6.0.3",
     "tsx": "^4.19.2"
   }
 }

@@ -1,5 +1,6 @@
 // ── 公司识别与解析：别名表 / 双重上市 / 美股代码 / 意图判定 ──
 import { api } from "./api.js";
+import { isMacroQuestion, isScreenerQuestion } from "./intentPatterns.js";
 
 const companyAliases = [
   { pattern: /腾讯控股|腾讯|Tencent/i, ticker: "0700.HK" },
@@ -277,21 +278,6 @@ export function stripCompanyMentions(query = "", company = null) {
 // 一起判断，避免把"它和去年比怎么样"这种纵向追问也当成公司对比。
 export function isComparisonQuestion(query = "") {
   return /对比|相比|[和跟与][^，。？?]{1,14}(比|对比|相比|谁|哪个|哪家)|\bvs\b|谁(更|的)|哪(个|家)(更|的)?[^，。？?]{0,8}(好|强|贵|便宜|划算|赔率|值得)/i.test(String(query));
-}
-
-// ── P6 发现层意图（与后端 intentClassifier 保持镜像）────────
-// 筛选/宏观问题不进公司研究管道：sendChat 在公司解析之前先判定，命中走 /api/discover。
-const SCREEN_VERB = /帮我筛|筛选|筛一下|筛一筛|筛出|选股|挑(几只|一些|几个|出)|找(几只|一些|几个)|有(哪些|什么).{0,12}(股票|公司|标的)(值得|可以|推荐)?/;
-const SCREEN_COND = /(PE|PB|市盈率|市净率|市值|股息率?|分红率?|价格|营收增速|增速)\s*(小于|大于|低于|高于|超过|不到|少于|多于|以上|以下|<|>|≤|≥|＜|＞)/i;
-const MACRO_SIGNAL = /大盘|宏观|美联储|议息|加息|降息|非农|CPI|PPI|通胀|国债收益率|流动性|美股(今晚|今天|今年|本周|下周|最近|接下来|怎么|如何|行情|市场)|港股(今晚|今天|本周|大盘|行情|市场|最近|怎么)|恒生指数|恒指|纳斯达克|纳指|标普|道琼斯|道指|指数(怎么|如何|走势)|今晚.{0,10}(关键事件|有什么事件|数据|财报|事件)|市场情绪|风险偏好|宏观经济/;
-
-export function isScreenerQuestion(question = "") {
-  const text = String(question || "");
-  return SCREEN_VERB.test(text) || SCREEN_COND.test(text);
-}
-
-export function isMacroQuestion(question = "") {
-  return MACRO_SIGNAL.test(String(question || ""));
 }
 
 // 发现层判定：筛选/宏观，且没有点名具体公司（点名了公司永远优先公司研究管道——

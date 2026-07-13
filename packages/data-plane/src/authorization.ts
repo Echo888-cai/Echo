@@ -1,11 +1,11 @@
 /**
- * Authorization metadata — the piece REFACTOR_PROPOSAL.md §4.5 calls out as the
+ * Authorization metadata — the piece docs/PLAN.md §2 数据平面 calls out as the
  * whole point of formalizing an adapter matrix: "路由器按'授权允许 → 数据质量 →
  * 延迟'三级排序选源，未授权源在商用环境自动不可选". Today every adapter in this
  * repo is `unlicensed_free_tier` (public/free APIs, no commercial agreement) —
  * that fact is now a typed, machine-checkable property instead of tribal
- * knowledge. When a commercial vendor is contracted (see docs/REFACTOR_PROPOSAL.md
- * §6 D6 — a decision this package deliberately does not make), it's registered
+ * knowledge. When a commercial vendor is contracted (procurement order ratified
+ * in docs/PLAN.md §3), it's registered
  * as a new adapter with `licenseTier: "licensed_commercial"`; the router then
  * prefers it automatically in commercial mode, no code path changes required.
  */

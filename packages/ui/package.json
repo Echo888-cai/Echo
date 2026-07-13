@@ -3,17 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "R-3: design-system tokens package. CSS-and-tokens only for now (tokens.css is the byte-identical extraction of the legacy app's design tokens; tokens.ts mirrors it for JS/TS consumers). Component library comes in a later slice.",
-  "main": "./src/tokens.ts",
-  "types": "./src/tokens.ts",
+  "description": "Echo Research design tokens, shared by every web surface.",
   "exports": {
-    ".": "./src/tokens.ts",
     "./tokens.css": "./src/tokens.css"
-  },
-  "scripts": {
-    "typecheck": "tsc --noEmit"
-  },
-  "devDependencies": {
-    "typescript": "^5.7.2"
   }
 }

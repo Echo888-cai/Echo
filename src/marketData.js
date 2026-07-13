@@ -9,6 +9,13 @@ import {
   twelveDataSymbol as toTwelveDataSymbol,
   yahooSymbol as toYahooSymbol
 } from "./market.js";
+import { fetchJson as requestJson } from "./server/utils/http.js";
+
+const fetchJson = (url, options = {}) => requestJson(url, {
+  timeoutMs: 4500,
+  userAgent: "EchoResearch/1.0 research data adapter",
+  ...options
+});
 
 function env(name) {
   return process.env[name] || "";
@@ -66,29 +73,6 @@ function buildSnapshot(source, ticker, data) {
     asOf: data.asOf || new Date().toISOString(),
     providerStatus: "ok"
   };
-}
-
-async function fetchJson(url, options = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs || 4500);
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal,
-      headers: {
-        "User-Agent": "EchoResearch/1.0 research data adapter",
-        Accept: "application/json",
-        ...(options.headers || {})
-      }
-    });
-    const text = await response.text();
-    if (!response.ok) {
-      throw new Error(`${response.status} ${text.slice(0, 160)}`);
-    }
-    return JSON.parse(text);
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 async function fetchText(url, options = {}) {

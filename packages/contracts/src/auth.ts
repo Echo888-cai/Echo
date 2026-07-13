@@ -12,7 +12,7 @@
 import { z } from "zod";
 import { okEnvelope } from "./envelope.js";
 
-/** Mirrors authService.publicUser(). */
+/** Mirrors the public user returned by the authentication service. */
 export const publicUserSchema = z
   .object({
     id: z.string(),

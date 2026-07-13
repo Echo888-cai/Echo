@@ -6,6 +6,7 @@
     "target": "ES2022",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
+    "rootDir": "../..",
     "outDir": "dist",
     "noEmit": true,
     "allowImportingTsExtensions": false,
@@ -13,7 +14,6 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "types": ["vite/client"],
-    "baseUrl": ".",
     "paths": {
       "@echo/contracts": ["../../packages/contracts/src/index.ts"]
     }

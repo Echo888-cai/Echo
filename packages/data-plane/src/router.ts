@@ -1,6 +1,6 @@
 /**
  * The router: "授权允许 → 数据质量 → 延迟" three-tier selection
- * (REFACTOR_PROPOSAL.md §4.5). Generic over any port shape so Fundamentals/
+ * (docs/PLAN.md §2 数据平面). Generic over any port shape so Fundamentals/
  * News/Filings/Calendar can reuse it once they have real adapters — the
  * selection logic doesn't care what fetchQuote/fetchFundamentals/etc. does,
  * only about the authorization + qualityRank fields every port shares.
