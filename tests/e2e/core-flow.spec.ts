@@ -32,7 +32,7 @@ test("research → follow → portfolio → notification works through the final
   await page.getByRole("link", { name: "设置", exact: true }).click();
   await expect(page).toHaveURL(/\/settings/);
   await expect(page.getByRole("heading", { name: "离线与桌面安装" })).toBeVisible();
-  await expect(page.getByText("Temporal", { exact: false })).toBeVisible();
+  await expect(page.getByText("Temporal", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "发送测试通知" }).click();
   await page.getByRole("button", { name: "通知", exact: true }).click();
   await expect(page.getByText("通知通道测试", { exact: true })).toBeVisible();
