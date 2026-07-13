@@ -33,8 +33,10 @@ export function LoginPage() {
       } else {
         await authApi.login({ username, password });
       }
-      // 登录态就绪，最干净的方式是整页重启（首绘会重新拉状态/会话/通知）
-      location.reload();
+      // 登录态就绪，最干净的方式是整页重启（首绘会重新拉状态/会话/通知）。
+      // 必须换地址而不是原地 reload——当前就停在 /login，reload 只会把
+      // 登录页刷新出来，看起来像“什么都没发生”，其实已经登录成功了。
+      location.assign("/");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "失败了，再试一次");
       setBusy(false);
