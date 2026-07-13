@@ -17,6 +17,7 @@ export * as llmAudit from "./llmAuditRepository.js";
 export * as notifications from "./notificationsRepository.js";
 export * as portfolio from "./portfolioRepository.js";
 export * as portfolioSnapshots from "./portfolioSnapshotsRepository.js";
+export * as rateLimit from "./rateLimitRepository.js";
 export * as researchSessions from "./researchSessionsRepository.js";
 export * as researchSnapshots from "./researchSnapshotsRepository.js";
 export * as userPreferences from "./userPreferencesRepository.js";

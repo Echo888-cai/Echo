@@ -116,6 +116,16 @@ export const factGuardAudit = pgTable(
   })
 );
 
+/** rate_limit_buckets backs the shared rate limiter for abuse-prone heavy endpoints
+ * (ask/report-generate/parse-document) — a plain Postgres row instead of Redis, since
+ * multiple API replicas need one shared counter and this stays inside the single
+ * approved architecture. Low-cardinality, low-frequency by design; see http.ts. */
+export const rateLimitBuckets = pgTable("rate_limit_buckets", {
+  key: text("key").primaryKey(),
+  count: integer("count").notNull().default(1),
+  resetAt: timestamp("reset_at", { withTimezone: true }).notNull()
+});
+
 export const canaryRuns = pgTable(
   "canary_runs",
   {

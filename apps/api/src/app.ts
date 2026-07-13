@@ -345,7 +345,7 @@ export function createApp() {
   const secure = async (c: any, next: any) => {
     const heavyTrpc = c.req.path.startsWith("/trpc/") && /(?:ask|reports\.generate|documents\.parse)/.test(c.req.path);
     const ratePath = heavyTrpc ? "/api/ask" : c.req.path;
-    const limited = rateLimit(c.req.raw, ratePath);
+    const limited = await rateLimit(c.req.raw, ratePath);
     if (limited) return c.json(apiError(limited.status, limited.message), 429);
     if (c.req.method !== "GET" && c.req.method !== "HEAD" && c.req.header("x-echo-auth") !== "1") {
       return c.json(apiError(403, "缺少校验请求头（请从 Echo Research 页面发起请求）"), 403);
