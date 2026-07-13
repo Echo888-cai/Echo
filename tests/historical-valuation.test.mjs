@@ -5,7 +5,7 @@
 //     否则整体不出现。
 import "./setupTestDb.mjs";
 import assert from "node:assert/strict";
-import { computeHistoricalValuationPercentile } from "../src/server/services/historicalValuation.js";
+import { computeHistoricalValuationPercentile } from "@echo/domain";
 import { getHistoricalValuationRow, upsertHistoricalValuationSeries } from "../src/server/repositories/historicalValuationRepository.js";
 import { financialsToMarkdown } from "../src/financialData.js";
 

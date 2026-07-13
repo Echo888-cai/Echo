@@ -20,7 +20,7 @@ export default [
     }
   },
   {
-    files: ["server.js", "src/**/*.js", "scripts/**/*.js", "tests/**/*.mjs", "apps/worker/src/pipelines/**/*.js"],
+    files: ["server.js", "src/**/*.js", "scripts/**/*.js", "tests/**/*.mjs", "packages/domain/**/*.{js,mjs}", "apps/worker/src/pipelines/**/*.js"],
     ignores: ["src/app.js", "src/ui/**/*.js"],
     languageOptions: {
       ecmaVersion: "latest",

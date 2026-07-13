@@ -5,7 +5,7 @@
  * "缺失 —— [原因]".
  */
 
-import { compactNumberServer, fmtPercent, quoteStatusFor } from "../utils/format.js";
+import { compactNumberServer, fmtPercent, quoteStatusFor } from "@echo/domain";
 
 function quoteStatus(snapshot) {
   return quoteStatusFor(snapshot);

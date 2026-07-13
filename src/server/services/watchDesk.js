@@ -18,7 +18,7 @@ import { getCompanyProfile, listCompanyProfiles } from "../repositories/companyP
 import { listPositions, getPosition } from "../repositories/portfolioRepository.js";
 import { listWatchAdds, getHiddenTickers } from "../repositories/watchlistRepository.js";
 import { listRules } from "../repositories/watchRulesRepository.js";
-import { evaluateRule } from "./falsifyRules.js";
+import { evaluateRule } from "@echo/domain";
 import { getMarketSnapshot, getPriceSeries } from "../../marketData.js";
 import { getFinancials, getCompanyProfile as getFundamentalsProfile } from "../../financialData.js";
 import { detectMarket } from "../../market.js";

@@ -11,7 +11,7 @@ import {
 } from "../src/server/repositories/researchSnapshotsRepository.js";
 import {
   computeSnapshotReview, computeTickerScorecard, computeGlobalScorecard, MIN_MATURE_DAYS, MIN_MATURE_SAMPLES
-} from "../src/server/services/researchReview.js";
+} from "@echo/domain";
 import { updatePortraitFromPanel } from "../src/server/services/companyPortrait.js";
 import { JOBS } from "../src/server/services/scheduler.js";
 import { listNotifications } from "../src/server/repositories/notificationsRepository.js";

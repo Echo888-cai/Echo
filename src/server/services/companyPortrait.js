@@ -10,7 +10,7 @@
 
 import { getCompanyProfile, upsertCompanyProfile } from "../repositories/companyProfilesRepository.js";
 import { replaceFalsifierRules, listRules } from "../repositories/watchRulesRepository.js";
-import { parseFalsifierRules, parseFalsifierRule } from "./falsifyRules.js";
+import { parseFalsifierRules, parseFalsifierRule } from "@echo/domain";
 import { companyByTicker } from "../../data.js";
 import { beijingDate } from "../utils/time.js";
 import { marketCurrency } from "../../market.js";

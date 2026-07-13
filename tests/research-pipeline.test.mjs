@@ -1,5 +1,5 @@
 /**
- * Luvio reliability tests — Phase 1.
+ * Echo Research reliability integration tests.
  *
  * Run: node tests/reliability.mjs
  *
@@ -20,7 +20,7 @@ import { extractJsonObject } from "../src/server/services/agent.js";
 import { buildDecisionPanel } from "../src/server/services/decisionPanel.js";
 import { normalizeTicker } from "../src/data.js";
 import { withTimeout } from "../src/server/utils/async.js";
-import { quoteStatusFor } from "../src/server/utils/format.js";
+import { quoteStatusFor } from "@echo/domain";
 import { saveResearchSession, listResearchSessions, getResearchSession } from "../src/server/repositories/researchSessionsRepository.js";
 
 let pass = 0;

@@ -7,9 +7,9 @@
 //     "刚公布"的财报时会通知 + 补一条画像时间线事件；同一期报告的 dedupeKey 防重复。
 import "./setupTestDb.mjs";
 import assert from "node:assert/strict";
-import { computeSurprisePct } from "../src/server/services/earningsCalendar.js";
+import { computeSurprisePct } from "@echo/domain";
 import { upsertEarningsCalendar, getEarningsCalendarRow, listWithLastReported } from "../src/server/repositories/earningsCalendarRepository.js";
-import { computeSnapshotReview, computeTickerScorecard } from "../src/server/services/researchReview.js";
+import { computeSnapshotReview, computeTickerScorecard } from "@echo/domain";
 import { insertResearchSnapshot } from "../src/server/repositories/researchSnapshotsRepository.js";
 import { upsertCompanyProfile } from "../src/server/repositories/companyProfilesRepository.js";
 import { listProfileEvents } from "../src/server/repositories/companyProfilesRepository.js";

@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import {
   extractStructuredFalsifiers, evaluateFundamentalRule, evaluateRule,
   FUNDAMENTAL_METRICS, FUNDAMENTAL_METRIC_LABELS
-} from "../src/server/services/falsifyRules.js";
+} from "@echo/domain";
 import { replaceFalsifierRules, listRules } from "../src/server/repositories/watchRulesRepository.js";
 import { updatePortraitFromPanel } from "../src/server/services/companyPortrait.js";
 import { getCompanyProfile } from "../src/server/repositories/companyProfilesRepository.js";

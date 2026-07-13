@@ -165,7 +165,7 @@ The public edge is deployment-ready for a single HK/SG VPS: Caddy TLS, loopback-
 
 ## Architecture
 
-Echo Research is mid-way through a strangler-fig rewrite: **production traffic still runs entirely on the original monolith** (plain Node, single runtime dependency `better-sqlite3`, build-less native-ESM front end — the browser loads `src/app.js` as a module directly, no bundler, no transpile step), while the endgame stack is being assembled alongside it: `apps/web` (React 19 + Vite), `apps/api` (Hono + tRPC, step 2 of the plan), `apps/worker` (first-party filing pipelines today, Temporal workflows at step 4), and `packages/{domain,contracts,db,data-plane,ui}`. One plan document governs the whole migration — no parallel tracks.
+Echo Research is mid-way through a strangler-fig rewrite: **production traffic still runs entirely on the original monolith** (plain Node, single runtime dependency `better-sqlite3`, build-less native-ESM front end — the browser loads `src/app.js` as a module directly, no bundler, no transpile step). The endgame stack is replacing it in strict order: `packages/domain` now owns the first framework-free financial cores, `apps/web` is the React 19 + Vite client, `apps/worker` owns first-party filing pipelines, and `packages/{contracts,db,data-plane,ui}` provide the remaining shared boundaries. `apps/api` is created with Hono + tRPC only when step 2 starts. One plan document governs the migration — no parallel tracks.
 
 See **[docs/PLAN.md](docs/PLAN.md)** for the endgame architecture, every ratified technology decision, and the 7-step execution plan.
 
@@ -179,7 +179,7 @@ The chat route (the core of the monolith) is thin: it orchestrates a single data
 npm install        # dependencies
 npm run seed       # seed the local SQLite DB
 npm run dev        # run → http://127.0.0.1:4173
-npm test           # all 42 domain-named test files
+npm test           # 40 integration tests + 3 framework-free domain tests
 npm run lint       # JavaScript + worker pipelines + TypeScript workspaces
 npm run typecheck:workspaces
 

@@ -20,7 +20,7 @@
 import { getMarketSnapshot } from "../../marketData.js";
 import { getFinancials } from "../../financialData.js";
 import { adrOrBareSymbol, isUS, bareSymbol, hkCode, detectMarket } from "../../market.js";
-import { classifyAssetStage } from "./valuationEngine.js";
+import { classifyAssetStage } from "@echo/domain";
 import { withTimeout } from "../utils/async.js";
 import { fetchJson as requestJson } from "../utils/http.js";
 import { getCompPeersRow, upsertCompPeers } from "../repositories/compPeersRepository.js";

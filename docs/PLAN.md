@@ -160,12 +160,13 @@ repositories 以 Drizzle 重写（`packages/db` schema 已有底子）：金额/
 | `apps/web` | React 外壳 + 登录/持仓/看盘/研究对话/设置五片已落地，未切流 |
 | `apps/worker` | 一手 filing 管道（CNINFO/HKEX）住在 `src/pipelines/`，**旧底盘生产代码直接 import 它们**（这是共享资产不是遗留物）；BullMQ 壳已删除，Temporal 落地于第 4 步 |
 | `apps/api` | 已删除（原 NestJS 版）。第 2 步以 Hono + tRPC 重生 |
+| `packages/domain` | 第 1 步进行中：估值、财务质量、风险、证伪、factGuard、研究复盘、金融格式化、业绩惊喜与历史估值分位已有唯一实现；零运行时依赖、无数据库/HTTP/环境 IO，并有架构边界测试。下一动作继续拆出答案编排、事件分级与画像蒸馏的纯核心 |
 | `packages/contracts` | zod 单一源 + OpenAPI 导出 + 契约测试（测试挂在旧 server.js 上跑，第 2 步起双跑） |
 | `packages/db` | Drizzle + Postgres schema（含双时态财务表）+ ETL 脚本已有底子，未切流 |
 | `packages/data-plane` | 四端口适配器矩阵 + 授权路由 + 质量守卫已落地（曾当场抓到 A 股行情时间戳真实 bug） |
 | `packages/ui` | design tokens 已从旧 CSS 机械提取（数值逐字节一致） |
 | 工程治理基线 | 2026-07-13 完成：历史计划/ADR、废弃 NestJS/BullMQ 骨架、一次性脚本、生成物与零引用实现已删除；仓储/服务命名统一；重复 HTTP/时间/意图实现已收敛；路由与公司解析业务边界已纠正 |
-| 测试门禁 | 根 `npm test` 自动发现 42 个按业务域命名的 `*.test.mjs`；lint 零 warning；旧底盘与全部 TypeScript workspace 都进入 typecheck；契约测试与 React build 进入 CI |
+| 测试门禁 | `npm test` 自动运行 40 个旧底盘集成测试 + 3 个 `packages/domain` 单元/架构测试；lint 零 warning；旧底盘与全部 workspace 都进入 typecheck；契约测试与 React build 进入 CI |
 
 ---
 

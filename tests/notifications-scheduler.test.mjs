@@ -157,7 +157,7 @@ check("JOBS 注册表完整（8 个内置任务，含 R7 研究复盘提醒 + F-
 });
 
 console.log("\n[5] 证伪规则解析（宁可漏，不可错）");
-const { parseFalsifierRule, parseFalsifierRules, evaluateRule } = await import("../src/server/services/falsifyRules.js");
+const { parseFalsifierRule, parseFalsifierRules, evaluateRule } = await import("@echo/domain");
 const { replaceFalsifierRules, listRules, listAllActiveRules } = await import("../src/server/repositories/watchRulesRepository.js");
 
 check("明确的价格条件 → 解析成规则", () => {

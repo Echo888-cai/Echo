@@ -1,4 +1,4 @@
-// R3 测试：数字级防幻觉护栏（factGuard.js，纯函数，不发真实网络请求）。
+// 数字级防幻觉护栏：纯函数，不发真实网络请求。
 // [1] parseCompactAmount / convertCurrency：单位反解析与展示级汇率换算。
 // [2] buildFactsRegistry：从结构化数据（行情/财报/估值/同业/财报日历/持仓）建登记表。
 // [3] verifyAnswerNumbers：pass/soft/hard 三档判定，覆盖容差、符号、数量级、币种张冠李戴。
@@ -7,7 +7,7 @@
 import {
   parseCompactAmount, convertCurrency, buildFactsRegistry, verifyAnswerNumbers,
   buildSoftNote, summarizeVerdict, renderHardFailIssues
-} from "../src/server/services/factGuard.js";
+} from "../src/index.js";
 
 let passed = 0;
 let failed = 0;
@@ -202,5 +202,5 @@ console.log("[5] buildSoftNote / summarizeVerdict / renderHardFailIssues");
   check("空 verdict 的 buildSoftNote 返回空字符串", buildSoftNote({ softCount: 0, hardCount: 0 }) === "");
 }
 
-console.log(`\nR3: ${passed} passed, ${failed} failed`);
+console.log(`\nFact guard: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

@@ -22,7 +22,7 @@ function evidence({ source, asOf = null, quote = null, status = null, confidence
  * Build a risk radar for the given company.
  *
  * @param {object} company — from companyRepository (with risks, monitors, sector, etc.)
- * @param {{marketSnapshot?: import("../types.js").MarketSnapshot, financialsData?: import("../types.js").FinancialsData, newsSnapshot?: import("../types.js").NewsSnapshot, filingsData?: import("../types.js").FilingsData}} [ctx]
+ * @param {{marketSnapshot?: Object, financialsData?: Object, newsSnapshot?: Object, filingsData?: Object}} [ctx]
  * @returns {{ risks: object[], sourceHealth: object, totalIdentified?: number, highSeverity?: number, mediumSeverity?: number }}
  */
 export function buildRiskRadar(company, { marketSnapshot, financialsData, newsSnapshot, filingsData } = {}) {

@@ -11,7 +11,7 @@
   "scripts": {
     "dev": "node server.js",
     "seed": "node scripts/seed-db.js",
-    "test": "node tests/run.mjs",
+    "test": "node tests/run.mjs && npm test --workspace @echo/domain",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit -p jsconfig.json",
     "typecheck:workspaces": "npm run typecheck --workspaces --if-present",
@@ -23,6 +23,7 @@
     "coverage:cn": "node scripts/coverage.js --market=cn"
   },
   "dependencies": {
+    "@echo/domain": "*",
     "better-sqlite3": "^12.11.1"
   },
   "devDependencies": {

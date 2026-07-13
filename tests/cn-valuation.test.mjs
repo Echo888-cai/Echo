@@ -3,7 +3,7 @@
 // financialsData/marketSnapshot 归一化正确，估值数学应该和港股/美股完全一致）。
 // 用真实贵州茅台 2026 Q1 数据（cnFilingsPipeline 实测抽出，见 phase-cn2.mjs）做输入。
 import "./setupTestDb.mjs";
-import { computeValuation, classifyAssetStage } from "../src/server/services/valuationEngine.js";
+import { computeValuation, classifyAssetStage } from "@echo/domain";
 import { mergeCnFinancialGaps } from "../src/server/services/dataSources.js";
 import { cnRowToFinancials } from "../apps/worker/src/pipelines/cnFilingsPipeline.js";
 

@@ -4,7 +4,7 @@
 // [3] mergeHkFinancialGaps：第三方（腾讯）成功但只给基础行情时，一手 HKEX 抽取的
 //     revenue/净利/现金流应该补进 financialsData，而不是只在第三方"全挂"时才用。
 import "./setupTestDb.mjs";
-import { computeValuation } from "../src/server/services/valuationEngine.js";
+import { computeValuation } from "@echo/domain";
 import { mergeHkFinancialGaps } from "../src/server/services/dataSources.js";
 import { hkRowToFinancials } from "../apps/worker/src/pipelines/hkFilingsPipeline.js";
 

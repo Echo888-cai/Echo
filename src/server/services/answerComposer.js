@@ -2,7 +2,7 @@ import { RESEARCH_STATUS_LABELS } from "../schemas/agentPanel.js";
 import { companies, companyByTicker } from "../../data.js";
 import { classifyResearchIntent, RESEARCH_INTENTS } from "./intentClassifier.js";
 import { webEvidenceToPrompt } from "./webEvidenceService.js";
-import { computeFinancialQuality } from "./financialQuality.js";
+import { computeFinancialQuality } from "@echo/domain";
 import { financialsToMarkdown } from "../../financialData.js";
 import { detectMarket } from "../../market.js";
 import { beijingMinute } from "../utils/time.js";

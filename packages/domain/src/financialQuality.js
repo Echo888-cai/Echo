@@ -13,12 +13,12 @@
  * Missing data is explicitly listed — never faked.
  */
 
-import { fmtPercent, compactNumberServer } from "../utils/format.js";
+import { fmtPercent, compactNumberServer } from "./format.js";
 
 /**
  * Compute financial quality scores and metrics from raw financial data.
  *
- * @param {import("../types.js").FinancialsData} financialsData - the output of getFinancials()
+ * @param {Object} financialsData - normalized financial facts
  * @param {{marketCap?: number, pe?: number}} [_opts]
  * @returns {{ metrics: object[], quality: object, missing: string[], summary?: string }}
  */

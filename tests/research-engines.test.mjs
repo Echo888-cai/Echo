@@ -1,8 +1,8 @@
 import "./setupTestDb.mjs";
 import assert from "node:assert/strict";
-import { computeFinancialQuality } from "../src/server/services/financialQuality.js";
-import { computeValuation } from "../src/server/services/valuationEngine.js";
-import { buildRiskRadar } from "../src/server/services/riskEngine.js";
+import { computeFinancialQuality } from "@echo/domain";
+import { computeValuation } from "@echo/domain";
+import { buildRiskRadar } from "@echo/domain";
 import { callModel, getProviderStatus } from "../src/server/services/modelGateway.js";
 import { classifyResearchIntent, buildEvidenceQueries, RESEARCH_INTENTS } from "../src/server/services/intentClassifier.js";
 import { webEvidenceToPrompt } from "../src/server/services/webEvidenceService.js";

@@ -11,7 +11,7 @@
  * When data is insufficient, returns "cannotValue" with a clear reason.
  */
 
-import { compactNumberServer } from "../utils/format.js";
+import { compactNumberServer } from "./format.js";
 
 /**
  * Compute a multi-scenario valuation.
@@ -38,11 +38,11 @@ import { compactNumberServer } from "../utils/format.js";
  */
 /**
  * @param {Object} company
- * @param {import("../types.js").MarketSnapshot} marketSnapshot
- * @param {import("../types.js").FinancialsData} financialsData
- * @param {import("../types.js").EstimatesData|null} [estimates]
+ * @param {Object} marketSnapshot
+ * @param {Object} financialsData
+ * @param {Object|null} [estimates]
  * @param {Object|null} [compPeers] G-3 同业可比清单（compPeers.js 的 getComparableCompanies 结果）
- * @returns {import("../types.js").Valuation}
+ * @returns {Object}
  */
 export function displayValuation(company, marketSnapshot, financialsData, estimates = null, compPeers = null) {
   const v = computeValuation(company, marketSnapshot, financialsData, compPeers);

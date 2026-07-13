@@ -24,14 +24,14 @@ import { listCompanyProfiles, getCompanyProfile, appendProfileEvent } from "../r
 import { listPositions } from "../repositories/portfolioRepository.js";
 import { listWatchAdds, getHiddenTickers } from "../repositories/watchlistRepository.js";
 import { listAllActiveRules, listRules, markTriggered } from "../repositories/watchRulesRepository.js";
-import { evaluateRule, evaluateFundamentalRule, FUNDAMENTAL_METRIC_LABELS } from "./falsifyRules.js";
+import { evaluateRule, evaluateFundamentalRule, FUNDAMENTAL_METRIC_LABELS } from "@echo/domain";
 import { getMarketSnapshot } from "../../marketData.js";
 import { getFinancials } from "../../financialData.js";
 import { listSnapshotTickers } from "../repositories/researchSnapshotsRepository.js";
 import { runBackup } from "./dbBackup.js";
 import { getNextEarnings } from "./earningsCalendar.js";
 import { listWithLastReported } from "../repositories/earningsCalendarRepository.js";
-import { compactNumberServer } from "../utils/format.js";
+import { compactNumberServer } from "@echo/domain";
 import { recordDailySnapshot } from "./portfolioSnapshot.js";
 import { listUsers } from "../repositories/authRepository.js";
 

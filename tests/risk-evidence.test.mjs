@@ -4,7 +4,7 @@
 //     新增财报趋势（B-2）驱动的风险识别（连续放缓/拐点），比单期阈值更早预警。
 // [2] buildDecisionPanel 集成：riskTriggers 真的用上了 buildRiskRadar，不再是 profile.risks 空转。
 import "./setupTestDb.mjs";
-import { buildRiskRadar } from "../src/server/services/riskEngine.js";
+import { buildRiskRadar } from "@echo/domain";
 import { buildDecisionPanel } from "../src/server/services/decisionPanel.js";
 
 let passed = 0;

@@ -12,8 +12,8 @@
 
 import { RESEARCH_STATUS_VALUES, KEY_DRIVER_NAMES, RESEARCH_STATUS_LABELS } from "../schemas/agentPanel.js";
 import { hasUserContext, missingContextFields } from "./userContext.js";
-import { fmtPercent, compactNumberServer, quoteStatusFor } from "../utils/format.js";
-import { buildRiskRadar } from "./riskEngine.js";
+import { fmtPercent, compactNumberServer, quoteStatusFor } from "@echo/domain";
+import { buildRiskRadar } from "@echo/domain";
 
 const STATUS_DELAYED = "延迟/当日";
 const STATUS_MISSING = "缺失";

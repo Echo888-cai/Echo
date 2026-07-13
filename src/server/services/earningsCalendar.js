@@ -29,15 +29,10 @@
 import { detectMarket, adrOrBareSymbol } from "../../market.js";
 import { getEarningsCalendarRow, upsertEarningsCalendar } from "../repositories/earningsCalendarRepository.js";
 import { fetchJson as requestJson } from "../utils/http.js";
+import { computeSurprisePct } from "@echo/domain";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 const LOOKAHEAD_DAYS = 180;
-
-/** 惊喜幅度：(实际-预期)/|预期|，预期为 0 或缺失时没有意义，诚实返回 null。 */
-export function computeSurprisePct(actual, estimate) {
-  if (actual == null || estimate == null || estimate === 0) return null;
-  return Math.round(((actual - estimate) / Math.abs(estimate)) * 1000) / 10;
-}
 
 /**
  * 该 symbol 最近一期"已经有实际值"的报告（EPS only，见模块顶部说明）。
