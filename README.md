@@ -200,7 +200,7 @@ Echo Research
 │   │   └── utils/                 # time anchoring, async, env
 │   ├── data/                      # HK stock seed data
 │   └── db/
-│       ├── migrations/            # numbered, additive SQL migrations (see docs/DATABASE.md)
+│       ├── migrations/            # numbered, additive SQL migrations (see docs/ARCHITECTURE.md)
 │       └── migrate.js             # `PRAGMA user_version`-based migrator, runs on boot
 ├── scripts/                       # seed-db, doctor, canary, hk-coverage, one-off migrations
 ├── tests/                         # smoke · reliability · phase3/4/6/7 · notifications ·
@@ -279,9 +279,9 @@ The application architecture is ready for a small commercial beta, but the bundl
 ## Documentation
 
 - **[主计划（愿景 + 分阶段路线图 + 历史记录 + 接手协议）](docs/PLAN.md)** ← start here to contribute
-- [Architecture](docs/ARCHITECTURE.md) · [Database](docs/DATABASE.md) · [Data Pipeline](docs/DATA_PIPELINE.md)
-- [Data Source Strategy](docs/DATA_SOURCE_STRATEGY.md) · [Product Requirements](docs/PRD.md)
-- [AI Integration](docs/AI_INTEGRATION.md) · [GitHub Workflow](docs/GITHUB_WORKFLOW.md)
+- [Refactor Proposal（重构提案：目标架构 + 六阶段路线 + 决策清单）](docs/REFACTOR_PROPOSAL.md)
+- [Architecture（当前底盘 + 新底盘 + 数据层/数据平面/前端设计语言）](docs/ARCHITECTURE.md)
+- [ADR（重大技术决策留痕）](docs/adr/) · [Deploy](docs/DEPLOY.md) · [GitHub Workflow](docs/GITHUB_WORKFLOW.md)
 
 ---
 

@@ -12,7 +12,7 @@
  *
  * 实测：连续 9 支不停顿之后，巨潮资讯网的 hisAnnouncement/query 开始对同一 IP
  * 直接掉连接（fetch 抛 "fetch failed"，不是 HTTP 4xx/5xx，是连接层面被拒）——
- * 免费未文档化接口的典型限流表现（同 docs/DATA_SOURCE_STRATEGY.md 的既有认知）。
+ * 免费未文档化接口的典型限流表现。
  * 逐支之间加个固定间隔，礼貌一点，也让扫描本身更稳定。
  */
 import { fileURLToPath } from "node:url";
