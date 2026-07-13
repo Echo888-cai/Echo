@@ -2,6 +2,22 @@
 // interpolated text, so esc() itself is not needed here — only the pure
 // date/number helpers actually used by the migrated components.
 
+// returnPct is a decimal (0.031 -> "+3.1%"); changePct fields elsewhere are
+// already percentages and don't go through this helper (mirrors format.js).
+export function fmtPct(v: number | null | undefined): string {
+  if (typeof v !== "number" || !Number.isFinite(v)) return "";
+  return `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`;
+}
+
+export function fmtNum(v: number | null | undefined, digits = 2): string {
+  if (typeof v !== "number" || !Number.isFinite(v)) return "—";
+  return v.toLocaleString("zh-CN", { maximumFractionDigits: digits });
+}
+
+export function pnlDir(v: number | null | undefined): "is-up" | "is-down" | "is-flat" {
+  return typeof v === "number" && Number.isFinite(v) ? (v > 0 ? "is-up" : v < 0 ? "is-down" : "is-flat") : "is-flat";
+}
+
 // SQLite datetime('now') is UTC; render as relative time (mirrors format.js notifWhen).
 export function notifWhen(createdAt: string): string {
   const t = Date.parse(

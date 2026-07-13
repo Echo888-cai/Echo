@@ -17,7 +17,16 @@ import {
   type notificationsTestResponseSchema,
   type researchScorecardResponseSchema,
   type userPreferencesSchema,
-  type preferencesUpdateRequestSchema
+  type preferencesUpdateRequestSchema,
+  type companySearchResultSchema,
+  type companyVerifyResponseSchema,
+  type resolvedCompanySchema,
+  type portfolioPositionSchema,
+  type portfolioReviewSchema,
+  type portfolioSnapshotRowSchema,
+  type portfolioUpsertRequestSchema,
+  type companyProfileSchema,
+  type tickerScorecardSchema
 } from "@echo/contracts";
 import { z } from "zod";
 
@@ -33,6 +42,10 @@ export type NotificationTestResult = z.infer<typeof notificationsTestResponseSch
 export type ResearchScorecard = z.infer<typeof researchScorecardResponseSchema>["data"];
 export type UserPreferences = z.infer<typeof userPreferencesSchema>;
 export type PreferencesUpdateRequest = z.infer<typeof preferencesUpdateRequestSchema>;
+export type PortfolioPosition = z.infer<typeof portfolioPositionSchema>;
+export type PortfolioReview = z.infer<typeof portfolioReviewSchema>;
+export type PortfolioSnapshot = z.infer<typeof portfolioSnapshotRowSchema>;
+export type PortfolioUpsertRequest = z.infer<typeof portfolioUpsertRequestSchema>;
 
 /** Thrown for any non-2xx response; `.message` matches the legacy api.js contract. */
 export class ApiError extends Error {
@@ -167,6 +180,30 @@ export const preferencesApi = {
     return request<{ preferences: UserPreferences }>("/api/preferences", {
       method: "PATCH",
       body: JSON.stringify(patch)
+    });
+  }
+};
+
+/** src/server/routes/portfolio.js — used by the portfolio page (R-3 slice 3). */
+export const portfolioApi = {
+  async list() {
+    return request<{ positions: PortfolioPosition[] }>("/api/portfolio", { method: "GET" });
+  },
+  async review() {
+    return request<{ review: PortfolioReview }>("/api/portfolio/review", { method: "GET" });
+  },
+  async snapshots() {
+    return request<{ snapshots: PortfolioSnapshot[] }>("/api/portfolio/snapshots", { method: "GET" });
+  },
+  async upsert(body: PortfolioUpsertRequest) {
+    return request<{ position: PortfolioPosition }>("/api/portfolio", {
+      method: "POST",
+      body: JSON.stringify(body)
+    });
+  },
+  async remove(ticker: string) {
+    return request<{ deleted: true; ticker: string }>(`/api/portfolio?ticker=${encodeURIComponent(ticker)}`, {
+      method: "DELETE"
     });
   }
 };
