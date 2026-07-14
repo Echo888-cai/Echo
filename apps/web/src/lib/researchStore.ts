@@ -248,6 +248,7 @@ interface Run {
   label: string;
   startedAt: number;
   reasoningChars: number;
+  stage: string | null;
   snapshot: { thread: Message[]; company: ResearchCompany | null; panel: any; sessionId: string | null; conversationId: string | null };
 }
 
@@ -274,7 +275,7 @@ function snapshotActive() {
 }
 
 export function startRun(key: string, label = "正在检索和思考") {
-  running.set(key, { label, startedAt: Date.now(), reasoningChars: 0, snapshot: snapshotActive() });
+  running.set(key, { label, startedAt: Date.now(), reasoningChars: 0, stage: null, snapshot: snapshotActive() });
   state.resolving = false;
   if (!busyTimer) busyTimer = setInterval(() => emit(), 1000);
   emit();
@@ -298,13 +299,31 @@ export function busyElapsedSeconds(): number {
   return Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
 }
 
-const WAIT_PHASES = ["正在读取行情与公司档案", "正在检索公开网页证据", "正在校验来源、剔除失效链接", "正在综合判断与证据置信度"];
+// Stage names must match the onStage callback fired from runResearch
+// (packages/application/src/research.ts) via the /api/ask SSE "status" event —
+// this is a copy of the pipeline's real steps, not a decorative clock-driven
+// carousel, so it stays honest about what the backend is actually doing.
+const STAGE_LABELS: Record<string, string> = {
+  resolving: "正在定位公司",
+  market_financials: "正在读取行情与财务数据",
+  valuation: "正在计算估值区间",
+  generating: "模型正在生成回答",
+  fact_check: "正在核对数字与来源"
+};
+
+export function setStage(key: string, stage: string) {
+  const r = running.get(key);
+  if (r) r.stage = stage;
+  if (key === activeRunKey()) emit();
+}
 
 export function waitPhase(): string {
-  const rc = activeRun()?.reasoningChars || 0;
+  const run = activeRun();
+  const rc = run?.reasoningChars || 0;
   const streaming = state.streamingKey && state.streamingKey === activeRunKey();
   if (rc > 0 && !streaming) return `模型正在推理 · 已 ${rc} 字`;
-  return WAIT_PHASES[Math.min(WAIT_PHASES.length - 1, Math.floor(busyElapsedSeconds() / 5))];
+  const stage = run?.stage;
+  return (stage && STAGE_LABELS[stage]) || "正在检索和思考";
 }
 
 export function setStreaming(key: string | null, text: string) {

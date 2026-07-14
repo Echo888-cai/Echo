@@ -281,7 +281,7 @@ export const documentsApi = {
 
 /**
  * Streaming chat reads the /api/ask SSE
- * response (token/reasoning/final/error events), falling back to a plain JSON
+ * response (token/reasoning/status/final/error events), falling back to a plain JSON
  * POST if the endpoint doesn't stream or errors before a final event lands
  * (never silently drop the answer). This takes
  * explicit callbacks instead of reaching into global UI state — the caller
@@ -289,7 +289,7 @@ export const documentsApi = {
  */
 export async function chatStream(
   body: Record<string, unknown>,
-  callbacks: { onToken?: (text: string) => void; onReasoning?: (chars: number) => void } = {}
+  callbacks: { onToken?: (text: string) => void; onReasoning?: (chars: number) => void; onStage?: (stage: string) => void } = {}
 ): Promise<ChatResult> {
   let finalResult: ChatResult | null = null;
   try {
@@ -338,6 +338,8 @@ export async function chatStream(
           callbacks.onToken?.(json.t || "");
         } else if (evt === "reasoning") {
           callbacks.onReasoning?.(json.n || 0);
+        } else if (evt === "status") {
+          if (json.stage) callbacks.onStage?.(json.stage);
         } else if (evt === "final") {
           finalResult = json;
         } else if (evt === "error") {

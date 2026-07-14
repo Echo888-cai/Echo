@@ -27,6 +27,10 @@ function providerConfig() {
 }
 
 type TokenCallback = (delta: string) => void | Promise<void>;
+// Stage names are a stable contract with the frontend (apps/web/src/lib/researchStore.ts
+// maps each to display copy) — renaming one without updating that map silently breaks
+// the wait-phase indicator again.
+type StageCallback = (stage: string) => void | Promise<void>;
 
 // Provider deltas often arrive sub-word (DeepSeek/OpenAI can emit hundreds of
 // tiny deltas for a page of Markdown). Forwarding every single one as its own
@@ -289,12 +293,14 @@ async function applyFactGuard(content: string, company: any, marketSnapshot: any
   return { content: withNote, factGuard: { mode, ...summary } };
 }
 
-export async function runResearch(input: ResearchInput, userId: string, onToken?: TokenCallback) {
+export async function runResearch(input: ResearchInput, userId: string, onToken?: TokenCallback, onStage?: StageCallback) {
+  await onStage?.("resolving");
   const company = await resolveInputCompany(input);
   if (!company) return {
     mode: "chat_local", provider: null, model: null, sessionId: null, content: "我还没识别出要研究的公司。请补充股票代码或完整公司名称。",
     decisionPanel: null, dataSources: {}, marketSnapshot: null, newsSnapshot: null, valuation: null, portrait: null
   };
+  await onStage?.("market_financials");
   const [profile, market, financials] = await Promise.all([
     getCompanyProfile(company.ticker, userId),
     ensureFreshMarketSnapshot(company.ticker),
@@ -302,11 +308,13 @@ export async function runResearch(input: ResearchInput, userId: string, onToken?
   ]);
   const fallback = deterministicAnswer(company, profile, market, financials, input.question);
   const { marketSnapshot, financialsData } = toDomainSources(company, market, financials[0]);
+  await onStage?.("valuation");
   const valuation = computeResearchValuation(company, marketSnapshot, financialsData);
   const valuationFacts = valuation && !valuation.cannotValueReason
     ? `\n估值（${valuation.method}）：看空 ${valuation.bear} / 中性 ${valuation.base} / 看多 ${valuation.bull} ${company.currency}（依据：${(valuation.keyAssumptions || []).join("；")}）`
     : `\n估值：本轮数据不足以给出自洽估值区间（${valuation?.cannotValueReason || "缺少定价所需的关键字段"}）`;
   const facts = `公司：${company.nameZh}（${company.ticker}）\n现价：${market?.price ?? "未核到"}\n财务：${financialSummary(financials)}${valuationFacts}\n既有主线：${profile?.thesis || company.summary?.join("；") || "未沉淀"}`;
+  await onStage?.("generating");
   const generated = await modelAnswer(
     "你是审慎的买方研究员。只使用给出的事实，不编数字；取不到就写未核到。估值区间必须使用给定的估值数据，不得自行编造倍数或目标价。" +
       "红线：只给判断，不给指令——禁止任何形式的买入/卖出/持有/加仓/减仓/追高/抄底建议，包括正向表述（“建议买入”）和反向劝阻（“不建议追高”“不建议此时买入”），这类劝阻性措辞本质上仍是买卖指令，同样禁止。" +
@@ -318,6 +326,7 @@ export async function runResearch(input: ResearchInput, userId: string, onToken?
   );
   const panel = decisionPanel(company, profile, market);
   const id = input.sessionId || `s_${randomUUID()}`;
+  await onStage?.("fact_check");
   const guarded = generated
     ? await applyFactGuard(generated.content, company, marketSnapshot, financialsData, valuation)
     : { content: fallback, factGuard: null };
@@ -346,7 +355,7 @@ export async function runResearch(input: ResearchInput, userId: string, onToken?
   };
 }
 
-export async function runAsk(input: ResearchInput, userId: string, onToken?: TokenCallback) {
+export async function runAsk(input: ResearchInput, userId: string, onToken?: TokenCallback, onStage?: StageCallback) {
   if (!input.company?.ticker && (input.kind === "macro" || input.kind === "screener")) {
     if (input.kind === "screener") {
       const rows = await searchCompanies(input.question, { limit: 30 });
@@ -354,7 +363,7 @@ export async function runAsk(input: ResearchInput, userId: string, onToken?: Tok
     }
     return { kind: "macro", content: "宏观研究需要可核验的当期数据。本轮没有绑定授权宏观数据源，因此不编造指数和结论。", mode: "local_fallback", indices: [], evidence: [], gaps: ["当期宏观数据"] };
   }
-  return runResearch(input, userId, onToken);
+  return runResearch(input, userId, onToken, onStage);
 }
 
 export async function runReport(input: ResearchInput, userId: string) {

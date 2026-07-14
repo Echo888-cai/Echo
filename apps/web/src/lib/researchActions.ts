@@ -21,6 +21,7 @@ import {
   setResolving,
   setStreaming,
   addReasoningChars,
+  setStage,
   startRun,
   endRun,
   runKey,
@@ -296,9 +297,15 @@ function applyChatResult(result: any, key: string, company: ResearchCompany | nu
     else if (result.portrait?.created) showToast(`已为 ${label} 建立长期画像，并加入看盘。`);
     else if (result.watchRestored) showToast(`${label} 已重新加入看盘。`);
     else if (result.portrait?.changed) showToast(`已更新 ${label} 的长期画像（判断有变化）。`);
-    if (result.portrait) void queryClient.invalidateQueries({ queryKey: ["company", "profile", result.portrait.ticker] });
-    if (Array.isArray(result.newlyWatched) && result.newlyWatched.length) {
+    if (result.portrait) {
+      void queryClient.invalidateQueries({ queryKey: ["company", "profile", result.portrait.ticker] });
+      // watchDesk is built from the company-profile union (see docs/PLAN.md P0 #1)
+      // so any create/update of a profile — not just the multi-holding
+      // newlyWatched case below — must invalidate it, or the freshly-researched
+      // company only shows up in 看盘 after some unrelated refetch.
       refreshWatchDesk();
+    }
+    if (Array.isArray(result.newlyWatched) && result.newlyWatched.length) {
       const mainTicker = result.decisionPanel?.ticker || company?.ticker;
       const extras = result.newlyWatched.filter((w: any) => w.ticker !== mainTicker);
       if (extras.length) showToast(`已加入看盘：${extras.map((w: any) => w.name || w.ticker).join("、")}`);
@@ -475,7 +482,8 @@ function streamCallbacks(key: string) {
       text += t;
       if (key === activeRunKey()) setStreaming(key, text);
     },
-    onReasoning: (n: number) => addReasoningChars(key, n)
+    onReasoning: (n: number) => addReasoningChars(key, n),
+    onStage: (stage: string) => setStage(key, stage)
   };
 }
 

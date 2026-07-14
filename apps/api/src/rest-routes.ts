@@ -41,13 +41,20 @@ export function registerRestRoutes(app: Hono<any>, createCaller: CallerFactory) 
     const userId = c.get("user").id;
     if (input.stream !== true) return c.json(await runAsk(input, userId));
     return streamSSE(c, async (stream) => {
-      await stream.writeSSE({ event: "status", data: JSON.stringify({ stage: "generating" }) });
       try {
         // Real token streaming: modelAnswer forwards each provider delta here as it
         // arrives, so first-token latency is the provider's, not "wait for the whole
         // answer then replay it fast" — the previous behavior gave zero streaming
         // benefit since it only started once generation was already complete.
-        const result: any = await runAsk(input, userId, (delta) => stream.writeSSE({ event: "token", data: JSON.stringify({ t: delta }) }));
+        // Stage events mirror runResearch's actual pipeline steps (resolving/
+        // market_financials/valuation/generating/fact_check) so the frontend wait
+        // indicator reflects real progress instead of a fixed clock-driven carousel.
+        const result: any = await runAsk(
+          input,
+          userId,
+          (delta) => stream.writeSSE({ event: "token", data: JSON.stringify({ t: delta }) }),
+          (stage) => stream.writeSSE({ event: "status", data: JSON.stringify({ stage }) })
+        );
         await stream.writeSSE({ event: "final", data: JSON.stringify(result) });
         await stream.writeSSE({ event: "done", data: "{}" });
       } catch (error) {
