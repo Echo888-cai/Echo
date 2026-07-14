@@ -51,7 +51,7 @@ crates/finance-core   十进制定点金融数值内核
 4. **个股详情页契约漂移**：`watch.stock` 返回 `{company, profile, market, rules}`，前端 `StockDetail.tsx` 读 `series / fundamentals / events / watchRules`——价格曲线、基本面格子、事件流、证伪规则在详情页全部渲染为空。
 5. **数据源"配置剧场"**：`FMP_API_KEY / TAVILY_API_KEY / FINNHUB_API_KEY / ALPHAVANTAGE_API_KEY / TWELVEDATA_API_KEY / EODHD_API_KEY` 在全仓库只有 `apps/api/src/status.ts` 引用，且只用来把设置页显示成"已配置/ok"。没有任何适配器调用这些供应商；行情实际只有 `yahooQuoteAdapter` 一个源。`.env` 注释承诺的"Alpha Vantage → Twelve Data → Finnhub → Yahoo 兜底"和"FMP 解锁真实 EPS/FCF/forwardPE"均未实现。这就是"研究功能数据源接通有问题"的本体。
 6. **研究链路极浅**：`runResearch`（`packages/application/src/research.ts`）只拼"现价 + 港/A 本地财务表 + 既有画像主线"三行事实喂给一次 DeepSeek chat 调用，失败则回落到固定模板。美股财务恒为空数组；港/A 财务依赖 filing 工作流入库（本地 Temporal 未跑则同样为空）；无网页证据、无估值、无同业、无财报日历。`newsSnapshot: null`、`factGuard: null` 是硬编码。
-7. **领域层 ~3200 行核心资产是死代码**：`answerComposer`（956 行）、`valuation`（462 行）、`factGuard`（488 行）、`financialQuality`、`historicalValuation`、`portraitRules`、`researchReview`、`reportComposer`、`eventRules`、`risk` 全部无人调用；生产只用了 `evaluateRule`、scorecard 和 company-identity。`FACT_GUARD_MODE=soft` 目前是空转开关。前端 `AnswerCard.tsx`（787 行）期待的 `evidence / valuation / grounding / analyst / dualQuote / completeness` 等字段研究链路从不产出，研究卡片实际是裸 Markdown。
+7. **领域层 ~3200 行核心资产大半是死代码**：`answerComposer`（956 行）、`valuation`（462 行）、`financialQuality`、`historicalValuation`、`portraitRules`、`researchReview`、`reportComposer`、`eventRules`、`risk` 仍无人调用；生产只用了 `evaluateRule`、scorecard、company-identity，以及（2026-07-14 起）`factGuard`（488 行，`runResearch` 已接回 shadow/soft 模式，见第 5 节 P2）。前端 `AnswerCard.tsx`（787 行）期待的 `evidence / valuation / grounding / analyst / dualQuote / completeness` 等字段研究链路仍不产出，研究卡片实际还是裸 Markdown。
 8. **Temporal 是隐性硬依赖**：`reports.generate`（深度报告）和 `/api/hk-financials/ingest` 直连 Temporal（`apps/api/src/temporal.ts`），本地没有 Temporal server 时这两个入口直接失败，没有降级路径，也没有任何 UI 提示原因。
 9. **假流式**：`/api/ask` 的 SSE 是把同步算完的全文按 24 字符切片回放（`apps/api/src/rest-routes.ts:43`），首 token 等待时间等于全量生成时间，流式体验是装饰性的。
 10. **Rust 内核未接线**：`@echo/finance-native` 没有任何 import 方；服务端盈亏/市值计算用 JS 浮点完成（`apps/api/src/app.ts:112` enrichPosition）。红线 4 当前只在存储层（NUMERIC）兑现了一半。
@@ -127,7 +127,8 @@ npm run db:recovery-drill
 目标：研究回答从"一次裸模型调用"升级为"多源事实 + 领域编排 + 数字护栏"的证据优先输出。这是产品差异化的本体。
 
 - `runResearch` 改为经 `answerComposer` 组装多源事实块（行情、财务、filing、网页证据、画像、持仓上下文），意图分类驱动提示词；`reportComposer` 承接深度报告。
-- `factGuard` 接回输出校验：soft 模式记录数字级偏差并标注，验证稳定后按既定 shadow→soft→hard 路径推进；`FACT_GUARD_MODE` 恢复实效。
+- [x] `factGuard` 接回输出校验（shadow/soft 模式已实装）：`runResearch` 用行情快照+最新一期财报构造事实登记表（`packages/application/src/research.ts` 的 `applyFactGuard`），对模型正文跑 `verifyAnswerNumbers`，写入 `fact_guard_audit`（此前"空转开关"，`getFactGuardStats` 永远为空的根因）；`FACT_GUARD_MODE` 默认 `shadow`，`soft`/`full`（`full` 的拦截+定向重答暂未实现，行为等同 soft，诚实标注）会在正文追加低调提示。真实模型回测（0700.HK）验证过一次关键 bug：`nativeCurrency` 必须取财报报表币种而非行情报价币种，否则港股通/A+H 这类"报价币种≠报表币种"的公司会把每一条真实引用的财务数字错判成 hard（跨币种换算路径把它们全部拿去和唯一的 HKD 现价比较）；修正后同一份回答从 20/47 处误判 hard 降到 0 处 hard。仍待做：把 `valuation`/同业倍数接入登记表（目前只覆盖行情+最新一期财报，估值类数字仍多为 soft）；`full` 模式的拦截+定向重答闭环；settings 页面暂无变化，等真实流量积累后 `FactGuardCard` 会自动出数。
+- [ ] `factGuard` 覆盖率扩展：登记表接入估值区间、同业倍数、历史分位后再推进 shadow→soft→full 路径。
 - 估值链路：`valuation` + `historicalValuation` 产出估值区间与历史分位，行业估值路由（银行/保险/周期/消费/SaaS/生物科技选法）；估值计算走 Rust 定点内核（`finance-native` 接上真实调用方，兑现红线 4），或在明确的展示边界内标注近似口径。
 - 财务质量红旗：`financialQuality`（盈余质量、现金流质量、应收/存货异常、资本化倾向）进公司画像与回答。
 - `AnswerCard` 的 evidence / valuation / grounding / confidence 字段由链路真实产出，研究卡片恢复设计时的信息密度。

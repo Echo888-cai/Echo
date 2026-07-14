@@ -6,6 +6,8 @@ import { saveResearchSession } from "@echo/db/repositories/researchSessionsRepos
 import { getHkFinancials } from "@echo/db/repositories/hkFinancialsRepository.js";
 import { getCnFinancials } from "@echo/db/repositories/cnFinancialsRepository.js";
 import { insertLlmAudit } from "@echo/db/repositories/llmAuditRepository.js";
+import { insertFactGuardAudit } from "@echo/db/repositories/factGuardRepository.js";
+import { buildFactsRegistry, buildSoftNote, summarizeVerdict, verifyAnswerNumbers } from "@echo/domain";
 
 type ResearchInput = {
   question: string;
@@ -108,6 +110,71 @@ async function resolveInputCompany(input: ResearchInput) {
   return match ? getCompanyByTickerComplete(match.ticker) : null;
 }
 
+/**
+ * R3 数字护栏 — checks the model's free-form answer against the same structured
+ * facts it was fed (market snapshot + latest filing row), so a fabricated or
+ * mis-transcribed number is caught rather than shipped silently. Modes:
+ * off (skip entirely), shadow (audit only, never shown), soft/full (audit +
+ * a low-key note appended to the answer). `full`'s "拦截+定向重答" path isn't
+ * built yet — until it is, full behaves like soft rather than silently no-op'ing.
+ */
+function pctOf(numerator: number | null | undefined, denominator: number | null | undefined) {
+  if (numerator == null || !denominator) return null;
+  return (numerator / denominator) * 100;
+}
+
+function pctChange(current: number | null | undefined, prior: number | null | undefined) {
+  if (current == null || !prior) return null;
+  return ((current - prior) / Math.abs(prior)) * 100;
+}
+
+function isoDate(value: unknown): string | null {
+  if (!value) return null;
+  const d = value instanceof Date ? value : new Date(String(value));
+  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+}
+
+async function applyFactGuard(content: string, company: any, market: any, financials: any[]) {
+  const mode = (process.env.FACT_GUARD_MODE || "shadow").toLowerCase();
+  if (mode === "off") return { content, factGuard: null };
+  const row = financials[0];
+  // "Native currency" for amount-matching purposes is the filing's reporting currency
+  // (most amount facts come from financials), not the trading/quote currency — for a
+  // company like Tencent (HKD-quoted, RMB-reporting) those differ. Forcing the quote
+  // currency here made every financial-statement figure take the cross-currency
+  // conversion path and get compared only against the price fact, producing false
+  // "数量级相差 xxx 倍" hard-fails on real, correctly-cited revenue/profit numbers.
+  const registry: any = buildFactsRegistry({
+    ticker: company.ticker,
+    nativeCurrency: row?.currency || company.currency,
+    marketSnapshot: market ? {
+      providerStatus: "ok", price: market.price, currency: company.currency, changePercent: market.change_percent,
+      pe: market.pe, dividendYield: market.dividend_yield, marketCap: market.market_cap
+    } : { providerStatus: "missing" },
+    financialsData: row ? {
+      providerStatus: "ok", currency: row.currency || company.currency,
+      revenue: row.revenue, grossProfit: row.gross_profit, operatingIncome: row.operating_income,
+      netIncome: row.net_income, operatingCashFlow: row.operating_cash_flow, cashAndEquivalents: row.cash_and_equivalents,
+      eps: row.eps, revenueGrowth: pctChange(row.revenue, row.revenue_prior), grossMargin: pctOf(row.gross_profit, row.revenue),
+      operatingMargin: pctOf(row.operating_income, row.revenue), netMargin: pctOf(row.net_income, row.revenue),
+      profitGrowth: pctChange(row.net_income, row.net_income_prior), period: isoDate(row.period_end) || isoDate(row.published_at)
+    } : { providerStatus: "missing" }
+  });
+  // buildFactsRegistry only registers the filing period as a date fact — the quote's
+  // as-of date is a separate, equally citable fact (models often restate "现价日期"),
+  // so append it directly rather than mislabeling it as a filing period.
+  const asOf = isoDate(market?.as_of);
+  if (asOf) {
+    const [y, m, d] = asOf.split("-").map(Number);
+    registry.dates.push({ iso: asOf, year: y, month: m, day: d, quarter: Math.ceil(m / 3), label: "行情快照时间", source: "marketSnapshot" });
+  }
+  const verdict = verifyAnswerNumbers(content, registry);
+  const summary = summarizeVerdict(verdict);
+  await insertFactGuardAudit({ ticker: company.ticker, mode, summary }).catch(() => {});
+  const withNote = mode === "shadow" ? content : content + buildSoftNote(verdict);
+  return { content: withNote, factGuard: { mode, ...summary } };
+}
+
 export async function runResearch(input: ResearchInput, userId: string) {
   const company = await resolveInputCompany(input);
   if (!company) return {
@@ -128,7 +195,8 @@ export async function runResearch(input: ResearchInput, userId: string) {
   );
   const panel = decisionPanel(company, profile, market);
   const id = input.sessionId || `s_${randomUUID()}`;
-  const content = generated?.content || fallback;
+  const guarded = generated ? await applyFactGuard(generated.content, company, market, financials) : { content: fallback, factGuard: null };
+  const content = guarded.content;
   await saveResearchSession({ id, ticker: company.ticker, companyName: company.nameZh, title: input.question, question: input.question,
     conversationId: input.conversationId || id, status: "completed", decisionPanel: panel, fullResearch: content,
     reportMarkdown: content, dataSources: { market: market ? { status: "ok", source: market.source, asOf: market.as_of } : { status: "missing" }, financials: financials.length ? { status: "ok" } : { status: "missing" } },
@@ -147,6 +215,7 @@ export async function runResearch(input: ResearchInput, userId: string) {
     dataSources: { market: market ? { status: "ok", source: market.source, asOf: market.as_of } : { status: "missing" }, financials: financials.length ? { status: "ok" } : { status: "missing" } },
     marketSnapshot: market,
     newsSnapshot: null,
+    factGuard: guarded.factGuard,
     valuation: savedProfile?.valuation || null,
     portrait: { ticker: company.ticker, created: !profile, changed: !profile || profile.thesis !== panel.oneLineView, turnCount: savedProfile?.turnCount || 0 }
   };
@@ -175,7 +244,7 @@ export async function runReport(input: ResearchInput, userId: string) {
     dataSources: result.dataSources,
     marketSnapshot: result.marketSnapshot,
     newsSnapshot: result.newsSnapshot,
-    factGuard: null,
+    factGuard: result.factGuard,
     portrait: result.portrait
   };
 }

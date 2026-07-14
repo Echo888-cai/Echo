@@ -46,7 +46,10 @@ export async function buildStatusSnapshot(userId = "local") {
   } catch { /* empty or unavailable diagnostics degrade honestly */ }
   try { hkFilingCoverage = await getHkFilingCoverage(); } catch { /* same */ }
   try { llmAudit = await getProviderCallStats({ days: 7, userId }) as Record<string, unknown>[]; } catch { /* same */ }
-  try { factGuard = { mode: (process.env.FACT_GUARD_MODE || "full").toLowerCase(), ...await getFactGuardStats({ days: 14 }) }; } catch { /* same */ }
+  // Default "shadow": matches packages/application/src/research.ts's actual behavior
+  // when unset. "full" implies intercept+regenerate, which isn't built yet — don't
+  // claim it by default.
+  try { factGuard = { mode: (process.env.FACT_GUARD_MODE || "shadow").toLowerCase(), ...await getFactGuardStats({ days: 14 }) }; } catch { /* same */ }
   try { usage = await usageStatus(userId); } catch { /* same */ }
   const ai = {
     configured: Boolean(process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.MODEL_API_KEY),
