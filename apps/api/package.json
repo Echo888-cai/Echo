@@ -18,6 +18,7 @@
     "@echo/data-plane": "*",
     "@echo/domain": "*",
     "@echo/db": "*",
+    "@echo/finance-native": "*",
     "@echo/observability": "*",
     "@hono/node-server": "^2.0.8",
     "@trpc/server": "^11.18.0",

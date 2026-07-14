@@ -98,6 +98,46 @@ pub fn equity_value_from_multiple(
     Ok(Money::new(equity_value, metric.currency))
 }
 
+/// Subtract two same-currency money amounts (e.g. market value − cost value,
+/// or a position's current price − its average cost, both expressed as Money
+/// in the position's currency).
+pub fn subtract(a: Money, b: Money) -> Result<Money, FinanceError> {
+    if a.currency != b.currency {
+        return Err(FinanceError::CurrencyMismatch);
+    }
+    let amount = a
+        .amount
+        .checked_sub(b.amount)
+        .ok_or(FinanceError::ArithmeticOverflow)?;
+    Ok(Money::new(amount, a.currency))
+}
+
+/// Multiply a money amount by a plain decimal factor (e.g. price × shares).
+pub fn multiply(value: Money, factor: Decimal) -> Result<Money, FinanceError> {
+    let amount = value
+        .amount
+        .checked_mul(factor)
+        .ok_or(FinanceError::ArithmeticOverflow)?;
+    Ok(Money::new(amount, value.currency))
+}
+
+/// Signed ratio of two same-currency money amounts (e.g. an unrealized-gain
+/// numerator over its cost-basis denominator) — `None` when the denominator
+/// is zero rather than producing an infinite/NaN ratio.
+pub fn ratio(numerator: Money, denominator: Money) -> Result<Option<Decimal>, FinanceError> {
+    if numerator.currency != denominator.currency {
+        return Err(FinanceError::CurrencyMismatch);
+    }
+    if denominator.amount.is_zero() {
+        return Ok(None);
+    }
+    let value = numerator
+        .amount
+        .checked_div(denominator.amount)
+        .ok_or(FinanceError::ArithmeticOverflow)?;
+    Ok(Some(value))
+}
+
 /// Convert total equity value into a per-share value with explicit precision.
 pub fn per_share(
     equity_value: Money,
@@ -153,6 +193,40 @@ mod tests {
         assert_eq!(
             per_share(usd, Decimal::ZERO, 2),
             Err(FinanceError::NonPositiveShares)
+        );
+    }
+
+    #[test]
+    fn position_pnl_uses_exact_decimal_arithmetic() {
+        // 100 shares @ 317.31 vs. cost basis 280.00 — mirrors
+        // apps/api/src/app.ts's enrichPosition, which used to do this in JS
+        // binary float.
+        let price = Money::new(Decimal::new(31731, 2), Currency::Usd);
+        let avg_cost = Money::new(Decimal::new(28000, 2), Currency::Usd);
+        let shares = Decimal::new(100, 0);
+
+        let market_value = multiply(price, shares).unwrap();
+        let cost_value = multiply(avg_cost, shares).unwrap();
+        let unrealized_pnl = subtract(market_value, cost_value).unwrap();
+        assert_eq!(market_value.amount(), Decimal::new(3173100, 2));
+        assert_eq!(cost_value.amount(), Decimal::new(2800000, 2));
+        assert_eq!(unrealized_pnl.amount(), Decimal::new(373100, 2));
+
+        let gain = subtract(price, avg_cost).unwrap();
+        let return_pct = ratio(gain, avg_cost).unwrap().unwrap();
+        // 37.31 / 280.00 = 0.13325 exactly
+        assert_eq!(return_pct, Decimal::new(13325, 5));
+    }
+
+    #[test]
+    fn ratio_rejects_currency_mismatch_and_zero_denominator() {
+        let usd = Money::new(Decimal::ONE, Currency::Usd);
+        let hkd = Money::new(Decimal::ONE, Currency::Hkd);
+        assert_eq!(ratio(usd, hkd), Err(FinanceError::CurrencyMismatch));
+        assert_eq!(subtract(usd, hkd), Err(FinanceError::CurrencyMismatch));
+        assert_eq!(
+            ratio(usd, Money::new(Decimal::ZERO, Currency::Usd)),
+            Ok(None)
         );
     }
 }

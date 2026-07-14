@@ -588,5 +588,8 @@ if (!nativeBinding) {
 
 module.exports = nativeBinding
 module.exports.equityValueFromMultipleDecimal = nativeBinding.equityValueFromMultipleDecimal
+module.exports.multiplyDecimal = nativeBinding.multiplyDecimal
 module.exports.perShareDecimal = nativeBinding.perShareDecimal
+module.exports.ratioDecimal = nativeBinding.ratioDecimal
+module.exports.subtractDecimal = nativeBinding.subtractDecimal
 module.exports.surprisePercentDecimal = nativeBinding.surprisePercentDecimal

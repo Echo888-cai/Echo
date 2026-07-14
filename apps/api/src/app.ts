@@ -24,6 +24,7 @@ import {
   watchUntrackRequestSchema
 } from "@echo/contracts";
 import { getFilings, getNextEarnings } from "@echo/data-plane";
+import { multiplyDecimal, subtractDecimal, ratioDecimal } from "@echo/finance-native";
 
 import { searchCompanies } from "@echo/db/repositories/companyRepository.js";
 import { createInvite } from "@echo/db/repositories/authRepository.js";
@@ -134,16 +135,33 @@ async function enrichPosition(position: any, userId: string) {
     nearestFalsifierRule,
     nextEarnings: null
   };
+  // 红线4：金额/比率计算不用二进制浮点，改走 Rust 十进制定点内核（@echo/finance-native）——
+  // 此前这里是纯 JS number 乘除减，PLAN.md 诊断#10 记录的"存储层 NUMERIC、计算层浮点各占一半"
+  // 缺口。currency 只是货币标签，用于跨字段一致性检查（不同货币相减/相除会显式报错），不参与
+  // 数值本身。
+  const positionCurrency = enriched.currency;
   if (price != null && position.avgCost != null && position.avgCost !== 0) {
-    enriched.returnPct = (price - position.avgCost) / position.avgCost;
+    const gain = subtractDecimal(String(price), String(position.avgCost), positionCurrency);
+    const returnPct = ratioDecimal(gain.amount, String(position.avgCost), positionCurrency);
+    enriched.returnPct = returnPct != null ? Number(returnPct) : null;
     if (position.shares != null) {
-      enriched.marketValue = price * position.shares;
-      enriched.costValue = position.avgCost * position.shares;
-      enriched.unrealizedPnl = enriched.marketValue - enriched.costValue;
+      const marketValue = multiplyDecimal(String(price), String(position.shares), positionCurrency);
+      const costValue = multiplyDecimal(String(position.avgCost), String(position.shares), positionCurrency);
+      enriched.marketValue = Number(marketValue.amount);
+      enriched.costValue = Number(costValue.amount);
+      enriched.unrealizedPnl = Number(subtractDecimal(marketValue.amount, costValue.amount, positionCurrency).amount);
     }
   }
-  if (price && position.stopLoss != null) enriched.toStopPct = (price - position.stopLoss) / price;
-  if (price && position.takeProfit != null) enriched.toTakePct = (position.takeProfit - price) / price;
+  if (price && position.stopLoss != null) {
+    const diff = subtractDecimal(String(price), String(position.stopLoss), positionCurrency);
+    const toStopPct = ratioDecimal(diff.amount, String(price), positionCurrency);
+    enriched.toStopPct = toStopPct != null ? Number(toStopPct) : null;
+  }
+  if (price && position.takeProfit != null) {
+    const diff = subtractDecimal(String(position.takeProfit), String(price), positionCurrency);
+    const toTakePct = ratioDecimal(diff.amount, String(price), positionCurrency);
+    enriched.toTakePct = toTakePct != null ? Number(toTakePct) : null;
+  }
   return enriched;
 }
 
