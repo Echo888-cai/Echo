@@ -14,6 +14,7 @@ import { postgresFundamentalsAdapter } from "./adapters/postgresFundamentalsAdap
 import { fmpFundamentalsAdapter } from "./adapters/fmpFundamentalsAdapter.js";
 import { postgresFilingsAdapter } from "./adapters/postgresFilingsAdapter.js";
 import { postgresCalendarAdapter } from "./adapters/postgresCalendarAdapter.js";
+import { finnhubCalendarAdapter } from "./adapters/finnhubCalendarAdapter.js";
 import { detectMarket, type Market } from "./market.js";
 import { selectAdapter, selectAdapterChain, type SelectOptions } from "./router.js";
 import { isBreakerOpen, recordFailure, recordSuccess } from "./circuitBreaker.js";
@@ -40,7 +41,10 @@ const fundamentalsAdapters: FundamentalsPort[] = [
   ...(process.env.FMP_API_KEY ? [fmpFundamentalsAdapter] : [])
 ];
 const filingsAdapters: FilingsPort[] = [postgresFilingsAdapter];
-const calendarAdapters: CalendarPort[] = [postgresCalendarAdapter];
+const calendarAdapters: CalendarPort[] = [
+  ...(process.env.FINNHUB_API_KEY ? [finnhubCalendarAdapter] : []),
+  postgresCalendarAdapter
+];
 
 export interface Routed<T> {
   result: T;

@@ -5,7 +5,12 @@ import type { CalendarPort } from "../ports.js";
 export const postgresCalendarAdapter: CalendarPort = {
   id: "postgres-calendar-cache",
   authorization: { licenseTier: "unlicensed_free_tier", commercialUseAllowed: false, notes: "Cached provider calendar; authorization is not elevated by persistence." },
-  qualityRank: 1,
+  // Ranked below finnhubCalendarAdapter (rank 1): this is a read-only cache
+  // with no current writer (earningsCalendarRepository.upsertEarningsCalendar
+  // is defined but nothing calls it yet), so for markets a live adapter
+  // covers it should lose the tie; it still wins for HK/CN, where nothing
+  // live is registered.
+  qualityRank: 2,
   supports(_market: Market) { return true; },
   async fetchNextEarnings(ticker: string) {
     const row = await getEarningsCalendarRow(ticker);
