@@ -26,22 +26,93 @@ function providerConfig() {
   return null;
 }
 
-async function modelAnswer(system: string, user: string, userId: string) {
+type TokenCallback = (delta: string) => void | Promise<void>;
+
+// Provider deltas often arrive sub-word (DeepSeek/OpenAI can emit hundreds of
+// tiny deltas for a page of Markdown). Forwarding every single one as its own
+// SSE frame/UI state update is what the client re-renders on — at that
+// frequency it re-parses the whole accumulated Markdown on every delta and
+// can peg the main thread badly enough to make the page briefly unresponsive
+// (found via a real E2E regression, not a hunch). Coalescing into ~24-char
+// chunks keeps the real first-token-latency win (still flushed as they fill,
+// not batched to the end) while keeping event/render frequency in the same
+// ballpark as the old fixed-size chunker this replaces.
+const STREAM_CHUNK_SIZE = 24;
+
+/**
+ * Reads an OpenAI-compatible `stream: true` chat/completions body (SSE frames,
+ * `data: {...}\n\n`, terminated by `data: [DONE]`), forwarding coalesced
+ * content chunks to `onToken` as they arrive and accumulating the full text —
+ * so the caller gets real token-by-token latency instead of waiting for the
+ * whole response before the first byte reaches the client.
+ */
+async function readStreamedCompletion(response: Response, onToken?: TokenCallback) {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("model stream has no body");
+  const decoder = new TextDecoder();
+  let buf = "";
+  let content = "";
+  let pending = "";
+  let usage: { prompt_tokens?: number; completion_tokens?: number } | undefined;
+  const flush = async () => {
+    if (!pending) return;
+    const chunk = pending;
+    pending = "";
+    await onToken?.(chunk);
+  };
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (!data || data === "[DONE]") continue;
+      let json: any;
+      try { json = JSON.parse(data); } catch { continue; }
+      const delta = String(json.choices?.[0]?.delta?.content || "");
+      if (delta) {
+        content += delta;
+        pending += delta;
+        if (pending.length >= STREAM_CHUNK_SIZE) await flush();
+      }
+      if (json.usage) usage = json.usage;
+    }
+  }
+  await flush();
+  return { content: content.trim(), usage };
+}
+
+async function modelAnswer(system: string, user: string, userId: string, onToken?: TokenCallback) {
   const provider = providerConfig();
   if (!provider) return null;
   const started = Date.now();
+  const streaming = Boolean(onToken);
   try {
     const response = await fetch(`${provider.base.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
       headers: { authorization: `Bearer ${provider.key}`, "content-type": "application/json" },
-      body: JSON.stringify({ model: provider.model, temperature: 0.2, messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
-      signal: AbortSignal.timeout(45_000)
+      body: JSON.stringify({
+        model: provider.model, temperature: 0.2, messages: [{ role: "system", content: system }, { role: "user", content: user }],
+        ...(streaming ? { stream: true, stream_options: { include_usage: true } } : {})
+      }),
+      signal: AbortSignal.timeout(60_000)
     });
     if (!response.ok) throw new Error(`model ${response.status}`);
-    const body: any = await response.json();
-    const content = String(body.choices?.[0]?.message?.content || "").trim();
+    let content: string;
+    let usage: { prompt_tokens?: number; completion_tokens?: number } | undefined;
+    if (streaming) {
+      ({ content, usage } = await readStreamedCompletion(response, onToken));
+    } else {
+      const body: any = await response.json();
+      content = String(body.choices?.[0]?.message?.content || "").trim();
+      usage = body.usage;
+    }
     await insertLlmAudit({ provider: provider.id, model: provider.model, kind: "chat", status: "ok", latencyMs: Date.now() - started,
-      inputTokens: body.usage?.prompt_tokens, outputTokens: body.usage?.completion_tokens, userId });
+      inputTokens: usage?.prompt_tokens, outputTokens: usage?.completion_tokens, userId });
     return content ? { content, provider: provider.id, model: provider.model } : null;
   } catch (error) {
     await insertLlmAudit({ provider: provider.id, model: provider.model, kind: "chat", status: "error", latencyMs: Date.now() - started,
@@ -218,7 +289,7 @@ async function applyFactGuard(content: string, company: any, marketSnapshot: any
   return { content: withNote, factGuard: { mode, ...summary } };
 }
 
-export async function runResearch(input: ResearchInput, userId: string) {
+export async function runResearch(input: ResearchInput, userId: string, onToken?: TokenCallback) {
   const company = await resolveInputCompany(input);
   if (!company) return {
     mode: "chat_local", provider: null, model: null, sessionId: null, content: "我还没识别出要研究的公司。请补充股票代码或完整公司名称。",
@@ -242,7 +313,8 @@ export async function runResearch(input: ResearchInput, userId: string) {
       "改用研究语言描述赔率与状态，例如“当前价位对应的赔率偏低/偏高”“性价比一般，等待更好的验证点或更低的安全边际”“逻辑需要重估”，只呈现判断依据，买卖时机与仓位决策留给用户自己判断。" +
       "输出中文 Markdown，包含核心判断、赚钱机制、财务质量、估值与赔率、风险证伪、下一步、来源。",
     `${facts}\n\n用户问题：${input.question}`,
-    userId
+    userId,
+    onToken
   );
   const panel = decisionPanel(company, profile, market);
   const id = input.sessionId || `s_${randomUUID()}`;
@@ -274,7 +346,7 @@ export async function runResearch(input: ResearchInput, userId: string) {
   };
 }
 
-export async function runAsk(input: ResearchInput, userId: string) {
+export async function runAsk(input: ResearchInput, userId: string, onToken?: TokenCallback) {
   if (!input.company?.ticker && (input.kind === "macro" || input.kind === "screener")) {
     if (input.kind === "screener") {
       const rows = await searchCompanies(input.question, { limit: 30 });
@@ -282,7 +354,7 @@ export async function runAsk(input: ResearchInput, userId: string) {
     }
     return { kind: "macro", content: "宏观研究需要可核验的当期数据。本轮没有绑定授权宏观数据源，因此不编造指数和结论。", mode: "local_fallback", indices: [], evidence: [], gaps: ["当期宏观数据"] };
   }
-  return runResearch(input, userId);
+  return runResearch(input, userId, onToken);
 }
 
 export async function runReport(input: ResearchInput, userId: string) {
