@@ -13,13 +13,17 @@ import {
   feedbackCreateRequestSchema,
   notificationsReadRequestSchema,
   parseDocumentRequestSchema,
+  portfolioReviewSchema,
   portfolioUpsertRequestSchema,
   preferencesUpdateRequestSchema,
   reportGenerateRequestSchema,
   statusResponseSchema,
+  stockDetailSchema,
+  watchDeskSchema,
   watchTrackRequestSchema,
   watchUntrackRequestSchema
 } from "@echo/contracts";
+import { getFilings, getNextEarnings } from "@echo/data-plane";
 
 import { searchCompanies } from "@echo/db/repositories/companyRepository.js";
 import { createInvite } from "@echo/db/repositories/authRepository.js";
@@ -30,15 +34,15 @@ import { clearResearchSessions, deleteResearchSession, getResearchSession, listC
 import { getCompanyProfile } from "@echo/db/repositories/companyProfilesRepository.js";
 import { deletePosition, listPositions, upsertPosition } from "@echo/db/repositories/portfolioRepository.js";
 import { listSnapshots as listPortfolioSnapshots } from "@echo/db/repositories/portfolioSnapshotsRepository.js";
-import { getCompanyByTickerComplete } from "@echo/db/repositories/companyRepository.js";
+import { getCompanyByTickerComplete, listRecentMarketSnapshots } from "@echo/db/repositories/companyRepository.js";
 import { ensureFreshMarketSnapshot } from "@echo/application/market-data";
 import { listRules } from "@echo/db/repositories/watchRulesRepository.js";
 import { evaluateRule } from "@echo/domain";
 import { computeGlobalScorecard, computeTickerScorecard } from "@echo/domain";
 import { listSnapshots as listResearchSnapshots, listSnapshotTickers } from "@echo/db/repositories/researchSnapshotsRepository.js";
-import { addToWatch, listWatchAdds, removeFromWatch } from "@echo/db/repositories/watchlistRepository.js";
+import { addToWatch, getHiddenTickers, listWatchAdds, removeFromWatch } from "@echo/db/repositories/watchlistRepository.js";
 import { listCompanyProfiles } from "@echo/db/repositories/companyProfilesRepository.js";
-import { runAsk } from "@echo/application/research";
+import { runAsk, runReport } from "@echo/application/research";
 import { parseDocument } from "./documents.js";
 import { executeResearchWorkflow } from "./temporal.js";
 import { buildStatusSnapshot } from "./status.js";
@@ -77,6 +81,27 @@ const idInput = z.object({ id: z.string().trim().min(1).max(160) });
 
 function tickerCurrency(ticker: string) {
   return ticker.endsWith(".HK") ? "HKD" : /\.(SS|SZ)$/.test(ticker) ? "CNY" : "USD";
+}
+
+/** Mirrors apps/web/src/lib/market.ts detectMarket() so cards carry a real market badge. */
+function detectMarket(ticker: string): "US" | "HK" | "CN" {
+  const t = String(ticker || "").trim().toUpperCase().replace(/\s+/g, "");
+  if (/\.US$/.test(t)) return "US";
+  if (/\.HK$/.test(t)) return "HK";
+  if (/\.(SS|SZ)$/.test(t)) return "CN";
+  if (/^\d{6}$/.test(t)) return "CN";
+  if (/^\d{1,5}$/.test(t)) return "HK";
+  if (/^[A-Z][A-Z.]{0,6}$/.test(t)) return "US";
+  return "HK";
+}
+
+async function nextEarningsFor(ticker: string): Promise<{ nextDate: string | null } | null> {
+  try {
+    const { result } = await getNextEarnings(ticker);
+    return result.providerStatus === "ok" ? { nextDate: (result as any).nextDate ?? null } : null;
+  } catch {
+    return null;
+  }
 }
 
 async function enrichPosition(position: any, userId: string) {
@@ -126,8 +151,16 @@ async function enrichedPositions(userId: string) {
   return Promise.all((await listPositions(userId)).map((position) => enrichPosition(position, userId)));
 }
 
+// Approximate cross-currency rates for portfolio-level weighting only — never
+// used for booked P&L or any NUMERIC-backed figure, just this display-only mix.
+const USD_RATE: Record<string, number> = { USD: 1, HKD: 1 / 7.8, CNY: 1 / 7.2 };
+
 function portfolioReview(positions: any[]) {
   const totals = new Map<string, { currency: string; marketValue: number; costValue: number; pnl: number }>();
+  let totalUsd = 0;
+  const usdByTicker: { ticker: string; name: string; usd: number }[] = [];
+  const usdByMarket = new Map<string, number>();
+  const usdBySector = new Map<string, number>();
   for (const position of positions) {
     if (position.marketValue == null) continue;
     const current = totals.get(position.currency) || { currency: position.currency, marketValue: 0, costValue: 0, pnl: 0 };
@@ -135,7 +168,25 @@ function portfolioReview(positions: any[]) {
     current.costValue += position.costValue || 0;
     current.pnl += position.unrealizedPnl || 0;
     totals.set(position.currency, current);
+
+    const usd = position.marketValue * (USD_RATE[position.currency] ?? 1);
+    totalUsd += usd;
+    usdByTicker.push({ ticker: position.ticker, name: position.companyName || position.ticker, usd });
+    const market = detectMarket(position.ticker);
+    usdByMarket.set(market, (usdByMarket.get(market) || 0) + usd);
+    const sector = position.sector || "未核到";
+    usdBySector.set(sector, (usdBySector.get(sector) || 0) + usd);
   }
+  const pct = (usd: number) => Math.round((usd / totalUsd) * 1000) / 10;
+  const weights = totalUsd > 0
+    ? usdByTicker.map(({ ticker, name, usd }) => ({ ticker, name, weightPct: pct(usd) })).sort((a, b) => b.weightPct - a.weightPct)
+    : [];
+  const marketExposure: Record<string, number> = {};
+  if (totalUsd > 0) for (const [market, usd] of usdByMarket) marketExposure[market] = pct(usd);
+  const sectorWeights = totalUsd > 0
+    ? [...usdBySector.entries()].map(([sector, usd]) => ({ sector, weightPct: pct(usd) })).sort((a, b) => b.weightPct - a.weightPct)
+    : [];
+
   const checks: any[] = [];
   for (const position of positions) {
     if (position.currentPrice != null && position.stopLoss != null && position.currentPrice <= position.stopLoss) {
@@ -147,38 +198,117 @@ function portfolioReview(positions: any[]) {
   return {
     positionCount: positions.length,
     totals: [...totals.values()],
-    weights: [],
-    marketExposure: {},
-    sectorWeights: [],
+    weights,
+    marketExposure,
+    sectorWeights,
     checks,
     verdict: positions.length ? (checks.length ? `有 ${checks.length} 项纪律检查需要处理。` : "组合纪律检查通过。") : "还没有持仓记录。"
   };
 }
 
 async function watchDesk(userId: string) {
-  const [watched, positions, profiles] = await Promise.all([listWatchAdds(userId), listPositions(userId), listCompanyProfiles(100, userId)]);
+  const [watched, positions, profiles, hidden] = await Promise.all([
+    listWatchAdds(userId), listPositions(userId), listCompanyProfiles(100, userId), getHiddenTickers(userId)
+  ]);
+  const heldTickers = new Set(positions.map((p) => p.ticker));
   const tickers = new Map<string, string>();
-  for (const item of [...watched, ...positions, ...profiles]) tickers.set(item.ticker, (item as any).companyName || (item as any).nameZh || item.ticker);
+  for (const item of [...watched, ...positions, ...profiles]) {
+    if (hidden.has(item.ticker)) continue;
+    tickers.set(item.ticker, (item as any).companyName || (item as any).nameZh || item.ticker);
+  }
   const failures: unknown[] = [];
   const cards = await Promise.all([...tickers].map(async ([ticker, name]) => {
+    const held = heldTickers.has(ticker);
     try {
-      const [market, profile, rules] = await Promise.all([ensureFreshMarketSnapshot(ticker), getCompanyProfile(ticker, userId), listRules(ticker, userId)]);
+      const [market, profile, rules, earnings] = await Promise.all([
+        ensureFreshMarketSnapshot(ticker), getCompanyProfile(ticker, userId), listRules(ticker, userId), nextEarningsFor(ticker)
+      ]);
       const price = market?.price ?? null;
-      const evaluations = price == null ? [] : rules.map((rule) => ({ rule, result: evaluateRule(rule, price) }));
-      const falsified = evaluations.some(({ result }) => result.triggered);
-      const atRisk = !falsified && evaluations.some(({ result }) => result.distancePct != null && Math.abs(result.distancePct) < 8);
-      return { ticker, companyName: name, price, changePct: market?.change_percent ?? null, asOf: market?.as_of || null,
-        thesis: profile?.thesis || "", confidence: profile?.confidence || "", state: falsified ? "falsified" : atRisk ? "atRisk" : "intact",
-        falsifiers: evaluations, updatedAt: profile?.updatedAt || market?.as_of || null };
+      const evaluations = price == null ? [] : rules.map((rule) => evaluateRule(rule, price));
+      const falsified = evaluations.some((result) => result.triggered);
+      const atRisk = !falsified && evaluations.some((result) => result.distancePct != null && Math.abs(result.distancePct) < 8);
+      const events = profile?.events || [];
+      const lastEvent = events.length ? events[events.length - 1] : null;
+      const position = held ? positions.find((p) => p.ticker === ticker) : null;
+      const returnPct = position?.avgCost && price != null ? (price - Number(position.avgCost)) / Number(position.avgCost) : null;
+      return {
+        ticker, companyName: name, market: detectMarket(ticker),
+        status: (falsified ? "falsified" : atRisk ? "at_risk" : "intact") as "falsified" | "at_risk" | "intact",
+        price, currency: tickerCurrency(ticker), changePct: market?.change_percent ?? null, priceStatus: (price == null ? "missing" : "ok") as "ok" | "missing",
+        held, returnPct, thesis: profile?.thesis || "", confidence: profile?.confidence || "",
+        asOf: market?.as_of || null, updatedAt: profile?.updatedAt || market?.as_of || null,
+        earnings, spark: null,
+        topEvent: lastEvent ? { title: lastEvent.summary, url: lastEvent.evidence?.[0]?.url ?? null } : null
+      };
     } catch (error) {
       failures.push({ ticker, message: error instanceof Error ? error.message : String(error) });
-      return { ticker, companyName: name, state: "intact", price: null };
+      return {
+        ticker, companyName: name, market: detectMarket(ticker), status: "intact" as const, price: null, currency: tickerCurrency(ticker),
+        changePct: null, priceStatus: "missing" as const, held, returnPct: null, thesis: "", confidence: "",
+        asOf: null, updatedAt: null, earnings: null, spark: null, topEvent: null
+      };
     }
   }));
-  const counts = { falsified: cards.filter((card) => card.state === "falsified").length, atRisk: cards.filter((card) => card.state === "atRisk").length,
-    intact: cards.filter((card) => card.state === "intact").length, total: cards.length };
+  const counts = { falsified: cards.filter((card) => card.status === "falsified").length, atRisk: cards.filter((card) => card.status === "at_risk").length,
+    intact: cards.filter((card) => card.status === "intact").length, total: cards.length };
   return { generatedAt: new Date().toISOString(), slot: (new Date().getUTCHours() < 8 ? "premarket" : "afterhours") as "premarket" | "afterhours",
     cards, counts, failures, partial: failures.length > 0 };
+}
+
+async function stockDetail(ticker: string, userId: string) {
+  const normalized = ticker.toUpperCase();
+  const [company, profile, market, rules, earnings, series, positions] = await Promise.all([
+    getCompanyByTickerComplete(normalized), getCompanyProfile(normalized, userId), ensureFreshMarketSnapshot(normalized),
+    listRules(normalized, userId), nextEarningsFor(normalized), listRecentMarketSnapshots(normalized, 252), listPositions(userId)
+  ]);
+  const price = market?.price ?? null;
+  const evaluated = price == null ? [] : rules.map((rule) => ({ rule, result: evaluateRule(rule, price) }));
+  const falsified = evaluated.some(({ result }) => result.triggered);
+  const atRisk = !falsified && evaluated.some(({ result }) => result.distancePct != null && Math.abs(result.distancePct) < 8);
+  const position = positions.find((p) => p.ticker === normalized) || null;
+  const returnPct = position?.avgCost && price != null ? (price - Number(position.avgCost)) / Number(position.avgCost) : null;
+
+  let events: any[] = [];
+  const market3 = detectMarket(normalized);
+  if (market3 === "HK" || market3 === "CN") {
+    try {
+      const { result } = await getFilings(normalized);
+      if (result.providerStatus === "ok") {
+        events = (result as any).filings.map((f: any) => ({ title: f.title, url: f.url, date: f.publishedAt, severity: "low" as const }));
+      }
+    } catch { /* filings adapter unavailable — events stays empty, not fabricated */ }
+  }
+
+  return {
+    ticker: normalized, companyName: company?.nameZh || company?.nameEn || profile?.companyName || normalized,
+    market: market3, status: (falsified ? "falsified" : atRisk ? "at_risk" : "intact") as "falsified" | "at_risk" | "intact",
+    statusReason: falsified ? (evaluated.find(({ result }) => result.triggered)?.rule.label ?? null) : null,
+    price, currency: company?.currency || tickerCurrency(normalized), changePct: market?.change_percent ?? null,
+    priceStatus: (price == null ? "missing" : "ok") as "ok" | "missing", held: Boolean(position), returnPct,
+    asOf: market?.as_of || null, earnings,
+    series: { providerStatus: (series.length >= 2 ? "ok" : "unavailable") as "ok" | "unavailable", points: series },
+    fundamentals: { status: "unavailable" as const, pe: null, revenueGrowth: null, grossMargin: null, freeCashFlow: null, currency: null },
+    events,
+    watchRules: evaluated.map(({ rule, result }) => ({ id: rule.id, label: rule.label, kind: rule.kind, threshold: rule.threshold, triggered: result.triggered, sane: result.sane, distancePct: result.distancePct })),
+    profile: profile ? { thesis: profile.thesis || null, researchStatus: profile.researchStatus || null, confidence: profile.confidence || null, turnCount: profile.turnCount ?? null, falsifiers: profile.falsifiers || [] } : null
+  };
+}
+
+/**
+ * Temporal is a hard local dependency for deep reports: no server running →
+ * connect() hangs/rejects → the mutation 500s with no explanation. Fall back
+ * to the same runReport() the workflow activity calls, and tag the result so
+ * the UI can say "degraded" instead of pretending it's the durable path.
+ */
+async function generateReport(input: unknown, userId: string) {
+  try {
+    const result: any = await executeResearchWorkflow({ request: input as Record<string, unknown>, userId });
+    return { ...result, engine: "temporal" as const };
+  } catch (error) {
+    console.error("[reports.generate] Temporal 不可达，降级为内联生成", error instanceof Error ? error.message : error);
+    const result = await runReport(input as any, userId);
+    return { ...result, engine: "inline-fallback" as const, engineNote: "Temporal 未连接，本次报告已降级为同步生成，不具备工作流可重放保障。" };
+  }
 }
 
 async function scorecardFor(ticker: string, userId: string) {
@@ -278,11 +408,22 @@ export const appRouter = t.router({
   }),
   preferences: t.router({
     get: protectedProcedure.query(async ({ ctx }) => ({ preferences: await getUserPreferences(ctx.user.id) })),
-    update: protectedProcedure.input(preferencesUpdateRequestSchema).mutation(async ({ ctx, input }) => ({ preferences: await updateUserPreferences(ctx.user.id, input) }))
+    update: protectedProcedure.input(preferencesUpdateRequestSchema).mutation(async ({ ctx, input }) => ({ preferences: await updateUserPreferences(ctx.user.id, input) })),
+    // Cheap DB-count-only progress check for the onboarding checklist — no market/LLM calls.
+    onboardingProgress: protectedProcedure
+      .output(z.object({ researched: z.boolean(), watched: z.boolean(), held: z.boolean() }))
+      .query(async ({ ctx }) => {
+        const [conversations, watched, positions] = await Promise.all([
+          listConversations({ limit: 1, userId: ctx.user.id }),
+          listWatchAdds(ctx.user.id),
+          listPositions(ctx.user.id)
+        ]);
+        return { researched: conversations.length > 0, watched: watched.length > 0, held: positions.length > 0 };
+      })
   }),
   portfolio: t.router({
     list: protectedProcedure.query(async ({ ctx }) => ({ positions: await enrichedPositions(ctx.user.id) })),
-    review: protectedProcedure.query(async ({ ctx }) => ({ review: portfolioReview(await enrichedPositions(ctx.user.id)) })),
+    review: protectedProcedure.output(z.object({ review: portfolioReviewSchema })).query(async ({ ctx }) => ({ review: portfolioReview(await enrichedPositions(ctx.user.id)) })),
     snapshots: protectedProcedure.query(async ({ ctx }) => ({ snapshots: await listPortfolioSnapshots(180, ctx.user.id) })),
     upsert: protectedProcedure.input(portfolioUpsertRequestSchema).mutation(async ({ ctx, input }) => {
       const number = (value: string | number | undefined) => value == null || value === "" ? undefined : Number(value);
@@ -295,11 +436,8 @@ export const appRouter = t.router({
     })
   }),
   watch: t.router({
-    desk: protectedProcedure.input(z.object({ events: z.boolean().default(true) })).query(async ({ ctx }) => ({ desk: await watchDesk(ctx.user.id) })),
-    stock: protectedProcedure.input(tickerInput).query(async ({ ctx, input }) => {
-      const [company, profile, market, rules] = await Promise.all([getCompanyByTickerComplete(input.ticker), getCompanyProfile(input.ticker, ctx.user.id), ensureFreshMarketSnapshot(input.ticker), listRules(input.ticker, ctx.user.id)]);
-      return { stock: { ticker: input.ticker, company, profile, market, rules } };
-    }),
+    desk: protectedProcedure.input(z.object({ events: z.boolean().default(true) })).output(z.object({ desk: watchDeskSchema })).query(async ({ ctx }) => ({ desk: await watchDesk(ctx.user.id) })),
+    stock: protectedProcedure.input(tickerInput).output(z.object({ stock: stockDetailSchema })).query(async ({ ctx, input }) => ({ stock: await stockDetail(input.ticker, ctx.user.id) })),
     track: protectedProcedure.input(watchTrackRequestSchema).mutation(async ({ ctx, input }) => {
       await addToWatch(input.ticker, input.name, ctx.user.id); return { tracked: true as const, ticker: input.ticker };
     }),
@@ -317,7 +455,7 @@ export const appRouter = t.router({
   }),
   ask: protectedProcedure.input(askRequestSchema).mutation(({ ctx, input }) => runAsk(input, ctx.user.id)),
   reports: t.router({
-    generate: protectedProcedure.input(reportGenerateRequestSchema).mutation(({ ctx, input }) => executeResearchWorkflow({ request: input, userId: ctx.user.id }))
+    generate: protectedProcedure.input(reportGenerateRequestSchema).mutation(({ ctx, input }) => generateReport(input, ctx.user.id))
   }),
   documents: t.router({
     parse: protectedProcedure.input(parseDocumentRequestSchema).mutation(async ({ ctx, input }) => ({ document: await parseDocument(input, ctx.user.id) }))

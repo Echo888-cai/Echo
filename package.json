@@ -10,6 +10,7 @@
   ],
   "scripts": {
     "dev": "concurrently -k -n api,web \"npm run dev --workspace @echo/api\" \"npm run dev --workspace @echo/web\"",
+    "temporal:dev": "temporal server start-dev",
     "worker": "npm run start --workspace @echo/worker",
     "test": "npm run build:native && npm test --workspace @echo/domain && npm test --workspace @echo/db && npm test --workspace @echo/api && npm test --workspace @echo/worker && npm test --workspace @echo/contracts && npm test --workspace @echo/finance-native && cargo test --workspace",
     "test:rust": "cargo test --workspace",

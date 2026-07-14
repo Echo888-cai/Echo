@@ -126,6 +126,21 @@ export async function getLatestMarketSnapshot(ticker: string) {
   };
 }
 
+/** Distinct daily closes for the price chart — one point per valid_time day, most recent last. */
+export async function listRecentMarketSnapshots(ticker: string, days = 252) {
+  const rows = await databaseRead().select().from(marketSnapshots)
+    .where(eq(marketSnapshots.ticker, normalizeTicker(ticker)))
+    .orderBy(desc(marketSnapshots.validTime), desc(marketSnapshots.id)).limit(days * 4);
+  const byDay = new Map<string, { date: string; close: number }>();
+  for (const row of rows) {
+    const price = numberOrNull(row.price);
+    if (price == null) continue;
+    const date = row.validTime.toISOString().slice(0, 10);
+    if (!byDay.has(date)) byDay.set(date, { date, close: price });
+  }
+  return [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date)).slice(-days);
+}
+
 export async function saveMarketSnapshot(data: any) {
   await database().insert(marketSnapshots).values({
     ticker: normalizeTicker(data.ticker),

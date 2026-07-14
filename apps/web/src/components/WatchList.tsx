@@ -274,7 +274,11 @@ export function WatchListBody({ desk, loaded, onRefetch }: { desk: WatchDesk | n
         if (!cards.some((c) => c.ticker === ticker)) {
           const market = detectMarket(ticker);
           setOptimisticCards([
-            { ticker, companyName: nameZh || ticker, market, status: "intact", priceStatus: "loading", held: false },
+            {
+              ticker, companyName: nameZh || ticker, market, status: "intact", priceStatus: "loading", held: false,
+              price: null, currency: null, changePct: null, returnPct: null, thesis: "", confidence: "",
+              asOf: null, updatedAt: null, earnings: null, spark: null, topEvent: null
+            },
             ...cards
           ]);
         }

@@ -1,6 +1,6 @@
 import type { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { apiOk } from "./http.js";
+import { apiError, apiOk } from "./http.js";
 import { runAsk } from "@echo/application/research";
 import { listResearchSessions } from "@echo/db/repositories/researchSessionsRepository.js";
 import { deleteCompanyProfile, listCompanyProfiles } from "@echo/db/repositories/companyProfilesRepository.js";
@@ -107,7 +107,12 @@ export function registerRestRoutes(app: Hono<any>, createCaller: CallerFactory) 
   });
   app.post("/api/hk-financials/ingest", async (c: any) => {
     const ticker = c.req.query("ticker") || "";
-    const result = await executeFilingWorkflow({ market: "HK", ticker, limit: Number(c.req.query("limit") || 4), force: c.req.query("force") === "1" });
-    return c.json(apiOk(result));
+    try {
+      const result = await executeFilingWorkflow({ market: "HK", ticker, limit: Number(c.req.query("limit") || 4), force: c.req.query("force") === "1" });
+      return c.json(apiOk(result));
+    } catch (error) {
+      console.error("[hk-financials/ingest] Temporal 不可达", error instanceof Error ? error.message : error);
+      return c.json(apiError(503, "Filing 工作流依赖 Temporal，当前本地未连接 Temporal server，请先启动（见 docs/architecture）后重试。"), 503);
+    }
   });
 }

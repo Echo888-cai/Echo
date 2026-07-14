@@ -6,16 +6,46 @@
  *   POST /api/watch/track   {ticker, name?}       → {tracked, ticker}
  *   POST /api/watch/untrack {ticker}              → {untracked, ticker}
  *
- * services/watchDesk.js builds `desk`/`stock` from live market data + portraits;
- * shapes below are best-effort (loose) rather than field-exact, per R-0 scope.
+ * Output shapes are field-exact: the frontend (WatchList.tsx, StockDetail.tsx)
+ * reads these fields directly and any field not listed here does not exist on
+ * the wire. Fields the pipeline can't populate yet are typed nullable/empty
+ * rather than omitted, so "未接入" is representable without lying about shape.
  */
 import { z } from "zod";
 import { okEnvelope } from "./envelope.js";
 
+const marketEnum = z.enum(["US", "HK", "CN"]);
+const cardStatusEnum = z.enum(["falsified", "at_risk", "intact"]);
+const priceStatusEnum = z.enum(["ok", "missing", "loading"]);
+
+const earningsSchema = z.object({ nextDate: z.string().nullable() }).nullable();
+const sparkSchema = z.object({ points: z.array(z.number()), changePct: z.number().nullable() }).nullable();
+const topEventSchema = z.object({ title: z.string(), url: z.string().nullable() }).nullable();
+
+export const watchCardSchema = z.object({
+  ticker: z.string(),
+  companyName: z.string(),
+  market: marketEnum,
+  status: cardStatusEnum,
+  price: z.number().nullable(),
+  currency: z.string().nullable(),
+  changePct: z.number().nullable(),
+  priceStatus: priceStatusEnum,
+  held: z.boolean(),
+  returnPct: z.number().nullable(),
+  thesis: z.string(),
+  confidence: z.string(),
+  asOf: z.string().nullable(),
+  updatedAt: z.string().nullable(),
+  earnings: earningsSchema,
+  spark: sparkSchema,
+  topEvent: topEventSchema
+});
+
 export const watchDeskSchema = z.object({
   generatedAt: z.string(),
   slot: z.enum(["premarket", "afterhours"]),
-  cards: z.array(z.record(z.string(), z.unknown())),
+  cards: z.array(watchCardSchema),
   counts: z.object({
     falsified: z.number(),
     atRisk: z.number(),
@@ -27,9 +57,69 @@ export const watchDeskSchema = z.object({
 });
 export const watchDeskResponseSchema = okEnvelope(z.object({ desk: watchDeskSchema }));
 
-export const watchStockResponseSchema = okEnvelope(
-  z.object({ stock: z.record(z.string(), z.unknown()) })
-);
+export const stockDetailFalsifierSchema = z.object({
+  id: z.number().nullable(),
+  label: z.string(),
+  kind: z.string(),
+  threshold: z.number().nullable(),
+  triggered: z.boolean(),
+  sane: z.boolean(),
+  distancePct: z.number().nullable()
+});
+
+export const stockDetailEventSchema = z.object({
+  title: z.string(),
+  url: z.string().nullable(),
+  date: z.string().nullable(),
+  severity: z.enum(["high", "medium", "low"]).default("low"),
+  relatedCount: z.number().optional()
+});
+
+export const stockDetailSeriesSchema = z.object({
+  providerStatus: z.enum(["ok", "unavailable"]),
+  points: z.array(z.object({ date: z.string(), close: z.number() }))
+});
+
+export const stockDetailFundamentalsSchema = z.object({
+  status: z.enum(["ok", "unavailable"]),
+  pe: z.number().nullable(),
+  revenueGrowth: z.number().nullable(),
+  grossMargin: z.number().nullable(),
+  freeCashFlow: z.number().nullable(),
+  currency: z.string().nullable()
+});
+
+export const stockDetailProfileSchema = z
+  .object({
+    thesis: z.string().nullable(),
+    researchStatus: z.string().nullable(),
+    confidence: z.string().nullable(),
+    turnCount: z.number().nullable(),
+    falsifiers: z.array(z.string())
+  })
+  .nullable();
+
+export const stockDetailSchema = z.object({
+  ticker: z.string(),
+  companyName: z.string(),
+  market: marketEnum,
+  status: cardStatusEnum,
+  statusReason: z.string().nullable(),
+  price: z.number().nullable(),
+  currency: z.string().nullable(),
+  changePct: z.number().nullable(),
+  priceStatus: priceStatusEnum,
+  held: z.boolean(),
+  returnPct: z.number().nullable(),
+  asOf: z.string().nullable(),
+  earnings: earningsSchema,
+  series: stockDetailSeriesSchema,
+  fundamentals: stockDetailFundamentalsSchema,
+  events: z.array(stockDetailEventSchema),
+  watchRules: z.array(stockDetailFalsifierSchema),
+  profile: stockDetailProfileSchema
+});
+export const watchStockResponseSchema = okEnvelope(z.object({ stock: stockDetailSchema }));
 
 export const watchTrackRequestSchema = z.object({ ticker: z.string(), name: z.string().optional() });
 export const watchTrackResponseSchema = okEnvelope(

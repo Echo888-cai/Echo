@@ -23,7 +23,10 @@ import {
   type conversationGroupSchema,
   type sessionSummarySchema,
   type researchSessionSchema,
-  type parsedDocumentSchema
+  type parsedDocumentSchema,
+  type watchCardSchema,
+  type watchDeskSchema,
+  type stockDetailSchema
 } from "@echo/contracts";
 import { z } from "zod";
 import { isTrpcError, isUnauthorizedTrpc, trpc } from "./trpc";
@@ -49,20 +52,9 @@ export type CompanyVerifyResult = z.infer<typeof companyVerifyResponseSchema>["d
 export type ResolvedCompany = z.infer<typeof resolvedCompanySchema>;
 export type CompanyProfile = z.infer<typeof companyProfileSchema>;
 export type TickerScorecard = z.infer<typeof tickerScorecardSchema>;
-// watch.js's routes/services build cards/stock from live market data + best-effort
-// portrait joins — the contract itself types them as z.record(string, unknown) (R-0
-// scope: loose, not field-exact), so the frontend treats them the same way rather
-// than pretending to a precision the contract doesn't have.
-export type WatchCard = Record<string, any>;
-export type WatchStock = Record<string, any>;
-export interface WatchDesk {
-  generatedAt: string;
-  slot: "premarket" | "afterhours";
-  cards: WatchCard[];
-  counts: { falsified: number; atRisk: number; intact: number; total: number };
-  failures: unknown[];
-  partial?: boolean;
-}
+export type WatchCard = z.infer<typeof watchCardSchema>;
+export type WatchStock = z.infer<typeof stockDetailSchema>;
+export type WatchDesk = z.infer<typeof watchDeskSchema>;
 export type ConversationGroup = z.infer<typeof conversationGroupSchema>;
 export type SessionSummary = z.infer<typeof sessionSummarySchema>;
 export type ResearchSession = z.infer<typeof researchSessionSchema>;
@@ -186,6 +178,9 @@ export const preferencesApi = {
   },
   async update(patch: PreferencesUpdateRequest) {
     return rpc(trpc.preferences.update.mutate(patch));
+  },
+  async onboardingProgress() {
+    return rpc(trpc.preferences.onboardingProgress.query());
   }
 };
 

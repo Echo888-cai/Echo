@@ -51,14 +51,24 @@ export const portfolioListResponseSchema = okEnvelope(
   z.object({ positions: z.array(portfolioPositionSchema) })
 );
 
-/** services/portfolioReview.js computePortfolioReview() — loosely typed, best-effort. */
+export const portfolioReviewTotalSchema = z.object({
+  currency: z.string(),
+  marketValue: z.number(),
+  costValue: z.number(),
+  pnl: z.number()
+});
+export const portfolioReviewWeightSchema = z.object({ ticker: z.string(), name: z.string(), weightPct: z.number() });
+export const portfolioReviewSectorWeightSchema = z.object({ sector: z.string(), weightPct: z.number() });
+export const portfolioReviewCheckSchema = z.object({ level: z.enum(["bad", "warn", "info"]), ticker: z.string(), text: z.string() });
+
+/** apps/api/src/app.ts portfolioReview() — field-exact; approximate USD cross-rates for display weighting only. */
 export const portfolioReviewSchema = z.object({
   positionCount: z.number(),
-  totals: z.array(z.unknown()),
-  weights: z.array(z.unknown()),
-  marketExposure: z.record(z.string(), z.unknown()),
-  sectorWeights: z.array(z.unknown()),
-  checks: z.array(z.unknown()),
+  totals: z.array(portfolioReviewTotalSchema),
+  weights: z.array(portfolioReviewWeightSchema),
+  marketExposure: z.record(z.string(), z.number()),
+  sectorWeights: z.array(portfolioReviewSectorWeightSchema),
+  checks: z.array(portfolioReviewCheckSchema),
   verdict: z.string()
 });
 export const portfolioReviewResponseSchema = okEnvelope(z.object({ review: portfolioReviewSchema }));

@@ -21,14 +21,19 @@ export function Onboarding() {
     queryKey: ["preferences"],
     queryFn: () => preferencesApi.get()
   });
+  const preferences = preferencesQuery.data?.preferences;
+  const progressQuery = useQuery({
+    queryKey: ["preferences", "onboardingProgress"],
+    queryFn: () => preferencesApi.onboardingProgress(),
+    enabled: preferencesQuery.isSuccess && !preferences?.onboardingCompleted
+  });
 
   if (!preferencesQuery.isSuccess) return null;
-  const preferences = preferencesQuery.data?.preferences;
   if (preferences?.onboardingCompleted) return null;
 
-  const researched = false;
-  const watched = false;
-  const held = false;
+  const researched = Boolean(progressQuery.data?.researched);
+  const watched = Boolean(progressQuery.data?.watched);
+  const held = Boolean(progressQuery.data?.held);
 
   async function completeOnboarding() {
     const data = await preferencesApi.update({ onboardingCompleted: true });

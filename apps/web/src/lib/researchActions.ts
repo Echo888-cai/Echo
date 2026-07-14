@@ -617,6 +617,7 @@ export async function generateDeepResearch() {
       if (result.portrait?.created) showToast(`已为 ${label} 建立长期画像，并加入看盘。`);
       else if (result.portrait?.changed) showToast(`已更新 ${label} 的长期画像（判断有变化）。`);
       if (result.portrait) void queryClient.invalidateQueries({ queryKey: ["company", "profile", result.portrait.ticker] });
+      if (result.engine === "inline-fallback") showToast(result.engineNote || "Temporal 未连接，本次报告已降级为同步生成。");
     } else {
       showToast(`${company.nameZh || company.ticker} 的深度研究完成了，点左侧查看。`);
     }

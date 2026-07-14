@@ -29,6 +29,27 @@ test("research → follow → portfolio → notification works through the final
   await page.getByRole("button", { name: "保存持仓" }).click();
   await expect(page.getByRole("heading", { name: "1 笔持仓" })).toBeVisible({ timeout: 10_000 });
 
+  // 删除闭环：移出关注/删除持仓 → 刷新 → 不复活（回归 watchDesk 复活 bug）。
+  await page.getByRole("link", { name: "看盘", exact: true }).click();
+  await expect(page).toHaveURL(/\/watch/);
+  await expect(page.locator(".wd-ticker", { hasText: "0700.HK" })).toBeVisible({ timeout: 10_000 });
+  await Promise.all([
+    page.waitForResponse((res) => res.url().includes("watch.untrack") && res.ok()),
+    page.getByRole("button", { name: /移出关注/ }).click()
+  ]);
+  await page.reload();
+  await expect(page.locator(".wd-ticker", { hasText: "0700.HK" })).not.toBeVisible({ timeout: 10_000 });
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("link", { name: "持仓", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "1 笔持仓" })).toBeVisible({ timeout: 10_000 });
+  await Promise.all([
+    page.waitForResponse((res) => res.url().includes("portfolio.remove") && res.ok()),
+    page.getByRole("button", { name: "删除持仓" }).click()
+  ]);
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "1 笔持仓" })).not.toBeVisible({ timeout: 10_000 });
+
   await page.getByRole("link", { name: "设置", exact: true }).click();
   await expect(page).toHaveURL(/\/settings/);
   await expect(page.getByRole("heading", { name: "离线与桌面安装" })).toBeVisible();

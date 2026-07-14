@@ -15,6 +15,7 @@
   "dependencies": {
     "@echo/application": "*",
     "@echo/contracts": "*",
+    "@echo/data-plane": "*",
     "@echo/domain": "*",
     "@echo/db": "*",
     "@echo/observability": "*",
