@@ -129,7 +129,7 @@ npm run db:recovery-drill
 - `runResearch` 改为经 `answerComposer` 组装多源事实块（行情、财务、filing、网页证据、画像、持仓上下文），意图分类驱动提示词；`reportComposer` 承接深度报告。
 - [x] `factGuard` 接回输出校验（shadow/soft 模式已实装）：`runResearch` 用行情快照+最新一期财报构造事实登记表（`packages/application/src/research.ts` 的 `applyFactGuard`），对模型正文跑 `verifyAnswerNumbers`，写入 `fact_guard_audit`（此前"空转开关"，`getFactGuardStats` 永远为空的根因）；`FACT_GUARD_MODE` 默认 `shadow`，`soft`/`full`（`full` 的拦截+定向重答暂未实现，行为等同 soft，诚实标注）会在正文追加低调提示。真实模型回测（0700.HK）验证过一次关键 bug：`nativeCurrency` 必须取财报报表币种而非行情报价币种，否则港股通/A+H 这类"报价币种≠报表币种"的公司会把每一条真实引用的财务数字错判成 hard（跨币种换算路径把它们全部拿去和唯一的 HKD 现价比较）；修正后同一份回答从 20/47 处误判 hard 降到 0 处 hard。仍待做：把 `valuation`/同业倍数接入登记表（目前只覆盖行情+最新一期财报，估值类数字仍多为 soft）；`full` 模式的拦截+定向重答闭环；settings 页面暂无变化，等真实流量积累后 `FactGuardCard` 会自动出数。
 - [ ] `factGuard` 覆盖率扩展：登记表接入估值区间、同业倍数、历史分位后再推进 shadow→soft→full 路径。
-- 估值链路：`valuation` + `historicalValuation` 产出估值区间与历史分位，行业估值路由（银行/保险/周期/消费/SaaS/生物科技选法）；估值计算走 Rust 定点内核（`finance-native` 接上真实调用方，兑现红线 4），或在明确的展示边界内标注近似口径。
+- [x] 估值链路起步：`runResearch` 接回 `valuation.js` 的 `displayValuation`，用行情快照 + 最新一期财报算出真实 bear/base/bull 区间喂给模型（写进提示词，禁止模型自行编造倍数），估值数字同时进 factGuard 登记表交叉核对。真实模型回测抓到并修了一个 bug：`computeValuation` 会拿 `company.pe/price/pb` 当兜底，而 `getCompanyByTickerComplete()` 返回的是"约 18x"这类展示格式化字符串（不是数字），落地时把这类字符串当分母算出 NaN——修成只传 `{ticker, currency, sector}` 这三个干净字段，让估值只信任 marketSnapshot/financialsData 里真正是数字的字段，缺数据时诚实返回 `cannotValueReason` 而不是吐 NaN。仍待做：`historicalValuation`（历史分位）、行业估值路由、同业倍数（这些依赖尚未接通的数据源，见 P1）；估值计算目前仍是 JS 浮点（展示边界内的近似口径，未接 `finance-native`）。
 - 财务质量红旗：`financialQuality`（盈余质量、现金流质量、应收/存货异常、资本化倾向）进公司画像与回答。
 - `AnswerCard` 的 evidence / valuation / grounding / confidence 字段由链路真实产出，研究卡片恢复设计时的信息密度。
 - 真流式：模型 provider 的 token 流直通 SSE，`waitPhase` 阶段提示与真实管线阶段对齐。

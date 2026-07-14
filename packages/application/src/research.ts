@@ -7,7 +7,7 @@ import { getHkFinancials } from "@echo/db/repositories/hkFinancialsRepository.js
 import { getCnFinancials } from "@echo/db/repositories/cnFinancialsRepository.js";
 import { insertLlmAudit } from "@echo/db/repositories/llmAuditRepository.js";
 import { insertFactGuardAudit } from "@echo/db/repositories/factGuardRepository.js";
-import { buildFactsRegistry, buildSoftNote, summarizeVerdict, verifyAnswerNumbers } from "@echo/domain";
+import { buildFactsRegistry, buildSoftNote, displayValuation, summarizeVerdict, verifyAnswerNumbers } from "@echo/domain";
 
 type ResearchInput = {
   question: string;
@@ -110,14 +110,6 @@ async function resolveInputCompany(input: ResearchInput) {
   return match ? getCompanyByTickerComplete(match.ticker) : null;
 }
 
-/**
- * R3 数字护栏 — checks the model's free-form answer against the same structured
- * facts it was fed (market snapshot + latest filing row), so a fabricated or
- * mis-transcribed number is caught rather than shipped silently. Modes:
- * off (skip entirely), shadow (audit only, never shown), soft/full (audit +
- * a low-key note appended to the answer). `full`'s "拦截+定向重答" path isn't
- * built yet — until it is, full behaves like soft rather than silently no-op'ing.
- */
 function pctOf(numerator: number | null | undefined, denominator: number | null | undefined) {
   if (numerator == null || !denominator) return null;
   return (numerator / denominator) * 100;
@@ -134,10 +126,72 @@ function isoDate(value: unknown): string | null {
   return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
 }
 
-async function applyFactGuard(content: string, company: any, market: any, financials: any[]) {
+/**
+ * Adapts our DB shapes (snake_case market snapshot, raw filing row) into the
+ * camelCase `marketSnapshot`/`financialsData` shape both `valuation.js` and
+ * `factGuard.js` expect, so the two modules see exactly the same numbers the
+ * model was fed — one source of truth, not two adapters that can drift apart.
+ * `sharesOutstanding` is derived (marketCap / price) since no filing field
+ * carries it; genuinely missing fields (bookValue, totalDebt) stay undefined
+ * rather than guessed, so downstream methods that need them honestly skip.
+ */
+function toDomainSources(company: any, market: any, row: any) {
+  const marketSnapshot = market ? {
+    providerStatus: "ok" as const, price: market.price, currency: company.currency, changePercent: market.change_percent,
+    pe: market.pe, dividendYield: market.dividend_yield, marketCap: market.market_cap,
+    sharesOutstanding: market.market_cap && market.price ? market.market_cap / market.price : null,
+    rawAsOf: market.as_of
+  } : { providerStatus: "missing" as const };
+  const financialsData = row ? {
+    providerStatus: "ok" as const, currency: row.currency || company.currency,
+    revenue: row.revenue, grossProfit: row.gross_profit, operatingIncome: row.operating_income,
+    netIncome: row.net_income, operatingCashFlow: row.operating_cash_flow, cashAndEquivalents: row.cash_and_equivalents,
+    netCash: row.net_cash, eps: row.eps, revenueGrowth: pctChange(row.revenue, row.revenue_prior),
+    grossMargin: pctOf(row.gross_profit, row.revenue), operatingMargin: pctOf(row.operating_income, row.revenue),
+    netMargin: pctOf(row.net_income, row.revenue), profitGrowth: pctChange(row.net_income, row.net_income_prior),
+    sharesOutstanding: market?.market_cap && market?.price ? market.market_cap / market.price : null,
+    period: isoDate(row.period_end) || isoDate(row.published_at)
+  } : { providerStatus: "missing" as const };
+  return { marketSnapshot, financialsData };
+}
+
+/**
+ * displayValuation degrades gracefully with partial data: no shares/bookValue/FCF
+ * on file means DCF/PB/FCF-yield methods are skipped, but PE-band (or, for
+ * loss-making stages, EV/Sales) still produces a real, self-consistent bear/
+ * base/bull — far better than letting the model invent its own multiple from
+ * nothing, which is what it did before this was wired in.
+ *
+ * `computeValuation` falls back to `company.price`/`company.pe`/`company.pb` when
+ * marketSnapshot lacks them — but `getCompanyByTickerComplete()`'s `company` is a
+ * display card with pre-formatted strings ("约 18x", "约 3.6 万亿 HKD"), not raw
+ * numbers. Passing it straight through made `pe` a truthy non-numeric string
+ * whenever Yahoo's feed had no trailing PE (it usually doesn't), which the
+ * fallback-PE branch then divided into, producing NaN bear/base/bull instead of
+ * an honest cannotValueReason. Only pass the identity fields valuation.js
+ * actually needs (ticker/currency/sector) — no numeric fallbacks it can't trust.
+ */
+function computeResearchValuation(company: any, marketSnapshot: any, financialsData: any): any {
+  try {
+    const safeCompany = { ticker: company.ticker, currency: company.currency, sector: company.sector };
+    return displayValuation(safeCompany, marketSnapshot, financialsData);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * R3 数字护栏 — checks the model's free-form answer against the same structured
+ * facts it was fed (market snapshot + latest filing row + our own valuation
+ * band), so a fabricated or mis-transcribed number is caught rather than
+ * shipped silently. Modes: off (skip entirely), shadow (audit only, never
+ * shown), soft/full (audit + a low-key note appended to the answer). `full`'s
+ * "拦截+定向重答" path isn't built yet — until it is, full behaves like soft
+ * rather than silently no-op'ing.
+ */
+async function applyFactGuard(content: string, company: any, marketSnapshot: any, financialsData: any, valuation: any) {
   const mode = (process.env.FACT_GUARD_MODE || "shadow").toLowerCase();
   if (mode === "off") return { content, factGuard: null };
-  const row = financials[0];
   // "Native currency" for amount-matching purposes is the filing's reporting currency
   // (most amount facts come from financials), not the trading/quote currency — for a
   // company like Tencent (HKD-quoted, RMB-reporting) those differ. Forcing the quote
@@ -146,24 +200,13 @@ async function applyFactGuard(content: string, company: any, market: any, financ
   // "数量级相差 xxx 倍" hard-fails on real, correctly-cited revenue/profit numbers.
   const registry: any = buildFactsRegistry({
     ticker: company.ticker,
-    nativeCurrency: row?.currency || company.currency,
-    marketSnapshot: market ? {
-      providerStatus: "ok", price: market.price, currency: company.currency, changePercent: market.change_percent,
-      pe: market.pe, dividendYield: market.dividend_yield, marketCap: market.market_cap
-    } : { providerStatus: "missing" },
-    financialsData: row ? {
-      providerStatus: "ok", currency: row.currency || company.currency,
-      revenue: row.revenue, grossProfit: row.gross_profit, operatingIncome: row.operating_income,
-      netIncome: row.net_income, operatingCashFlow: row.operating_cash_flow, cashAndEquivalents: row.cash_and_equivalents,
-      eps: row.eps, revenueGrowth: pctChange(row.revenue, row.revenue_prior), grossMargin: pctOf(row.gross_profit, row.revenue),
-      operatingMargin: pctOf(row.operating_income, row.revenue), netMargin: pctOf(row.net_income, row.revenue),
-      profitGrowth: pctChange(row.net_income, row.net_income_prior), period: isoDate(row.period_end) || isoDate(row.published_at)
-    } : { providerStatus: "missing" }
+    nativeCurrency: financialsData?.currency || company.currency,
+    marketSnapshot, financialsData, valuation
   });
   // buildFactsRegistry only registers the filing period as a date fact — the quote's
   // as-of date is a separate, equally citable fact (models often restate "现价日期"),
   // so append it directly rather than mislabeling it as a filing period.
-  const asOf = isoDate(market?.as_of);
+  const asOf = isoDate(marketSnapshot?.rawAsOf);
   if (asOf) {
     const [y, m, d] = asOf.split("-").map(Number);
     registry.dates.push({ iso: asOf, year: y, month: m, day: d, quarter: Math.ceil(m / 3), label: "行情快照时间", source: "marketSnapshot" });
@@ -187,15 +230,22 @@ export async function runResearch(input: ResearchInput, userId: string) {
     company.ticker.endsWith(".HK") ? getHkFinancials(company.ticker) : /\.(SS|SZ)$/.test(company.ticker) ? getCnFinancials(company.ticker) : Promise.resolve([])
   ]);
   const fallback = deterministicAnswer(company, profile, market, financials, input.question);
-  const facts = `公司：${company.nameZh}（${company.ticker}）\n现价：${market?.price ?? "未核到"}\n财务：${financialSummary(financials)}\n既有主线：${profile?.thesis || company.summary?.join("；") || "未沉淀"}`;
+  const { marketSnapshot, financialsData } = toDomainSources(company, market, financials[0]);
+  const valuation = computeResearchValuation(company, marketSnapshot, financialsData);
+  const valuationFacts = valuation && !valuation.cannotValueReason
+    ? `\n估值（${valuation.method}）：看空 ${valuation.bear} / 中性 ${valuation.base} / 看多 ${valuation.bull} ${company.currency}（依据：${(valuation.keyAssumptions || []).join("；")}）`
+    : `\n估值：本轮数据不足以给出自洽估值区间（${valuation?.cannotValueReason || "缺少定价所需的关键字段"}）`;
+  const facts = `公司：${company.nameZh}（${company.ticker}）\n现价：${market?.price ?? "未核到"}\n财务：${financialSummary(financials)}${valuationFacts}\n既有主线：${profile?.thesis || company.summary?.join("；") || "未沉淀"}`;
   const generated = await modelAnswer(
-    "你是审慎的买方研究员。只使用给出的事实，不编数字；取不到就写未核到；不给买卖指令。输出中文 Markdown，包含核心判断、赚钱机制、财务质量、估值与赔率、风险证伪、下一步、来源。",
+    "你是审慎的买方研究员。只使用给出的事实，不编数字；取不到就写未核到；不给买卖指令。估值区间必须使用给定的估值数据，不得自行编造倍数或目标价。输出中文 Markdown，包含核心判断、赚钱机制、财务质量、估值与赔率、风险证伪、下一步、来源。",
     `${facts}\n\n用户问题：${input.question}`,
     userId
   );
   const panel = decisionPanel(company, profile, market);
   const id = input.sessionId || `s_${randomUUID()}`;
-  const guarded = generated ? await applyFactGuard(generated.content, company, market, financials) : { content: fallback, factGuard: null };
+  const guarded = generated
+    ? await applyFactGuard(generated.content, company, marketSnapshot, financialsData, valuation)
+    : { content: fallback, factGuard: null };
   const content = guarded.content;
   await saveResearchSession({ id, ticker: company.ticker, companyName: company.nameZh, title: input.question, question: input.question,
     conversationId: input.conversationId || id, status: "completed", decisionPanel: panel, fullResearch: content,
@@ -216,7 +266,7 @@ export async function runResearch(input: ResearchInput, userId: string) {
     marketSnapshot: market,
     newsSnapshot: null,
     factGuard: guarded.factGuard,
-    valuation: savedProfile?.valuation || null,
+    valuation,
     portrait: { ticker: company.ticker, created: !profile, changed: !profile || profile.thesis !== panel.oneLineView, turnCount: savedProfile?.turnCount || 0 }
   };
 }
