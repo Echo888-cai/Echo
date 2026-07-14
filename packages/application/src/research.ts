@@ -237,7 +237,10 @@ export async function runResearch(input: ResearchInput, userId: string) {
     : `\n估值：本轮数据不足以给出自洽估值区间（${valuation?.cannotValueReason || "缺少定价所需的关键字段"}）`;
   const facts = `公司：${company.nameZh}（${company.ticker}）\n现价：${market?.price ?? "未核到"}\n财务：${financialSummary(financials)}${valuationFacts}\n既有主线：${profile?.thesis || company.summary?.join("；") || "未沉淀"}`;
   const generated = await modelAnswer(
-    "你是审慎的买方研究员。只使用给出的事实，不编数字；取不到就写未核到；不给买卖指令。估值区间必须使用给定的估值数据，不得自行编造倍数或目标价。输出中文 Markdown，包含核心判断、赚钱机制、财务质量、估值与赔率、风险证伪、下一步、来源。",
+    "你是审慎的买方研究员。只使用给出的事实，不编数字；取不到就写未核到。估值区间必须使用给定的估值数据，不得自行编造倍数或目标价。" +
+      "红线：只给判断，不给指令——禁止任何形式的买入/卖出/持有/加仓/减仓/追高/抄底建议，包括正向表述（“建议买入”）和反向劝阻（“不建议追高”“不建议此时买入”），这类劝阻性措辞本质上仍是买卖指令，同样禁止。" +
+      "改用研究语言描述赔率与状态，例如“当前价位对应的赔率偏低/偏高”“性价比一般，等待更好的验证点或更低的安全边际”“逻辑需要重估”，只呈现判断依据，买卖时机与仓位决策留给用户自己判断。" +
+      "输出中文 Markdown，包含核心判断、赚钱机制、财务质量、估值与赔率、风险证伪、下一步、来源。",
     `${facts}\n\n用户问题：${input.question}`,
     userId
   );

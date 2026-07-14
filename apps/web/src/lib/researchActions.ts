@@ -268,7 +268,7 @@ function answerMetaFromResult(result: any) {
     confidence: result.decisionPanel?.confidence || null,
     confidenceNote: result.decisionPanel?.confidenceNote || null,
     valuation: result.valuation || null,
-    valuationNote: result.valuationNote || null,
+    valuationNote: result.valuationNote || result.valuation?.cannotValueReason || null,
     valuationName: result.valuationName || null,
     analyst: result.analyst || null,
     comparison: result.comparison || null,

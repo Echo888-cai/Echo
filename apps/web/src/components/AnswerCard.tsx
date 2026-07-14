@@ -776,7 +776,9 @@ export function AnswerCard({ message }: { message: Message }) {
           <div dangerouslySetInnerHTML={{ __html: renderRichAnswer(message.content) }} />
         )}
         <Valuation valuation={meta.valuation} name={meta.otherHoldings && meta.otherHoldings.length ? meta.valuationName : null} />
-        {meta.valuation ? null : <ValuationNote note={meta.valuationNote} />}
+        {meta.valuation && !meta.valuation.cannotValueReason ? null : (
+          <ValuationNote note={meta.valuationNote || meta.valuation?.cannotValueReason || null} />
+        )}
         <CompAnchor compPeers={meta.valuation?.compPeers} />
         <AnalystConsensus analyst={meta.analyst} />
         <EvidenceBlock evidence={meta.evidence} />
