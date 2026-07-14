@@ -6,7 +6,9 @@ import { getProviderCallStats, getUserDailyUsage } from "@echo/db/repositories/l
 const sourceLabels: Record<string, string> = {
   market: "港美股行情", financials: "财务数据", news: "新闻舆情", filings: "公告数据",
   web_evidence: "网页证据层", hk_filing: "港股一手 filing", valuation: "估值链路",
-  earnings: "财报日历", comp_peers: "同业可比"
+  earnings: "财报日历", comp_peers: "同业可比",
+  "market:yahoo-chart": "行情 · Yahoo", "market:finnhub": "行情 · Finnhub",
+  "market:twelvedata": "行情 · Twelve Data", "market:alphavantage": "行情 · Alpha Vantage"
 };
 
 function positiveNumber(name: string, fallback: number) {
@@ -55,9 +57,18 @@ export async function buildStatusSnapshot(userId = "local") {
     configured: Boolean(process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.MODEL_API_KEY),
     providers: ["deepseek", "openai", "anthropic", "generic"].filter((id) => Boolean(process.env[`${id.toUpperCase()}_API_KEY`]))
   };
+  // Market status comes from real canary probes (packages/data-plane/src/canary.ts
+  // calling each live quote adapter's fetchQuote against a real ticker), not a
+  // decorative env-key check — "configured but the probe fails" must be visible,
+  // not silently reported as "ok" (docs/PLAN.md P1 "canary 真探测").
+  const marketCanary = canaryHealth.filter((row) => String(row.source).startsWith("market:"));
+  const marketStatus = marketCanary.some((row) => row.latestStatus === "ok") ? "ok" as const : "limited" as const;
+  const marketDetail = marketCanary.length
+    ? `${marketCanary.filter((row) => row.latestStatus === "ok").length}/${marketCanary.length} 行情源探测成功`
+    : "尚未跑过 canary 探测（npm run canary）";
   return {
     sources: [
-      { id: "market", name: "港美股行情", status: "ok" as const, detail: process.env.MASSIVE_API_KEY ? "美股 Massive；港股授权行情" : "受授权路由约束的研究行情" },
+      { id: "market", name: "港美股行情", status: marketStatus, detail: marketDetail },
       { id: "financials", name: "财务数据", status: hasFmp ? "ok" as const : "limited" as const, detail: hasFmp ? "FMP 已配置；一手 filing 交叉验证" : "一手 filing 为主，标准化三表覆盖有限" },
       { id: "news", name: "新闻舆情", status: hasNews ? "ok" as const : "limited" as const, detail: hasNews ? "新闻供应商已配置" : "公开新闻源有限" },
       { id: "web_evidence", name: "网页证据层", status: hasWebSearch ? "ok" as const : "limited" as const, detail: hasWebSearch ? "可信搜索证据已配置" : "公开证据检索有限" },

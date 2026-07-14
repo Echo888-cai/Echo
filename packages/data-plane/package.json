@@ -12,9 +12,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
-    "verify": "tsx src/verify.ts"
+    "verify": "tsx src/verify.ts",
+    "canary": "tsx src/canary.ts"
   },
-  "dependencies": { "@echo/db": "*" },
+  "dependencies": { "@echo/db": "*", "@echo/observability": "*" },
   "devDependencies": {
     "typescript": "^6.0.3",
     "tsx": "^4.19.2"

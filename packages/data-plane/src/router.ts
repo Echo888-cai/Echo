@@ -63,3 +63,21 @@ export function selectAdapter<T extends RoutableAdapter>(candidates: T[], market
   for (const r of rest) excluded.push({ id: r.id, reason: "lower-ranked than selected adapter" });
   return { adapter, excluded };
 }
+
+/**
+ * Same authorization + quality-rank filtering as selectAdapter, but returns
+ * the whole eligible chain in rank order instead of just the top pick — used
+ * where a caller needs to fail over to the next adapter when the top choice
+ * errors out or returns no data, rather than surfacing that as a hard failure.
+ */
+export function selectAdapterChain<T extends RoutableAdapter>(candidates: T[], market: Market, opts: SelectOptions = {}): T[] {
+  const commercialMode = opts.commercialMode ?? false;
+  return candidates
+    .filter((c) => c.supports(market) && isUsableInMode(c.authorization, commercialMode))
+    .sort((a, b) => {
+      if (a.qualityRank !== b.qualityRank) return a.qualityRank - b.qualityRank;
+      const aLat = a.authorization.slaLatencyMsP95 ?? Infinity;
+      const bLat = b.authorization.slaLatencyMsP95 ?? Infinity;
+      return aLat - bLat;
+    });
+}

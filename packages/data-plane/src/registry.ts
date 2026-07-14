@@ -7,11 +7,15 @@
  */
 import { postgresQuoteAdapter } from "./adapters/postgresQuoteAdapter.js";
 import { yahooQuoteAdapter } from "./adapters/yahooQuoteAdapter.js";
+import { finnhubQuoteAdapter } from "./adapters/finnhubQuoteAdapter.js";
+import { twelveDataQuoteAdapter } from "./adapters/twelveDataQuoteAdapter.js";
+import { alphaVantageQuoteAdapter } from "./adapters/alphaVantageQuoteAdapter.js";
 import { postgresFundamentalsAdapter } from "./adapters/postgresFundamentalsAdapter.js";
 import { postgresFilingsAdapter } from "./adapters/postgresFilingsAdapter.js";
 import { postgresCalendarAdapter } from "./adapters/postgresCalendarAdapter.js";
 import { detectMarket, type Market } from "./market.js";
-import { selectAdapter, type SelectOptions } from "./router.js";
+import { selectAdapter, selectAdapterChain, type SelectOptions } from "./router.js";
+import { isBreakerOpen, recordFailure, recordSuccess } from "./circuitBreaker.js";
 import { checkQuote, checkEnvelope, type QualityReport } from "./qualityGuard.js";
 import type { QuotePort, QuoteResult, FundamentalsPort, FilingsPort, CalendarPort, ProviderEnvelope } from "./ports.js";
 
@@ -21,7 +25,15 @@ import type { QuotePort, QuoteResult, FundamentalsPort, FilingsPort, CalendarPor
 const quoteAdapters: QuotePort[] = [postgresQuoteAdapter];
 // 真实外部行情源，供快照刷新链路使用；与读缓存的 postgresQuoteAdapter 分开注册，
 // 避免"读缓存→写缓存"的循环。新的付费源（Polygon/Wind 等）注册到这里。
-const liveQuoteAdapters: QuotePort[] = [yahooQuoteAdapter];
+// Only registered here if their API key is actually set — an adapter with no
+// key would just throw on every call, which is indistinguishable from "this
+// provider is down" and would trip its circuit breaker for no reason.
+const liveQuoteAdapters: QuotePort[] = [
+  ...(process.env.FINNHUB_API_KEY ? [finnhubQuoteAdapter] : []),
+  ...(process.env.TWELVEDATA_API_KEY ? [twelveDataQuoteAdapter] : []),
+  yahooQuoteAdapter,
+  ...(process.env.ALPHAVANTAGE_API_KEY ? [alphaVantageQuoteAdapter] : [])
+];
 const fundamentalsAdapters: FundamentalsPort[] = [postgresFundamentalsAdapter];
 const filingsAdapters: FilingsPort[] = [postgresFilingsAdapter];
 const calendarAdapters: CalendarPort[] = [postgresCalendarAdapter];
@@ -47,13 +59,29 @@ export async function getQuote(ticker: string, opts: SelectOptions = {}): Promis
   return { result, adapterId: selection.adapter.id, quality: checkQuote(result) };
 }
 
-/** 直连外部行情源取实时报价（跳过 Postgres 缓存适配器），由快照刷新链路调用。 */
+/**
+ * 直连外部行情源取实时报价（跳过 Postgres 缓存适配器），由快照刷新链路调用。
+ * 按 qualityRank 顺序逐个尝试，任何一个适配器超时/报错/连续熔断都自动降级到
+ * 链上下一个候选，而不是把单一供应商的故障直接暴露为整条链路失败（docs/PLAN.md
+ * P1"逐级降级到 Yahoo"）。全部候选耗尽才抛出最后一次的错误。
+ */
 export async function fetchLiveQuote(ticker: string, opts: SelectOptions = {}): Promise<Routed<QuoteResult>> {
   const market = detectMarket(ticker);
-  const selection = selectAdapter(liveQuoteAdapters, market, opts);
-  if (!selection) throw new NoAuthorizedAdapterError("live-quote", market);
-  const result = await selection.adapter.fetchQuote(ticker);
-  return { result, adapterId: selection.adapter.id, quality: checkQuote(result) };
+  const chain = selectAdapterChain(liveQuoteAdapters, market, opts);
+  if (!chain.length) throw new NoAuthorizedAdapterError("live-quote", market);
+  let lastError: unknown = null;
+  for (const adapter of chain) {
+    if (isBreakerOpen(adapter.id)) continue;
+    try {
+      const result = await adapter.fetchQuote(ticker);
+      recordSuccess(adapter.id);
+      return { result, adapterId: adapter.id, quality: checkQuote(result) };
+    } catch (err) {
+      recordFailure(adapter.id);
+      lastError = err;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(`all live quote adapters failed or breaker-open for ${ticker}`);
 }
 
 export async function getFundamentals(ticker: string, opts: SelectOptions = {}): Promise<Routed<ProviderEnvelope>> {
@@ -78,4 +106,9 @@ export async function getNextEarnings(ticker: string, opts: SelectOptions = {}):
   if (!selection) throw new NoAuthorizedAdapterError("calendar", market);
   const result = await selection.adapter.fetchNextEarnings(ticker);
   return { result, adapterId: selection.adapter.id, quality: checkEnvelope(result) };
+}
+
+/** Read-only view of the registered live quote adapters, for the canary probe script. */
+export function listLiveQuoteAdapters(): QuotePort[] {
+  return liveQuoteAdapters;
 }

@@ -30,7 +30,11 @@ export const yahooQuoteAdapter: QuotePort = {
     costPerCallUsd: 0,
     notes: "Yahoo Finance public chart API; research/dev only. Never eligible in commercial mode."
   },
-  qualityRank: 1,
+  // Ranked below the US-only keyed adapters (finnhub=1, twelvedata=2) since
+  // those are official exchange-sourced feeds when they're eligible; Yahoo's
+  // public chart endpoint remains the only source with HK/CN coverage, so it's
+  // still what actually gets selected for those markets regardless of rank.
+  qualityRank: 3,
   supports(_market: Market) { return true; },
   async fetchQuote(rawTicker: string): Promise<QuoteResult> {
     const ticker = normalizeTicker(rawTicker);
