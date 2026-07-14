@@ -11,6 +11,7 @@ import { finnhubQuoteAdapter } from "./adapters/finnhubQuoteAdapter.js";
 import { twelveDataQuoteAdapter } from "./adapters/twelveDataQuoteAdapter.js";
 import { alphaVantageQuoteAdapter } from "./adapters/alphaVantageQuoteAdapter.js";
 import { postgresFundamentalsAdapter } from "./adapters/postgresFundamentalsAdapter.js";
+import { fmpFundamentalsAdapter } from "./adapters/fmpFundamentalsAdapter.js";
 import { postgresFilingsAdapter } from "./adapters/postgresFilingsAdapter.js";
 import { postgresCalendarAdapter } from "./adapters/postgresCalendarAdapter.js";
 import { detectMarket, type Market } from "./market.js";
@@ -34,7 +35,10 @@ const liveQuoteAdapters: QuotePort[] = [
   yahooQuoteAdapter,
   ...(process.env.ALPHAVANTAGE_API_KEY ? [alphaVantageQuoteAdapter] : [])
 ];
-const fundamentalsAdapters: FundamentalsPort[] = [postgresFundamentalsAdapter];
+const fundamentalsAdapters: FundamentalsPort[] = [
+  postgresFundamentalsAdapter,
+  ...(process.env.FMP_API_KEY ? [fmpFundamentalsAdapter] : [])
+];
 const filingsAdapters: FilingsPort[] = [postgresFilingsAdapter];
 const calendarAdapters: CalendarPort[] = [postgresCalendarAdapter];
 

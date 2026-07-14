@@ -5,6 +5,7 @@ import { getCompanyProfile, upsertCompanyProfile } from "@echo/db/repositories/c
 import { saveResearchSession } from "@echo/db/repositories/researchSessionsRepository.js";
 import { getHkFinancials } from "@echo/db/repositories/hkFinancialsRepository.js";
 import { getCnFinancials } from "@echo/db/repositories/cnFinancialsRepository.js";
+import { getFundamentals } from "@echo/data-plane";
 import { insertLlmAudit } from "@echo/db/repositories/llmAuditRepository.js";
 import { insertFactGuardAudit } from "@echo/db/repositories/factGuardRepository.js";
 import { buildFactsRegistry, buildSoftNote, displayValuation, summarizeVerdict, verifyAnswerNumbers } from "@echo/domain";
@@ -125,6 +126,21 @@ async function modelAnswer(system: string, user: string, userId: string, onToken
   }
 }
 
+/**
+ * 美股财务三表此前恒为空数组（docs/PLAN.md P1 诊断#6）——港/A 有 filing 管道，
+ * 美股完全没有对应来源。`getFundamentals` 接的是 FMP（US-only，见
+ * fmpFundamentalsAdapter 里对免费档 HK/CN 覆盖边界的真实探测），未配置
+ * FMP_API_KEY 或调用失败都返回 []，而不是让 runResearch 因单个数据源故障整体失败。
+ */
+async function getUsFinancials(ticker: string): Promise<any[]> {
+  try {
+    const { result } = await getFundamentals(ticker);
+    return Array.isArray((result as any).rows) ? (result as any).rows : [];
+  } catch {
+    return [];
+  }
+}
+
 function financialSummary(rows: any[]) {
   const row = rows[0];
   if (!row) return "最新完整三表当前未核到，以下判断降低置信度。";
@@ -213,7 +229,11 @@ function isoDate(value: unknown): string | null {
 function toDomainSources(company: any, market: any, row: any) {
   const marketSnapshot = market ? {
     providerStatus: "ok" as const, price: market.price, currency: company.currency, changePercent: market.change_percent,
-    pe: market.pe, dividendYield: market.dividend_yield, marketCap: market.market_cap,
+    // row?.pe_ttm (FMP, US-only — see fmpFundamentalsAdapter.ts) takes priority
+    // over market.pe: quote adapters never populate a trailing PE themselves,
+    // and without one here valuation.js falls back to price/quarterlyEps,
+    // which is wrong for any company with seasonal earnings.
+    pe: row?.pe_ttm ?? market.pe, dividendYield: market.dividend_yield, marketCap: market.market_cap,
     sharesOutstanding: market.market_cap && market.price ? market.market_cap / market.price : null,
     rawAsOf: market.as_of
   } : { providerStatus: "missing" as const };
@@ -304,7 +324,7 @@ export async function runResearch(input: ResearchInput, userId: string, onToken?
   const [profile, market, financials] = await Promise.all([
     getCompanyProfile(company.ticker, userId),
     ensureFreshMarketSnapshot(company.ticker),
-    company.ticker.endsWith(".HK") ? getHkFinancials(company.ticker) : /\.(SS|SZ)$/.test(company.ticker) ? getCnFinancials(company.ticker) : Promise.resolve([])
+    company.ticker.endsWith(".HK") ? getHkFinancials(company.ticker) : /\.(SS|SZ)$/.test(company.ticker) ? getCnFinancials(company.ticker) : getUsFinancials(company.ticker)
   ]);
   const fallback = deterministicAnswer(company, profile, market, financials, input.question);
   const { marketSnapshot, financialsData } = toDomainSources(company, market, financials[0]);
