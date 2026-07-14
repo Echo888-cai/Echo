@@ -15,6 +15,7 @@ import { fmpFundamentalsAdapter } from "./adapters/fmpFundamentalsAdapter.js";
 import { postgresFilingsAdapter } from "./adapters/postgresFilingsAdapter.js";
 import { postgresCalendarAdapter } from "./adapters/postgresCalendarAdapter.js";
 import { finnhubCalendarAdapter } from "./adapters/finnhubCalendarAdapter.js";
+import { hkAdrCalendarAdapter } from "./adapters/hkAdrCalendarAdapter.js";
 import { detectMarket, type Market } from "./market.js";
 import { selectAdapter, selectAdapterChain, type SelectOptions } from "./router.js";
 import { isBreakerOpen, recordFailure, recordSuccess } from "./circuitBreaker.js";
@@ -42,7 +43,7 @@ const fundamentalsAdapters: FundamentalsPort[] = [
 ];
 const filingsAdapters: FilingsPort[] = [postgresFilingsAdapter];
 const calendarAdapters: CalendarPort[] = [
-  ...(process.env.FINNHUB_API_KEY ? [finnhubCalendarAdapter] : []),
+  ...(process.env.FINNHUB_API_KEY ? [finnhubCalendarAdapter, hkAdrCalendarAdapter] : []),
   postgresCalendarAdapter
 ];
 
@@ -108,12 +109,29 @@ export async function getFilings(ticker: string, opts: SelectOptions = {}): Prom
   return { result, adapterId: selection.adapter.id, quality: checkEnvelope(result) };
 }
 
+/**
+ * Calendar uses a fallback chain rather than selectAdapter's single top pick:
+ * hkAdrCalendarAdapter declares market-level ("HK") coverage but only
+ * actually resolves tickers in its hand-curated ADR map — every other HK
+ * ticker legitimately comes back "missing" from it, and that must fall
+ * through to postgresCalendarAdapter's cache rather than dead-ending.
+ */
 export async function getNextEarnings(ticker: string, opts: SelectOptions = {}): Promise<Routed<ProviderEnvelope>> {
   const market = detectMarket(ticker);
-  const selection = selectAdapter(calendarAdapters, market, opts);
-  if (!selection) throw new NoAuthorizedAdapterError("calendar", market);
-  const result = await selection.adapter.fetchNextEarnings(ticker);
-  return { result, adapterId: selection.adapter.id, quality: checkEnvelope(result) };
+  const chain = selectAdapterChain(calendarAdapters, market, opts);
+  if (!chain.length) throw new NoAuthorizedAdapterError("calendar", market);
+  let last: Routed<ProviderEnvelope> | null = null;
+  for (const adapter of chain) {
+    try {
+      const result = await adapter.fetchNextEarnings(ticker);
+      last = { result, adapterId: adapter.id, quality: checkEnvelope(result) };
+      if (result.providerStatus === "ok") return last;
+    } catch {
+      // try the next adapter in the chain
+    }
+  }
+  if (last) return last;
+  throw new Error(`all calendar adapters failed for ${ticker}`);
 }
 
 /** Read-only view of the registered live quote adapters, for the canary probe script. */

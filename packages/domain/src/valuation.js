@@ -81,7 +81,11 @@ export function displayValuation(company, marketSnapshot, financialsData, estima
   // for growth names where FCF-yield is incoherent and analyst targets aren't trustworthy.
   const p = numOrNull(marketSnapshot?.price ?? company?.price);
   let pe = marketSnapshot?.pe ?? company?.pe;
-  if (!pe && financialsData?.eps && p) pe = p / financialsData.eps;
+  // financialsData.epsAnnualized === false means eps is a raw period-cumulative
+  // filing figure (HK/CN interim report), not TTM — dividing price by it would
+  // reproduce the same inflated-PE bug already fixed for US (see toDomainSources
+  // in research.ts). Only derive a PE here when eps is a genuine annual figure.
+  if (!pe && financialsData?.eps && p && financialsData?.epsAnnualized !== false) pe = p / financialsData.eps;
   // pe 必须 > 0：亏损股的负 PE 不能拿来硬凑一条以现价为中心的带子（那是误导）。
   if (p && pe && pe > 0) {
     return withExtras({
@@ -317,7 +321,11 @@ export function computeValuation(company, marketSnapshot, financialsData, compPe
   // pe 和 eps 都必须 > 0：亏损股（负 EPS）碰上负 PE 会"负负得正"拼出一条看似正常、实则
   // 毫无意义的正价格带（真实抓到：9868.HK 无 revenue 数据时 EV/Sales 情景提前退出，落到
   // 这里用 eps=-38.71 × pe=-78.52 拼出 2000+ 的假估值带）。两者任一 ≤0 就跳过这个方法。
-  if (pe > 0 && hasFinancialsData?.eps > 0) {
+  // eps must be a real annual/TTM figure — hasFinancialsData.epsAnnualized === false
+  // means it's a raw period-cumulative filing eps (HK/CN interim report), and
+  // multiplying that by an annual PE would understate the price by roughly the
+  // fraction of the year the filing covers.
+  if (pe > 0 && hasFinancialsData?.eps > 0 && hasFinancialsData?.epsAnnualized !== false) {
     const eps = hasFinancialsData.eps;
     // Sector-based PE band references
     const peBear = pe * 0.7;
@@ -340,7 +348,7 @@ export function computeValuation(company, marketSnapshot, financialsData, compPe
   // ── G-3 同业倍数 PE method：用同业 PE 的 p25/median/p75 × 自身 EPS，替代"只拿自己历史
   //    PE ±30%"的自参照——现价不再是唯一锚，多了一个真实市场同业观察到的锚。同阶段可比
   //    < 2 家时 compPeers.anchor 本身就是 null（compPeers.js 已把守），这里不会硬凑。
-  if (compPeers?.anchor?.multipleType === "PE" && hasFinancialsData?.eps > 0) {
+  if (compPeers?.anchor?.multipleType === "PE" && hasFinancialsData?.eps > 0 && hasFinancialsData?.epsAnnualized !== false) {
     const { p25, median, p75, n, tickers } = compPeers.anchor;
     if ([p25, median, p75].every((x) => Number.isFinite(x) && x > 0)) {
       const eps = hasFinancialsData.eps;
@@ -354,7 +362,7 @@ export function computeValuation(company, marketSnapshot, financialsData, compPe
   }
 
   // ── Forward PE method ─────────────────────────────
-  if (hasFinancialsData?.forwardPE > 0 && hasFinancialsData?.eps > 0) {
+  if (hasFinancialsData?.forwardPE > 0 && hasFinancialsData?.eps > 0 && hasFinancialsData?.epsAnnualized !== false) {
     const fwdPE = hasFinancialsData.forwardPE;
     const eps = hasFinancialsData.eps;
     const bear = eps * (fwdPE * 0.7);

@@ -217,6 +217,41 @@ function isoDate(value: unknown): string | null {
   return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
 }
 
+function numOrNull(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * HK/CN filings report EPS as period-cumulative (YTD), not TTM: an H1 filing's eps
+ * covers Jan-Jun, not the trailing 12 months. Using that raw number to derive a PE
+ * (price / eps) inflates PE by roughly (12 / months-covered) — the same class of
+ * bug already fixed for US via FMP's real ratios-ttm (see toDomainSources below).
+ * There's no HK/CN TTM-PE data source, so instead we bridge to a true TTM net
+ * income from the filing history already fetched (up to 4 rows): TTM net income =
+ * current cumulative + prior full fiscal year - prior-year same-period cumulative
+ * (the last term is `net_income_prior`, which filings already report as a
+ * comparative). EPS is then scaled by the same ratio, avoiding a fabricated
+ * share count. When the prior FY row isn't in the fetched window, we honestly
+ * report `epsAnnualized: false` rather than guess.
+ */
+function deriveAnnualEps(rows: any[]): { eps: number | null; epsAnnualized: boolean } {
+  const latest = rows?.[0];
+  const eps = latest ? numOrNull(latest.eps) : null;
+  if (!latest || eps === null) return { eps: null, epsAnnualized: true };
+  if (latest.period_type === "FY") return { eps, epsAnnualized: true };
+  const priorFY = rows.slice(1).find((r) => r?.period_type === "FY");
+  const netIncome = numOrNull(latest.net_income);
+  const netIncomePrior = numOrNull(latest.net_income_prior);
+  const priorFYNetIncome = priorFY ? numOrNull(priorFY.net_income) : null;
+  if (netIncome !== null && netIncome > 0 && netIncomePrior !== null && priorFYNetIncome !== null) {
+    const netIncomeTtm = netIncome + priorFYNetIncome - netIncomePrior;
+    if (netIncomeTtm > 0) return { eps: eps * (netIncomeTtm / netIncome), epsAnnualized: true };
+  }
+  return { eps, epsAnnualized: false };
+}
+
 /**
  * Adapts our DB shapes (snake_case market snapshot, raw filing row) into the
  * camelCase `marketSnapshot`/`financialsData` shape both `valuation.js` and
@@ -225,8 +260,12 @@ function isoDate(value: unknown): string | null {
  * `sharesOutstanding` is derived (marketCap / price) since no filing field
  * carries it; genuinely missing fields (bookValue, totalDebt) stay undefined
  * rather than guessed, so downstream methods that need them honestly skip.
+ * `rows` is the fetched filing history (newest first, up to 4) — only
+ * `rows[0]` is used for most fields, but the fuller history is needed to
+ * annualize eps (see `deriveAnnualEps`).
  */
-function toDomainSources(company: any, market: any, row: any) {
+function toDomainSources(company: any, market: any, rows: any[]) {
+  const row = rows?.[0];
   const marketSnapshot = market ? {
     providerStatus: "ok" as const, price: market.price, currency: company.currency, changePercent: market.change_percent,
     // row?.pe_ttm (FMP, US-only — see fmpFundamentalsAdapter.ts) takes priority
@@ -237,11 +276,15 @@ function toDomainSources(company: any, market: any, row: any) {
     sharesOutstanding: market.market_cap && market.price ? market.market_cap / market.price : null,
     rawAsOf: market.as_of
   } : { providerStatus: "missing" as const };
+  // row.eps is raw filing EPS — for HK/CN interim filings (Q1/H1/9M) that's a
+  // period-cumulative figure, not TTM. Annualize it (or flag it unusable for PE
+  // derivation) before handing it to valuation.js; see deriveAnnualEps above.
+  const { eps: annualEps, epsAnnualized } = deriveAnnualEps(rows);
   const financialsData = row ? {
     providerStatus: "ok" as const, currency: row.currency || company.currency,
     revenue: row.revenue, grossProfit: row.gross_profit, operatingIncome: row.operating_income,
     netIncome: row.net_income, operatingCashFlow: row.operating_cash_flow, cashAndEquivalents: row.cash_and_equivalents,
-    netCash: row.net_cash, eps: row.eps, revenueGrowth: pctChange(row.revenue, row.revenue_prior),
+    netCash: row.net_cash, eps: annualEps, epsAnnualized, revenueGrowth: pctChange(row.revenue, row.revenue_prior),
     grossMargin: pctOf(row.gross_profit, row.revenue), operatingMargin: pctOf(row.operating_income, row.revenue),
     netMargin: pctOf(row.net_income, row.revenue), profitGrowth: pctChange(row.net_income, row.net_income_prior),
     sharesOutstanding: market?.market_cap && market?.price ? market.market_cap / market.price : null,
@@ -327,7 +370,7 @@ export async function runResearch(input: ResearchInput, userId: string, onToken?
     company.ticker.endsWith(".HK") ? getHkFinancials(company.ticker) : /\.(SS|SZ)$/.test(company.ticker) ? getCnFinancials(company.ticker) : getUsFinancials(company.ticker)
   ]);
   const fallback = deterministicAnswer(company, profile, market, financials, input.question);
-  const { marketSnapshot, financialsData } = toDomainSources(company, market, financials[0]);
+  const { marketSnapshot, financialsData } = toDomainSources(company, market, financials);
   await onStage?.("valuation");
   const valuation = computeResearchValuation(company, marketSnapshot, financialsData);
   const valuationFacts = valuation && !valuation.cannotValueReason
