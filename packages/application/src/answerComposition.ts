@@ -12,7 +12,7 @@
  * fabricated peer multiple in the prompt is exactly what 红线 2 forbids, and the
  * composer's own rules tell the model to say 未核到 when a block is empty.
  */
-import { compactNumberServer, createAnswerComposer, createReportComposer, classifyResearchIntent, RESEARCH_INTENTS } from "@echo/domain";
+import { compactNumberServer, createAnswerComposer, createReportComposer, classifyResearchIntent, hkBuybackToPrompt, RESEARCH_INTENTS } from "@echo/domain";
 import { detectMarket } from "@echo/data-plane";
 
 /** Panel research-status → display label, recovered from the retired stack
@@ -84,6 +84,17 @@ function financialsToMarkdown(financials: any) {
 }
 
 /**
+ * 港股回购事实块。hk_buybacks 由 hkFilingsPipeline 一直在采集，但在此之前没有任何
+ * 读取方——数据采了没人用，而 composer 同时还在对模型说"回购分红口径还没核到"。
+ * 只有港股有这个源，其余市场诚实说"未核到"——不能让模型把"我们没接这个源"读成
+ * "这家公司没回购"。
+ */
+function buybacksToPrompt(buybacks: any) {
+  const block = hkBuybackToPrompt(buybacks);
+  return block || "港股回购：本轮未核到 HKEX 翌日披露的场内购回记录（非港股或该期间无披露）——不得凭印象描述回购规模、节奏或金额。";
+}
+
+/**
  * Web evidence (Tavily) is not connected — the key is over its plan quota, so no
  * adapter was written rather than one that couldn't be verified against a real
  * response (docs/PLAN.md P1). Tell the model plainly instead of leaving the
@@ -118,6 +129,7 @@ export function composerFor(company: any) {
     researchIntents: RESEARCH_INTENTS,
     webEvidenceToPrompt,
     financialsToMarkdown,
+    buybacksToPrompt,
     detectMarket,
     beijingMinute
   });

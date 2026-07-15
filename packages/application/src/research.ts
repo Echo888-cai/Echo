@@ -4,13 +4,20 @@ import { ensureFreshMarketSnapshot } from "./marketData.js";
 import { getCompanyProfile, upsertCompanyProfile } from "@echo/db/repositories/companyProfilesRepository.js";
 import { saveResearchSession } from "@echo/db/repositories/researchSessionsRepository.js";
 import { getHkFinancials } from "@echo/db/repositories/hkFinancialsRepository.js";
+import { listRecentHkBuybacks } from "@echo/db/repositories/hkBuybackRepository.js";
 import { getCnFinancials } from "@echo/db/repositories/cnFinancialsRepository.js";
 import { getFundamentals, getNextEarnings } from "@echo/data-plane";
 import { composerFor, reportComposerFor } from "./answerComposition.js";
 import { getComparablePeers } from "./compPeers.js";
 import { insertLlmAudit } from "@echo/db/repositories/llmAuditRepository.js";
 import { insertFactGuardAudit } from "@echo/db/repositories/factGuardRepository.js";
-import { buildFactsRegistry, buildSoftNote, displayValuation, summarizeVerdict, verifyAnswerNumbers } from "@echo/domain";
+import { upsertResearchSnapshot } from "@echo/db/repositories/researchSnapshotsRepository.js";
+import { replaceFalsifierRules } from "@echo/db/repositories/watchRulesRepository.js";
+import {
+  buildFactsRegistry, buildSoftNote, deriveValuationPosition, displayValuation,
+  extractFalsifiersFromAnswer, extractStructuredFalsifiers, extractThesisFromAnswer, isDataFragmentThesis,
+  parseFalsifierRules, portraitJudgmentChanged, summarizeVerdict, topPortraitEvidence, verifyAnswerNumbers
+} from "@echo/domain";
 
 type ResearchInput = {
   question: string;
@@ -426,15 +433,42 @@ const RESEARCH_SYSTEM_PROMPT =
  * fetches (previously `runReport` just re-entered `runResearch` and relabelled
  * the conversational answer as "报告").
  */
+/** 按市场分发到对应的财报源。抽出来是因为 worker 的基本面证伪巡检也要走同一条口径——
+ *  两处各写一份 dispatch，迟早会在"某个市场该用哪个源"上漂移。 */
+function fetchFinancialsRows(ticker: string): Promise<any[]> {
+  if (ticker.endsWith(".HK")) return getHkFinancials(ticker);
+  if (/\.(SS|SZ)$/.test(ticker)) return getCnFinancials(ticker);
+  return getUsFinancials(ticker);
+}
+
+/**
+ * F-3：worker 的基本面证伪巡检需要跟研究链路完全同一份 `financialsData`
+ * （evaluateFundamentalRule 直接读它的 grossMargin/netMargin 等字段）。导出这个入口
+ * 而不是让 worker 自己拼，是为了让"规则登记时看到的口径"和"巡检时核对的口径"永远是
+ * 同一套——两边各算一次，阈值就会在不同的年化/币种口径上打架。
+ */
+export async function financialsDataFor(ticker: string) {
+  const company = await getCompanyByTickerComplete(ticker);
+  if (!company) return null;
+  const [market, rows] = await Promise.all([
+    ensureFreshMarketSnapshot(ticker).catch(() => null),
+    fetchFinancialsRows(ticker).catch(() => [])
+  ]);
+  return toDomainSources(company, market, rows).financialsData;
+}
+
 async function gatherResearchContext(input: ResearchInput, userId: string, onStage?: StageCallback) {
   const company = await resolveInputCompany(input);
   if (!company) return null;
   await onStage?.("market_financials");
-  const [profile, market, financials, earnings] = await Promise.all([
+  const [profile, market, financials, earnings, buybacks] = await Promise.all([
     getCompanyProfile(company.ticker, userId),
     ensureFreshMarketSnapshot(company.ticker),
-    company.ticker.endsWith(".HK") ? getHkFinancials(company.ticker) : /\.(SS|SZ)$/.test(company.ticker) ? getCnFinancials(company.ticker) : getUsFinancials(company.ticker),
-    getEarnings(company.ticker)
+    fetchFinancialsRows(company.ticker),
+    getEarnings(company.ticker),
+    // hk_buybacks 只有港股有（HKEX 翌日披露报表），hkFilingsPipeline 一直在采集但此前
+    // 没有任何读取方——数据白采了，composer 还在同时对模型说"回购口径还没核到"。
+    company.ticker.endsWith(".HK") ? listRecentHkBuybacks(company.ticker, 180).catch(() => []) : Promise.resolve([])
   ]);
   const { marketSnapshot, financialsData } = toDomainSources(company, market, financials);
   await onStage?.("valuation");
@@ -466,11 +500,13 @@ async function gatherResearchContext(input: ResearchInput, userId: string, onSta
     // Only HK/CN financials come from our own filing pipeline; US rows are FMP's
     // standardized statements, which are not a filing feed.
     filings: { status: financialsData.providerStatus === "ok" && isFirstPartyFiling ? "ok" : "missing" },
+    // 港股回购是我们唯一真正接通的"公告级"一手事实，独立于 filings 报表本身。
+    buybacks: { status: buybacks.length ? "ok" : "missing" },
     news: { status: "missing" },
     estimates: { status: "missing" }
   };
   const composerContext = {
-    marketSnapshot, financialsData, valuation, earnings,
+    marketSnapshot, financialsData, valuation, earnings, buybacks,
     portraitContext: profile?.thesis ? `既有研究主线：${profile.thesis}` : "",
     history: input.history,
     // Not wired to any source yet (docs/PLAN.md P1) — passing null makes the
@@ -480,7 +516,8 @@ async function gatherResearchContext(input: ResearchInput, userId: string, onSta
   };
   const dataSources = {
     market: market ? { status: "ok", source: market.source, asOf: market.as_of } : { status: "missing" },
-    financials: financials.length ? { status: "ok" } : { status: "missing" }
+    financials: financials.length ? { status: "ok" } : { status: "missing" },
+    buybacks: buybacks.length ? { status: "ok", source: "HKEX 翌日披露报表", rows: buybacks.length } : { status: "missing" }
   };
   return { company, profile, market, financials, earnings, marketSnapshot, financialsData, valuation, panel, composer, composerSources, composerContext, dataSources };
 }
@@ -490,19 +527,92 @@ type ResearchContext = NonNullable<Awaited<ReturnType<typeof gatherResearchConte
 /** Persists the session + company profile and returns the fields both artifacts
  *  report back. Shared so a report and a chat answer can never drift on what
  *  they claim was saved or which sources they stood on. */
-async function persistResearch(ctx: ResearchContext, input: ResearchInput, userId: string, content: string) {
-  const { company, profile, panel, dataSources } = ctx;
+async function persistResearch(ctx: ResearchContext, input: ResearchInput, userId: string, content: string, structuredRules: any[] = []) {
+  const { company, profile, panel, valuation, marketSnapshot, dataSources } = ctx;
   const id = input.sessionId || `s_${randomUUID()}`;
   await saveResearchSession({ id, ticker: company.ticker, companyName: company.nameZh, title: input.question, question: input.question,
     conversationId: input.conversationId || id, status: "completed", decisionPanel: panel, fullResearch: content,
     reportMarkdown: content, dataSources, thread: input.history }, userId);
+
+  // 主线取自这次回答的「核心判断」段落，而不是 panel.oneLineView——后者本身就是
+  // `profile?.thesis || 兜底句`（见 decisionPanel），把它写回画像等于让主线自我复制：
+  // 一旦建档就再也不会被新研究改动。提取不到（本地兜底文案/纯数据碎片）时才退回旧行为。
+  const extractedThesis = extractThesisFromAnswer(content);
+  const thesis = extractedThesis && !isDataFragmentThesis(extractedThesis) ? extractedThesis : panel.oneLineView;
+  // 证伪条件同样来自回答正文的「风险与证伪条件」段落，这是唯一真实来源；
+  // 取不到就留空，不拿 bearCase（风险叙述，不是可核对的证伪线）冒充。
+  const falsifiers = extractFalsifiersFromAnswer(content);
+  // cannotValueReason 时 valuation 的 bear/base/bull 是 null——存 null 而不是存一条假带子。
+  const valuationBand = valuation && !valuation.cannotValueReason
+    ? { method: valuation.method, bear: valuation.bear, base: valuation.base, bull: valuation.bull, currentPrice: valuation.currentPrice }
+    : null;
+
+  const isNew = !profile;
+  const changed = portraitJudgmentChanged(profile, { thesis });
+  const date = new Date().toISOString().slice(0, 10);
+  const evidence = topPortraitEvidence(panel);
+
+  // 时间线只记"建档"和"判断变化"两类沉淀事件——财报事件由 worker 另行追加。
+  const events = isNew
+    ? [{ date, kind: "created", summary: `建档：${thesis}`.slice(0, 300), evidence, sessionId: id }]
+    : changed
+      ? [{ date, kind: "thesis_change", summary: `判断更新：${thesis}`.slice(0, 300),
+          rationale: `触发问题：「${input.question}」`.slice(0, 600), evidence, sessionId: id }]
+      : [];
+
   const savedProfile = await upsertCompanyProfile(company.ticker, {
-    companyName: company.nameZh, thesis: panel.oneLineView, researchStatus: panel.researchStatus, confidence: panel.confidence,
-    bull: panel.bullCase, bear: panel.bearCase, monitors: panel.monitors, bumpTurn: true
+    companyName: company.nameZh, thesis, researchStatus: panel.researchStatus, confidence: panel.confidence,
+    bull: panel.bullCase, bear: panel.bearCase, monitors: panel.monitors, events,
+    // falsifiers/valuation 一直是 upsertCompanyProfile 支持但没人传的字段，于是画像
+    // markdown 的「估值带」和「证伪条件」两节从来渲染不出来。
+    ...(falsifiers.length ? { falsifiers } : {}),
+    ...(valuationBand ? { valuation: valuationBand } : {}),
+    bumpTurn: true
   }, userId);
+
+  // R7 记分卡的唯一数据来源。没有这一步，research_snapshots 永远是空表，
+  // research.scorecard 端点只能对着零条快照算命中率。
+  // 只在建档/判断变化时落一行，跟上面 profile_events 的沉淀节奏一致：每轮都落会让
+  // 同一个judgement被复制成几十条，全部一起成熟并挤进命中率的分母（等于让聊得最多
+  // 的那只票说了算）。
+  if (isNew || changed) {
+    await upsertResearchSnapshot({
+      userId, ticker: company.ticker, snapshotDate: date,
+      thesis, falsifiers, sessionId: id,
+      valuationPosition: deriveValuationPosition(valuationBand),
+      valuationBear: valuationBand?.bear, valuationBase: valuationBand?.base, valuationBull: valuationBand?.bull,
+      // 估值带和现价同为报价币种（marketSnapshot.currency），不是财报的记账币种。
+      valuationCurrency: marketSnapshot?.currency ?? null,
+      priceAtSnapshot: marketSnapshot?.price ?? null
+    });
+  }
+
+  // UX-7 研究→监控闭环：证伪条件里"明确的价格条件"落成 watch_rules，worker 的
+  // checkFalsifiers 巡检据此推送触线通知。这个写入方同样在 #27 迁移中丢失，于是
+  // 巡检一直在对着零条规则空跑、盘前速报永远播报"当前有 0 条有效监控条件"。
+  //
+  // 只在真的解析出价格规则时才同步。parseFalsifierRules 遵循"宁可漏，不可错"，
+  // 基本面口径的证伪条件（"毛利率跌破 55%"，实测占绝大多数）会被它正确地拒掉并返回
+  // 空数组——而 replaceFalsifierRules 是先删后插，拿空数组去调等于把已有盯盘规则清空。
+  // 解析不出规则只说明这轮没给出可执行的价格线，不等于用户撤掉了监控。
+  // 价格线与基本面线是两条互不相干的产出路径（前者文本解析、后者 F-3 模型结构化输出），
+  // 各自只替换自己 kind 范围内的规则——否则只掌握一条路径的调用方会连带清掉另一条。
+  const ruleSets: Array<[string, any[], string[]]> = [
+    ["价格线", parseFalsifierRules(falsifiers), ["price_below", "price_above"]],
+    ["基本面线", structuredRules, ["fundamental_below", "fundamental_above"]]
+  ];
+  for (const [label, rules, kinds] of ruleSets) {
+    if (!rules.length) continue;
+    try {
+      await replaceFalsifierRules(company.ticker, rules, { sessionId: id, userId, kinds });
+    } catch (error) {
+      console.error(`[research] 证伪规则同步失败（${label}）：`, error instanceof Error ? error.message : error);
+    }
+  }
+
   return {
     sessionId: id,
-    portrait: { ticker: company.ticker, created: !profile, changed: !profile || profile.thesis !== panel.oneLineView, turnCount: savedProfile?.turnCount || 0 }
+    portrait: { ticker: company.ticker, created: isNew, changed: isNew || changed, turnCount: savedProfile?.turnCount || 0 }
   };
 }
 
@@ -525,15 +635,23 @@ export async function runResearch(input: ResearchInput, userId: string, onToken?
   await onStage?.("generating");
   const generated = await modelAnswer(RESEARCH_SYSTEM_PROMPT, prompt, userId, onToken);
   await onStage?.("fact_check");
+  // F-3：先把机器可读的 FALSIFIERS_JSON 行从正文里剥掉，再做其它一切。
+  // 顺序是硬要求，不是风格问题：那行是给系统看的（不剥就漏进聊天气泡），而且它带着
+  // 阈值数字（29 / 40），留到 applyFactGuard 会被 verifyAnswerNumbers 当成一堆"未能与
+  // 已核实数据对上"的可疑数字，凭空拉低数字护栏的准信。剥离失败时 rules 诚实为空，
+  // cleanContent 原样返回，不阻断主流程。
+  const structured = generated
+    ? extractStructuredFalsifiers(generated.content)
+    : { rules: [], cleanContent: "" };
   // normalizeResearchAnswer backfills the two things the model drops most often:
   // the 北京时间 prefix and a 来源 section (a real 靠什么赚钱 回测 ended with no
   // 来源 at all despite the rules asking for one). Run it before the guard so
   // factGuard verifies the exact text the user ends up reading.
   const guarded = generated
-    ? await applyFactGuard(composer.normalizeResearchAnswer(generated.content, panel, composerSources), company, marketSnapshot, financialsData, valuation)
+    ? await applyFactGuard(composer.normalizeResearchAnswer(structured.cleanContent, panel, composerSources), company, marketSnapshot, financialsData, valuation)
     : { content: fallback, factGuard: null };
   const content = guarded.content;
-  const saved = await persistResearch(ctx, input, userId, content);
+  const saved = await persistResearch(ctx, input, userId, content, structured.rules);
   return {
     mode: generated ? "chat_model" : "chat_local",
     provider: generated?.provider || null,
