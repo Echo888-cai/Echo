@@ -354,6 +354,7 @@ function HkCoverageCard({ apiStatus }: { apiStatus: any }) {
 export function SettingsPage() {
   const auth = useAuth();
   const isOwner = !auth.multiUser || auth.user?.role === "owner";
+  const queryClient = useQueryClient();
 
   const statusQuery = useQuery({ queryKey: ["status"], queryFn: () => statusApi.get() });
   const schedQuery = useQuery({ queryKey: ["scheduler", "status"], queryFn: () => schedulerApi.status() });
@@ -366,6 +367,11 @@ export function SettingsPage() {
   async function handleTestNotification() {
     try {
       const r = await notificationsApi.test();
+      // 发完必须让通知查询失效，否则这条测试通知在界面上要么迟到、要么根本不出现：
+      // NotificationBell 的列表是 `enabled: open`（开面板那一刻取一次就缓存，之后没有
+      // 任何东西让它重取），未读角标则挂在 60 秒的 refetchInterval 上。人点得慢所以
+      // 多半赢了这个竞态，E2E 点得快就输——这正是它在 CI 上偶发失败的根因，不是 flaky。
+      await queryClient.invalidateQueries({ queryKey: ["notifications"] });
       showToast(
         r.telegram === "sent"
           ? "测试通知已发送（含 Telegram）"
