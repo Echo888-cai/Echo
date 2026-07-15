@@ -264,9 +264,15 @@ function extractNumbers(text) {
     // 中文财经写作常用"下滑/下降 10.9%"表达降幅，不写负号（真实实测抓到：小米"收入同比
     // 下滑10.9%"被当成正数跟事实里的 -10.9 符号相反误判 hard）。数字本身没带正负号时，
     // 看紧邻前面的词是不是"降/减/跌/滑/收窄/放缓"这类，是就按语义当负数处理。
+    //
+    // 匹配的是方向"字"而不是穷举双字词：原来写死 (下滑|下降|…) 只认双字形式，
+    // 真实深度报告回测里模型写"同比微降1.1%""同比仅微降0.5%"——语义完全正确的中文，
+    // 却因为"微降"不在名单里被当成 +1.1% 判 hard（full 模式下会拦掉一篇正确的报告，
+    // soft 模式下则告诉用户一个对的数字是错的）。降/跌/滑/减 前面可以挂任意修饰语
+    // （微降/大降/骤降/环比降/略降…），穷举不完，改成认词尾的方向字。
     if (!/^[-+]/.test(m[1])) {
       const before = text.slice(Math.max(0, m.index - 6), m.index);
-      if (/(下滑|下降|下跌|减少|降低|收窄|走低|回落|放缓|亏损扩大|转负|缩水|萎缩)$/.test(before)) value = -Math.abs(value);
+      if (/(降|跌|滑|减|收窄|走低|回落|放缓|亏损扩大|转负|缩水|萎缩)$/.test(before)) value = -Math.abs(value);
     }
     candidates.push({ dimension: "percent", value, raw: m[0], index: m.index });
     claim(m.index, m.index + m[0].length);
@@ -356,8 +362,15 @@ function matchInBucket(value, bucket, { relTol, absTol, magnitudeThreshold = 10 
   }
   if (!best) return { verdict: "soft", fact: null };
   const magRatio = best.value !== 0 ? Math.abs(value) / Math.abs(best.value) : Infinity;
-  const sameBallpark = magRatio >= 1 / 3 && magRatio <= 3;
-  if (sameBallpark && Math.sign(value) !== 0 && Math.sign(best.value) !== 0 && Math.sign(value) !== Math.sign(best.value)) {
+  // 符号相反只在"绝对值基本相等"时才成立：真正的符号错误是模型照抄了同一个数字却把方向
+  // 写反（1.1 vs -1.06、30.4 vs -30.4），量级天然相等。原来的窗口宽到 1/3~3 倍，等于宣称
+  // "任何落在某个负数事实 3 倍内的正数都是它写错了符号"——真实深度报告回测抓到：模型写
+  // "增速超过 3%" 这类假设性阈值（不是在陈述任何登记表里的事实），被拿去跟"今日涨跌幅
+  // =-1.5%"比，2 倍差也算 sameBallpark，直接误判 hard。窗口收紧后这类数字落回 soft
+  // （未核到），符合本模块"宁可漏报不可误报"的原则；真实的符号错误仍然照抓不误。
+  const SIGN_FLIP_RATIO = 1.25;
+  const sameMagnitude = magRatio >= 1 / SIGN_FLIP_RATIO && magRatio <= SIGN_FLIP_RATIO;
+  if (sameMagnitude && Math.sign(value) !== 0 && Math.sign(best.value) !== 0 && Math.sign(value) !== Math.sign(best.value)) {
     return { verdict: "hard", fact: best, reason: `符号相反（最接近的事实是"${best.label}"=${best.value}）` };
   }
   if (best.value !== 0 && (magRatio >= magnitudeThreshold || magRatio <= 1 / magnitudeThreshold)) {

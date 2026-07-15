@@ -6,7 +6,7 @@ import { saveResearchSession } from "@echo/db/repositories/researchSessionsRepos
 import { getHkFinancials } from "@echo/db/repositories/hkFinancialsRepository.js";
 import { getCnFinancials } from "@echo/db/repositories/cnFinancialsRepository.js";
 import { getFundamentals, getNextEarnings } from "@echo/data-plane";
-import { composerFor } from "./answerComposition.js";
+import { composerFor, reportComposerFor } from "./answerComposition.js";
 import { insertLlmAudit } from "@echo/db/repositories/llmAuditRepository.js";
 import { insertFactGuardAudit } from "@echo/db/repositories/factGuardRepository.js";
 import { buildFactsRegistry, buildSoftNote, displayValuation, summarizeVerdict, verifyAnswerNumbers } from "@echo/domain";
@@ -403,13 +403,26 @@ async function applyFactGuard(content: string, company: any, marketSnapshot: any
   return { content: withNote, factGuard: { mode, ...summary } };
 }
 
-export async function runResearch(input: ResearchInput, userId: string, onToken?: TokenCallback, onStage?: StageCallback) {
-  await onStage?.("resolving");
+/** The system message is shared by the chat and report calls: red line 1 is a
+ *  product invariant, not a per-artifact style choice. The paragraph structure
+ *  itself comes from the composer's own prompt (the user message). */
+const RESEARCH_SYSTEM_PROMPT =
+  "你是审慎的买方研究员。只使用给出的事实，不编数字；取不到就写未核到。估值区间必须使用给定的估值数据，不得自行编造倍数或目标价。" +
+  "红线：只给判断，不给指令——禁止任何形式的买入/卖出/持有/加仓/减仓/追高/抄底建议，包括正向表述（“建议买入”）和反向劝阻（“不建议追高”“不建议此时买入”），这类劝阻性措辞本质上仍是买卖指令，同样禁止。" +
+  "改用研究语言描述赔率与状态，例如“当前价位对应的赔率偏低/偏高”“性价比一般，等待更好的验证点或更低的安全边际”“逻辑需要重估”，只呈现判断依据，买卖时机与仓位决策留给用户自己判断。" +
+  "严格遵守用户消息里给出的段落结构与作答规则。";
+
+/**
+ * Resolves the company and every source the composer needs, and builds the
+ * panel/ports shared by both artifacts. Chat and deep report run the exact same
+ * data gathering and must see the exact same numbers — they differ only in which
+ * composer prompt renders them, so this is deliberately the one place that
+ * fetches (previously `runReport` just re-entered `runResearch` and relabelled
+ * the conversational answer as "报告").
+ */
+async function gatherResearchContext(input: ResearchInput, userId: string, onStage?: StageCallback) {
   const company = await resolveInputCompany(input);
-  if (!company) return {
-    mode: "chat_local", provider: null, model: null, sessionId: null, content: "我还没识别出要研究的公司。请补充股票代码或完整公司名称。",
-    decisionPanel: null, dataSources: {}, marketSnapshot: null, newsSnapshot: null, valuation: null, portrait: null
-  };
+  if (!company) return null;
   await onStage?.("market_financials");
   const [profile, market, financials, earnings] = await Promise.all([
     getCompanyProfile(company.ticker, userId),
@@ -455,6 +468,42 @@ export async function runResearch(input: ResearchInput, userId: string, onToken?
     // from filling the gap from memory.
     webEvidence: null, newsSnapshot: null, compare: null, dualListing: null, dualQuote: null, otherHoldings: null
   };
+  const dataSources = {
+    market: market ? { status: "ok", source: market.source, asOf: market.as_of } : { status: "missing" },
+    financials: financials.length ? { status: "ok" } : { status: "missing" }
+  };
+  return { company, profile, market, financials, earnings, marketSnapshot, financialsData, valuation, panel, composer, composerSources, composerContext, dataSources };
+}
+
+type ResearchContext = NonNullable<Awaited<ReturnType<typeof gatherResearchContext>>>;
+
+/** Persists the session + company profile and returns the fields both artifacts
+ *  report back. Shared so a report and a chat answer can never drift on what
+ *  they claim was saved or which sources they stood on. */
+async function persistResearch(ctx: ResearchContext, input: ResearchInput, userId: string, content: string) {
+  const { company, profile, panel, dataSources } = ctx;
+  const id = input.sessionId || `s_${randomUUID()}`;
+  await saveResearchSession({ id, ticker: company.ticker, companyName: company.nameZh, title: input.question, question: input.question,
+    conversationId: input.conversationId || id, status: "completed", decisionPanel: panel, fullResearch: content,
+    reportMarkdown: content, dataSources, thread: input.history }, userId);
+  const savedProfile = await upsertCompanyProfile(company.ticker, {
+    companyName: company.nameZh, thesis: panel.oneLineView, researchStatus: panel.researchStatus, confidence: panel.confidence,
+    bull: panel.bullCase, bear: panel.bearCase, monitors: panel.monitors, bumpTurn: true
+  }, userId);
+  return {
+    sessionId: id,
+    portrait: { ticker: company.ticker, created: !profile, changed: !profile || profile.thesis !== panel.oneLineView, turnCount: savedProfile?.turnCount || 0 }
+  };
+}
+
+export async function runResearch(input: ResearchInput, userId: string, onToken?: TokenCallback, onStage?: StageCallback) {
+  await onStage?.("resolving");
+  const ctx = await gatherResearchContext(input, userId, onStage);
+  if (!ctx) return {
+    mode: "chat_local", provider: null, model: null, sessionId: null, content: "我还没识别出要研究的公司。请补充股票代码或完整公司名称。",
+    decisionPanel: null, dataSources: {}, marketSnapshot: null, newsSnapshot: null, valuation: null, portrait: null
+  };
+  const { company, market, marketSnapshot, financialsData, valuation, panel, composer, composerSources, composerContext } = ctx;
   const prompt = composer.buildChatPrompt(input.question, panel, composerSources, composerContext);
   // The no-model path composes from the same panel and the same intent router, so
   // both answers share one section structure. It replaces a local
@@ -464,16 +513,7 @@ export async function runResearch(input: ResearchInput, userId: string, onToken?
   // fallback's headings because CI has no model key.
   const fallback = composer.researchReplyFromPanel(panel, input.question, composerSources, composerContext);
   await onStage?.("generating");
-  const generated = await modelAnswer(
-    "你是审慎的买方研究员。只使用给出的事实，不编数字；取不到就写未核到。估值区间必须使用给定的估值数据，不得自行编造倍数或目标价。" +
-      "红线：只给判断，不给指令——禁止任何形式的买入/卖出/持有/加仓/减仓/追高/抄底建议，包括正向表述（“建议买入”）和反向劝阻（“不建议追高”“不建议此时买入”），这类劝阻性措辞本质上仍是买卖指令，同样禁止。" +
-      "改用研究语言描述赔率与状态，例如“当前价位对应的赔率偏低/偏高”“性价比一般，等待更好的验证点或更低的安全边际”“逻辑需要重估”，只呈现判断依据，买卖时机与仓位决策留给用户自己判断。" +
-      "严格遵守用户消息里给出的段落结构与作答规则。",
-    prompt,
-    userId,
-    onToken
-  );
-  const id = input.sessionId || `s_${randomUUID()}`;
+  const generated = await modelAnswer(RESEARCH_SYSTEM_PROMPT, prompt, userId, onToken);
   await onStage?.("fact_check");
   // normalizeResearchAnswer backfills the two things the model drops most often:
   // the 北京时间 prefix and a 来源 section (a real 靠什么赚钱 回测 ended with no
@@ -483,27 +523,20 @@ export async function runResearch(input: ResearchInput, userId: string, onToken?
     ? await applyFactGuard(composer.normalizeResearchAnswer(generated.content, panel, composerSources), company, marketSnapshot, financialsData, valuation)
     : { content: fallback, factGuard: null };
   const content = guarded.content;
-  await saveResearchSession({ id, ticker: company.ticker, companyName: company.nameZh, title: input.question, question: input.question,
-    conversationId: input.conversationId || id, status: "completed", decisionPanel: panel, fullResearch: content,
-    reportMarkdown: content, dataSources: { market: market ? { status: "ok", source: market.source, asOf: market.as_of } : { status: "missing" }, financials: financials.length ? { status: "ok" } : { status: "missing" } },
-    thread: input.history }, userId);
-  const savedProfile = await upsertCompanyProfile(company.ticker, {
-    companyName: company.nameZh, thesis: panel.oneLineView, researchStatus: panel.researchStatus, confidence: panel.confidence,
-    bull: panel.bullCase, bear: panel.bearCase, monitors: panel.monitors, bumpTurn: true
-  }, userId);
+  const saved = await persistResearch(ctx, input, userId, content);
   return {
     mode: generated ? "chat_model" : "chat_local",
     provider: generated?.provider || null,
     model: generated?.model || null,
-    sessionId: id,
+    sessionId: saved.sessionId,
     content,
     decisionPanel: panel,
-    dataSources: { market: market ? { status: "ok", source: market.source, asOf: market.as_of } : { status: "missing" }, financials: financials.length ? { status: "ok" } : { status: "missing" } },
+    dataSources: ctx.dataSources,
     marketSnapshot: market,
     newsSnapshot: null,
     factGuard: guarded.factGuard,
     valuation,
-    portrait: { ticker: company.ticker, created: !profile, changed: !profile || profile.thesis !== panel.oneLineView, turnCount: savedProfile?.turnCount || 0 }
+    portrait: saved.portrait
   };
 }
 
@@ -518,19 +551,50 @@ export async function runAsk(input: ResearchInput, userId: string, onToken?: Tok
   return runResearch(input, userId, onToken, onStage);
 }
 
+/**
+ * Deep report — a different artifact from the chat answer, not a relabelled one.
+ * It previously called `runResearch` and renamed `content` to `markdown`, so
+ * "深度研究" returned the exact conversational reply the user had already read
+ * (docs/PLAN.md P2 "`reportComposer` 承接深度报告").
+ *
+ * Same gathered facts and same panel as chat — only the rendering differs:
+ * `buildReportPrompt` asks for long-form judgment-first Markdown (## 核心判断 /
+ * 赚钱机制与护城河 / 财务质量 / 估值与赔率 / 风险与证伪条件 / 关键监控与下一步 /
+ * 来源), and `reportComposer.composeReport` produces the same shape locally when
+ * no model is configured or the call fails.
+ */
 export async function runReport(input: ResearchInput, userId: string) {
-  const result: any = await runResearch(input, userId);
+  const ctx = await gatherResearchContext(input, userId);
+  if (!ctx) return {
+    mode: "report_local", provider: null, model: null, sessionId: null, decisionPanel: null,
+    markdown: "我还没识别出要研究的公司。请补充股票代码或完整公司名称。",
+    dataSources: {}, marketSnapshot: null, newsSnapshot: null, factGuard: null, portrait: null
+  };
+  const { company, market, marketSnapshot, financialsData, valuation, panel, composer, composerSources, composerContext } = ctx;
+  const prompt = composer.buildReportPrompt(input.question, panel, composerSources, composerContext);
+  const generated = await modelAnswer(RESEARCH_SYSTEM_PROMPT, prompt, userId);
+  // composeReport reads panel.keyDrivers/sources/oneLineView — the same panel the
+  // model was given — so the fallback stands on identical numbers.
+  const fallback: string = reportComposerFor(company).composeReport(panel).markdown;
+  // No normalizeResearchAnswer here: it prepends a "北京时间 …，X 最近的状态是："
+  // conversational lead-in, which belongs above a chat reply, not above a report's
+  // "# 深度研究" title. buildReportPrompt already mandates its own header and 来源.
+  const guarded = generated
+    ? await applyFactGuard(generated.content, company, marketSnapshot, financialsData, valuation)
+    : { content: fallback, factGuard: null };
+  const markdown = guarded.content;
+  const saved = await persistResearch(ctx, input, userId, markdown);
   return {
-    mode: result.mode === "chat_model" ? "report_model" : "report_local",
-    provider: result.provider,
-    model: result.model,
-    sessionId: result.sessionId,
-    decisionPanel: result.decisionPanel,
-    markdown: result.content,
-    dataSources: result.dataSources,
-    marketSnapshot: result.marketSnapshot,
-    newsSnapshot: result.newsSnapshot,
-    factGuard: result.factGuard,
-    portrait: result.portrait
+    mode: generated ? "report_model" : "report_local",
+    provider: generated?.provider || null,
+    model: generated?.model || null,
+    sessionId: saved.sessionId,
+    decisionPanel: panel,
+    markdown,
+    dataSources: ctx.dataSources,
+    marketSnapshot: market,
+    newsSnapshot: null,
+    factGuard: guarded.factGuard,
+    portrait: saved.portrait
   };
 }

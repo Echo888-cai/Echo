@@ -12,7 +12,7 @@
  * fabricated peer multiple in the prompt is exactly what 红线 2 forbids, and the
  * composer's own rules tell the model to say 未核到 when a block is empty.
  */
-import { compactNumberServer, createAnswerComposer, classifyResearchIntent, RESEARCH_INTENTS } from "@echo/domain";
+import { compactNumberServer, createAnswerComposer, createReportComposer, classifyResearchIntent, RESEARCH_INTENTS } from "@echo/domain";
 import { detectMarket } from "@echo/data-plane";
 
 /** Panel research-status → display label, recovered from the retired stack
@@ -119,6 +119,20 @@ export function composerFor(company: any) {
     webEvidenceToPrompt,
     financialsToMarkdown,
     detectMarket,
+    beijingMinute
+  });
+}
+
+/**
+ * Deep-report composer — the no-model fallback for `runReport`. Takes the same
+ * decisionPanel and company archive, and emits judgment-first Markdown
+ * (# 标题 / ## 核心判断 / ## 赚钱机制与护城河 / …), which is a genuinely different
+ * artifact from the conversational answer rather than a copy of it.
+ */
+export function reportComposerFor(company: any) {
+  return createReportComposer({
+    researchStatusLabels: RESEARCH_STATUS_LABELS,
+    companyByTicker: (ticker: string) => (ticker === company?.ticker ? company : null),
     beijingMinute
   });
 }
