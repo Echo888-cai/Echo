@@ -65,3 +65,22 @@ export interface FilingsPort extends Adapter {
 export interface CalendarPort extends Adapter {
   fetchNextEarnings(ticker: string): Promise<ProviderEnvelope>;
 }
+
+/** One peer as the *provider* reports it — raw multiples only. Bucketing by
+ *  asset stage and anchor percentiles are domain rules, not supplier concerns
+ *  (packages/domain/src/compPeerRules.js), so nothing here interprets these. */
+export interface PeerQuote {
+  ticker: string;
+  /** Trailing EPS — the honest stage signal. A provider's PE can be positive
+   *  for a company whose profit is entirely one-off gains, so stage is never
+   *  inferred from `pe` alone. */
+  epsTtm: number | null;
+  netMargin: number | null;
+  revenueGrowth: number | null;
+  pe: number | null;
+  evRevenue: number | null;
+}
+
+export interface CompPeersPort extends Adapter {
+  fetchPeers(ticker: string): Promise<ProviderEnvelope>;
+}

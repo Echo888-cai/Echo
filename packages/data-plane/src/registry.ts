@@ -16,11 +16,12 @@ import { postgresFilingsAdapter } from "./adapters/postgresFilingsAdapter.js";
 import { postgresCalendarAdapter } from "./adapters/postgresCalendarAdapter.js";
 import { finnhubCalendarAdapter } from "./adapters/finnhubCalendarAdapter.js";
 import { hkAdrCalendarAdapter } from "./adapters/hkAdrCalendarAdapter.js";
+import { finnhubPeersAdapter } from "./adapters/finnhubPeersAdapter.js";
 import { detectMarket, type Market } from "./market.js";
 import { selectAdapter, selectAdapterChain, type SelectOptions } from "./router.js";
 import { isBreakerOpen, recordFailure, recordSuccess } from "./circuitBreaker.js";
 import { checkQuote, checkEnvelope, type QualityReport } from "./qualityGuard.js";
-import type { QuotePort, QuoteResult, FundamentalsPort, FilingsPort, CalendarPort, ProviderEnvelope } from "./ports.js";
+import type { QuotePort, QuoteResult, FundamentalsPort, FilingsPort, CalendarPort, CompPeersPort, ProviderEnvelope } from "./ports.js";
 
 // Registration point for future adapters (e.g. a licensed Wind/Polygon/HKEX
 // distributor feed) — add to the relevant array, nothing else in this file
@@ -47,6 +48,7 @@ const fundamentalsAdapters: FundamentalsPort[] = [postgresFundamentalsAdapter, .
 const filingsAdapters: FilingsPort[] = [postgresFilingsAdapter];
 const externalCalendarAdapters: CalendarPort[] = process.env.FINNHUB_API_KEY ? [finnhubCalendarAdapter, hkAdrCalendarAdapter] : [];
 const calendarAdapters: CalendarPort[] = [...externalCalendarAdapters, postgresCalendarAdapter];
+const externalCompPeersAdapters: CompPeersPort[] = process.env.FINNHUB_API_KEY ? [finnhubPeersAdapter] : [];
 
 export interface Routed<T> {
   result: T;
@@ -150,4 +152,24 @@ export function listExternalFundamentalsAdapters(): FundamentalsPort[] {
  *  for the canary probe script. */
 export function listExternalCalendarAdapters(): CalendarPort[] {
   return externalCalendarAdapters;
+}
+
+/** Registered third-party comparable-peers adapters, for the canary probe script. */
+export function listExternalCompPeersAdapters(): CompPeersPort[] {
+  return externalCompPeersAdapters;
+}
+
+/**
+ * Raw comparable peers + their provider multiples. No postgres fallback in the
+ * chain: unlike the calendar, the comp_peers table is a cache this pipeline
+ * writes itself (packages/application/src/compPeers.ts owns the TTL and the
+ * stale-if-error fallback), and reading it here would mean the "live" adapter
+ * could silently answer from our own cache.
+ */
+export async function getCompPeers(ticker: string, opts: SelectOptions = {}): Promise<Routed<ProviderEnvelope>> {
+  const market = detectMarket(ticker);
+  const selection = selectAdapter(externalCompPeersAdapters, market, opts);
+  if (!selection) throw new NoAuthorizedAdapterError("comp-peers", market);
+  const result = await selection.adapter.fetchPeers(ticker);
+  return { result, adapterId: selection.adapter.id, quality: checkEnvelope(result) };
 }

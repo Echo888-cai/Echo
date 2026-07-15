@@ -7,6 +7,7 @@ import { getHkFinancials } from "@echo/db/repositories/hkFinancialsRepository.js
 import { getCnFinancials } from "@echo/db/repositories/cnFinancialsRepository.js";
 import { getFundamentals, getNextEarnings } from "@echo/data-plane";
 import { composerFor, reportComposerFor } from "./answerComposition.js";
+import { getComparablePeers } from "./compPeers.js";
 import { insertLlmAudit } from "@echo/db/repositories/llmAuditRepository.js";
 import { insertFactGuardAudit } from "@echo/db/repositories/factGuardRepository.js";
 import { buildFactsRegistry, buildSoftNote, displayValuation, summarizeVerdict, verifyAnswerNumbers } from "@echo/domain";
@@ -356,10 +357,15 @@ function toDomainSources(company: any, market: any, rows: any[]) {
  * an honest cannotValueReason. Only pass the identity fields valuation.js
  * actually needs (ticker/currency/sector) — no numeric fallbacks it can't trust.
  */
-function computeResearchValuation(company: any, marketSnapshot: any, financialsData: any): any {
+function computeResearchValuation(company: any, marketSnapshot: any, financialsData: any, compPeers: any = null): any {
   try {
     const safeCompany = { ticker: company.ticker, currency: company.currency, sector: company.sector };
-    return displayValuation(safeCompany, marketSnapshot, financialsData);
+    // 5th arg is the comparable set: valuation.js uses its anchor for the PE band
+    // (profitable) or the EV/Sales scenario (loss-making) and attaches the raw
+    // list to the result as `.compPeers`, which is exactly where answerComposer's
+    // 同业对照 block and factGuard's multiple registry both read it from. Passing
+    // `estimates` as null — analyst consensus has no connected source.
+    return displayValuation(safeCompany, marketSnapshot, financialsData, null, compPeers);
   } catch {
     return null;
   }
@@ -432,7 +438,11 @@ async function gatherResearchContext(input: ResearchInput, userId: string, onSta
   ]);
   const { marketSnapshot, financialsData } = toDomainSources(company, market, financials);
   await onStage?.("valuation");
-  const valuation = computeResearchValuation(company, marketSnapshot, financialsData);
+  // Peers need the subject's own financials to classify its stage, so this can't
+  // join the Promise.all above — it runs before valuation because the anchor is
+  // an input to the band, not a decoration on it.
+  const compPeers = await getComparablePeers(company.ticker, financialsData);
+  const valuation = computeResearchValuation(company, marketSnapshot, financialsData, compPeers);
   const panel = decisionPanel(company, profile, market, financialsData, valuation, earnings);
   // The prompt now comes from the domain composer instead of a hand-rolled
   // 4-line facts string: it renders the company archive (护城河/商业模式/多空/

@@ -10,7 +10,8 @@ const sourceLabels: Record<string, string> = {
   "market:yahoo-chart": "行情 · Yahoo", "market:finnhub": "行情 · Finnhub",
   "market:twelvedata": "行情 · Twelve Data", "market:alphavantage": "行情 · Alpha Vantage",
   "financials:fmp": "财务 · FMP", "earnings:finnhub": "财报日历 · Finnhub",
-  "earnings:hk-adr-finnhub": "财报日历 · Finnhub（港股 ADR 映射）"
+  "earnings:hk-adr-finnhub": "财报日历 · Finnhub（港股 ADR 映射）",
+  "comp_peers:finnhub": "同业可比 · Finnhub"
 };
 
 /** Capability prefixes packages/data-plane/src/canary.ts actually writes today,
@@ -21,7 +22,7 @@ const sourceLabels: Record<string, string> = {
  *  capabilities with no adapter at all — under a header promising 状态来自真实数据
  *  调用. Same frozen-dirty-data shape as the earnings_calendar rows in docs/PLAN.md
  *  P1; drop them from the health view rather than present them as live truth. */
-const PROBE_CAPABILITIES = ["market", "financials", "earnings"];
+const PROBE_CAPABILITIES = ["market", "financials", "earnings", "comp_peers"];
 
 function isLiveProbeSource(source: string) {
   return PROBE_CAPABILITIES.some((capability) => source.startsWith(`${capability}:`));
@@ -132,7 +133,12 @@ export async function buildStatusSnapshot(userId = "local") {
           ? capabilityStatus("earnings", "日历源")
           : { status: "limited" as const, detail: "未配置 FINNHUB_API_KEY；仅剩无写入方的 postgres 缓存" })
       },
-      { id: "comp_peers", name: "同业可比", status: "limited" as const, detail: "未接通：无同业适配器（P1 待办）" }
+      {
+        id: "comp_peers", name: "同业可比",
+        ...(hasFinnhub
+          ? capabilityStatus("comp_peers", "同业源")
+          : { status: "limited" as const, detail: "未配置 FINNHUB_API_KEY；同业发现与倍数均不可用" })
+      }
     ],
     evidenceBacklog: [
       { id: "financial_snapshots", label: "财报三表与估值倍数", priority: "P0", providers: ["FMP", "Intrinio"] },

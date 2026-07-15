@@ -130,6 +130,15 @@ export function buildFactsRegistry(sources = {}) {
     pushAmount(registry, fin.freeCashFlow, cur, "自由现金流", "financialsData");
     pushAmount(registry, fin.operatingCashFlow, cur, "经营现金流", "financialsData");
     pushAmount(registry, fin.cashAndEquivalents, cur, "现金及等价物", "financialsData");
+    // netCash was missing while netDebt was registered — but the pipeline builds
+    // `netCash` (research.ts toDomainSources), the prompt's financial block prints
+    // it, and the hkFilings branch below already registers 净现金（一手）. A number
+    // we hand the model but never register is guaranteed to be flagged: real AAPL
+    // backtest had the model faithfully cite our own "净现金 -483.83 亿美元", which
+    // then matched the nearest *other* fact (毛利 +54.78 亿) and was judged 符号相反
+    // → hard, 3 times in one answer. Same F-4a lesson noted below: anything the
+    // fact block exposes must be registered before it can be cited.
+    pushAmount(registry, fin.netCash, cur, "净现金", "financialsData");
     pushAmount(registry, fin.netDebt, cur, "净债务", "financialsData");
     pushAmount(registry, fin.dividendPaid, cur, "分红", "financialsData");
     pushAmount(registry, fin.repurchaseOfStock, cur, "回购金额", "financialsData");
