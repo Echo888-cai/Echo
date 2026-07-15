@@ -47,6 +47,54 @@ export async function fetchFinnhubCalendar(symbol: string): Promise<ProviderEnve
   };
 }
 
+export interface LastReportedEarnings {
+  date: string | null;
+  quarter: number | null;
+  year: number | null;
+  epsEstimate: number | null;
+  epsActual: number | null;
+  epsSurprisePct: number | null;
+}
+
+/**
+ * Finnhub free-tier /stock/earnings — the last reported quarters (EPS actual vs
+ * estimate plus Finnhub's own surprisePercent). This is the only free endpoint
+ * that can fill earnings_calendar's `last_*` columns; the /calendar/earnings
+ * envelope above only ever carries the *next* date and estimate. The payload has
+ * no revenue fields at all, so revenue actual/estimate stay null — they are not
+ * derivable from another 口径 without fabricating (红线 2). surprisePercent is
+ * taken verbatim from the provider, never recomputed locally.
+ */
+export async function fetchFinnhubLastReported(symbol: string): Promise<ProviderEnvelope & { lastReported: LastReportedEarnings | null }> {
+  const apiKey = process.env.FINNHUB_API_KEY;
+  if (!apiKey) throw new Error("FINNHUB_API_KEY not configured");
+  const url = `https://finnhub.io/api/v1/stock/earnings?symbol=${encodeURIComponent(symbol)}&limit=4&token=${apiKey}`;
+  const response = await fetch(url, { signal: AbortSignal.timeout(6_000) });
+  if (!response.ok) throw new Error(`finnhub stock/earnings ${response.status} for ${symbol}`);
+  const body: any = await response.json();
+  if (body?.error) throw new Error(`finnhub stock/earnings error for ${symbol}: ${body.error}`);
+  const rows = Array.isArray(body) ? body : [];
+  // Entries are quarterly; `period` is the quarter-end date. Only rows with a
+  // reported actual count as "已报告" — a future quarter shows up with
+  // actual: null and must not be mistaken for a print.
+  const latest = rows
+    .filter((row: any) => typeof row?.period === "string" && typeof row.actual === "number")
+    .sort((a: any, b: any) => b.period.localeCompare(a.period))[0];
+  if (!latest) return { providerStatus: "missing" as const, source: "finnhub", lastReported: null };
+  return {
+    providerStatus: "ok" as const,
+    source: "finnhub",
+    lastReported: {
+      date: latest.period,
+      quarter: typeof latest.quarter === "number" ? latest.quarter : null,
+      year: typeof latest.year === "number" ? latest.year : null,
+      epsEstimate: typeof latest.estimate === "number" ? latest.estimate : null,
+      epsActual: latest.actual,
+      epsSurprisePct: typeof latest.surprisePercent === "number" ? latest.surprisePercent : null
+    }
+  };
+}
+
 export const finnhubCalendarAdapter: CalendarPort = {
   id: "finnhub",
   authorization: {

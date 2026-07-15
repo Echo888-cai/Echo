@@ -56,7 +56,7 @@ crates/finance-core   十进制定点金融数值内核
 ### 未接通（按优先级，对应第 5 节路线图）
 
 - **网页证据层**：无搜索适配器。"证据优先"定位当前最大的名不副实处，P3 头号项。
-- **earnings_calendar 无写入方**：业绩复盘 workflow 跑在死数据上；需接 Finnhub `/stock/earnings`（提供上期实际值/预期/惊喜幅度）。
+- ~~earnings_calendar 无写入方~~（2026-07-15 已接通：`packages/application/src/earningsCalendar.ts` 镜像 compPeers 模式成为唯一写入方，研究链路取日历时 24h TTL 写穿；`last_*` 字段来自 Finnhub `/stock/earnings`（美股直连、港股经 ADR 映射，无 revenue 字段如实置 null）；真实回测 AAPL/0700.HK 落库、1234.HK 诚实 missing 不写脏行；业绩复盘 workflow 与 F-2 记分卡自此有活数据）。
 - **factGuard `full` 模式**：拦截+定向重答未实现，现等同 soft。
 - **历史估值分位**：美股可做（FMP 5 年年度 EPS + Yahoo 月度价格）；港股需先把 filing 回补到 ≥5 个财年。
 - **FCF / 财务质量红旗**：港股走"解析公司自报 FCF"路径（见第 6 节，不自行推导）；应收/存货字段需扩数据管道。

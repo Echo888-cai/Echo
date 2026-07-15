@@ -55,17 +55,6 @@ const ALLOWED = {
   "hkBuybackRepository.ts::getLatestHkBuybackFetchedAt":
     "回购新鲜度查询，留给 status 页真探测接入（#32 已接通写入与研究链路消费）",
 
-  // ⚠️ 已知真缺陷，非"等外部依赖"——本门禁上线时首次抓到，欠一个修复 PR。
-  // #28 接通的是 finnhub/hkAdr 两个**实时**适配器（供 getNextEarnings），这张 postgres
-  // 缓存表始终没拿到写入方；表里现存的行是某个已删除的临时脚本写的，永不刷新。
-  // 影响面：postgresCalendarAdapter 沦为永远返回 missing 的空壳；worker 的
-  // loadEarningsReviewCandidates → listWithLastReported() 让**整个业绩复盘 workflow
-  // 跑在死数据上**；F-2 的 postEarnings/epsBeatRate 拿不到 last_* 字段，永远为 null。
-  // 修复需要一个提供"上期已报告实际值/预期/惊喜幅度"的源（finnhub /stock/earnings），
-  // 现有 calendar 信封只有 nextDate/quarter/year/epsEstimate，给不了 last_*。属 P1 规模。
-  "earningsCalendarRepository.ts::upsertEarningsCalendar":
-    "真缺陷：这张缓存表无写入方，业绩复盘 workflow 与 F-2 都跑在冻结脏数据上。修复需接 last-reported 源（finnhub /stock/earnings），见 docs/PLAN.md P1",
-
   // ── 以下为 2026-07-15 门禁上线时的存量，逐个人工核实过零调用。都不是"接漏了"，
   //    而是功能未建/已被更好的实现取代。一次性删除属策略里的"大规模代码删除"，
   //    需单独 PR 并先问过用户，故此处先记账。
