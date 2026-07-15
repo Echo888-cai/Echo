@@ -37,15 +37,16 @@ const liveQuoteAdapters: QuotePort[] = [
   yahooQuoteAdapter,
   ...(process.env.ALPHAVANTAGE_API_KEY ? [alphaVantageQuoteAdapter] : [])
 ];
-const fundamentalsAdapters: FundamentalsPort[] = [
-  postgresFundamentalsAdapter,
-  ...(process.env.FMP_API_KEY ? [fmpFundamentalsAdapter] : [])
-];
+// External (third-party, network-calling) adapters are kept in their own arrays
+// so the canary can probe exactly them: probing the postgres cache/first-party
+// adapters would measure our own database, not a supplier's real availability,
+// and a green "financials" row backed by a cache read would be the same
+// decorative status the real-probe canary exists to kill (docs/PLAN.md P1).
+const externalFundamentalsAdapters: FundamentalsPort[] = process.env.FMP_API_KEY ? [fmpFundamentalsAdapter] : [];
+const fundamentalsAdapters: FundamentalsPort[] = [postgresFundamentalsAdapter, ...externalFundamentalsAdapters];
 const filingsAdapters: FilingsPort[] = [postgresFilingsAdapter];
-const calendarAdapters: CalendarPort[] = [
-  ...(process.env.FINNHUB_API_KEY ? [finnhubCalendarAdapter, hkAdrCalendarAdapter] : []),
-  postgresCalendarAdapter
-];
+const externalCalendarAdapters: CalendarPort[] = process.env.FINNHUB_API_KEY ? [finnhubCalendarAdapter, hkAdrCalendarAdapter] : [];
+const calendarAdapters: CalendarPort[] = [...externalCalendarAdapters, postgresCalendarAdapter];
 
 export interface Routed<T> {
   result: T;
@@ -137,4 +138,16 @@ export async function getNextEarnings(ticker: string, opts: SelectOptions = {}):
 /** Read-only view of the registered live quote adapters, for the canary probe script. */
 export function listLiveQuoteAdapters(): QuotePort[] {
   return liveQuoteAdapters;
+}
+
+/** Registered third-party fundamentals adapters (excludes the first-party
+ *  filing-backed postgres adapter), for the canary probe script. */
+export function listExternalFundamentalsAdapters(): FundamentalsPort[] {
+  return externalFundamentalsAdapters;
+}
+
+/** Registered third-party calendar adapters (excludes the postgres cache),
+ *  for the canary probe script. */
+export function listExternalCalendarAdapters(): CalendarPort[] {
+  return externalCalendarAdapters;
 }

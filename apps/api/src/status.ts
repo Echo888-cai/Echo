@@ -8,8 +8,39 @@ const sourceLabels: Record<string, string> = {
   web_evidence: "网页证据层", hk_filing: "港股一手 filing", valuation: "估值链路",
   earnings: "财报日历", comp_peers: "同业可比",
   "market:yahoo-chart": "行情 · Yahoo", "market:finnhub": "行情 · Finnhub",
-  "market:twelvedata": "行情 · Twelve Data", "market:alphavantage": "行情 · Alpha Vantage"
+  "market:twelvedata": "行情 · Twelve Data", "market:alphavantage": "行情 · Alpha Vantage",
+  "financials:fmp": "财务 · FMP", "earnings:finnhub": "财报日历 · Finnhub",
+  "earnings:hk-adr-finnhub": "财报日历 · Finnhub（港股 ADR 映射）"
 };
+
+/** Capability prefixes packages/data-plane/src/canary.ts actually writes today,
+ *  as `${capability}:${adapter.id}`. canary_runs still holds bare-capability rows
+ *  ("news", "web_evidence", "comp_peers", "market"…) written by a retired canary
+ *  implementation that no longer exists: nothing will ever refresh them, so the
+ *  settings panel rendered a permanent ✓ 最近成功 for 网页证据层 and 同业可比 —
+ *  capabilities with no adapter at all — under a header promising 状态来自真实数据
+ *  调用. Same frozen-dirty-data shape as the earnings_calendar rows in docs/PLAN.md
+ *  P1; drop them from the health view rather than present them as live truth. */
+const PROBE_CAPABILITIES = ["market", "financials", "earnings"];
+
+function isLiveProbeSource(source: string) {
+  return PROBE_CAPABILITIES.some((capability) => source.startsWith(`${capability}:`));
+}
+
+/** getSourceHealthSummary() runs raw SQL whose window-function columns come back
+ *  as postgres' own text rendering ("2026-07-15 10:02:37.254059+08") instead of
+ *  Date objects. The web's notifWhen() feeds that to Date.parse, which rejects a
+ *  space separator and a 2-digit UTC offset (`+08`, not `+08:00`) — it returned
+ *  NaN for every row, so every "最近成功 {time}" rendered with the time silently
+ *  missing. Normalize at this boundary (where the non-ISO strings originate)
+ *  rather than loosening the shared formatter for everyone. */
+function toIsoTimestamp(value: unknown): string | null {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+  const normalized = String(value).replace(" ", "T").replace(/([+-]\d{2})$/, "$1:00");
+  const ms = Date.parse(normalized);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
 
 function positiveNumber(name: string, fallback: number) {
   const value = Number(process.env[name]);
@@ -29,8 +60,11 @@ async function usageStatus(userId: string) {
 }
 
 export async function buildStatusSnapshot(userId = "local") {
+  // These gate *which cards can have probe rows at all* (registry.ts only
+  // registers an adapter when its key is set, so an unset key means no probe
+  // ever ran — distinct from "probed and failed"). They never decide "ok".
   const hasFmp = Boolean(process.env.FMP_API_KEY);
-  const hasNews = Boolean(process.env.FINNHUB_API_KEY || process.env.ALPHAVANTAGE_API_KEY || process.env.TWELVEDATA_API_KEY);
+  const hasFinnhub = Boolean(process.env.FINNHUB_API_KEY);
   const hasWebSearch = Boolean(process.env.TAVILY_API_KEY || process.env.SERPAPI_API_KEY);
   let canaryHealth: Record<string, unknown>[] = [];
   let canaryBatchId: string | number | null = null;
@@ -39,11 +73,14 @@ export async function buildStatusSnapshot(userId = "local") {
   let factGuard: Record<string, unknown> | null = null;
   let usage: Record<string, unknown> = {};
   try {
-    canaryHealth = (await getSourceHealthSummary()).map((row: any) => ({
-      source: row.source, label: sourceLabels[row.source] || row.source, latestStatus: row.latest_status,
-      latestDetail: row.latest_detail, latestCheckedAt: row.latest_checked_at, lastSuccessAt: row.last_success_at,
-      lastFailureDetail: row.last_failure_detail, lastFailureAt: row.last_failure_at
-    }));
+    canaryHealth = (await getSourceHealthSummary())
+      .filter((row: any) => isLiveProbeSource(String(row.source)))
+      .map((row: any) => ({
+        source: row.source, label: sourceLabels[row.source] || row.source, latestStatus: row.latest_status,
+        latestDetail: row.latest_detail, latestCheckedAt: toIsoTimestamp(row.latest_checked_at),
+        lastSuccessAt: toIsoTimestamp(row.last_success_at),
+        lastFailureDetail: row.last_failure_detail, lastFailureAt: toIsoTimestamp(row.last_failure_at)
+      }));
     canaryBatchId = await getLatestBatchId();
   } catch { /* empty or unavailable diagnostics degrade honestly */ }
   try { hkFilingCoverage = await getHkFilingCoverage(); } catch { /* same */ }
@@ -57,24 +94,45 @@ export async function buildStatusSnapshot(userId = "local") {
     configured: Boolean(process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.MODEL_API_KEY),
     providers: ["deepseek", "openai", "anthropic", "generic"].filter((id) => Boolean(process.env[`${id.toUpperCase()}_API_KEY`]))
   };
-  // Market status comes from real canary probes (packages/data-plane/src/canary.ts
-  // calling each live quote adapter's fetchQuote against a real ticker), not a
-  // decorative env-key check — "configured but the probe fails" must be visible,
-  // not silently reported as "ok" (docs/PLAN.md P1 "canary 真探测").
-  const marketCanary = canaryHealth.filter((row) => String(row.source).startsWith("market:"));
-  const marketStatus = marketCanary.some((row) => row.latestStatus === "ok") ? "ok" as const : "limited" as const;
-  const marketDetail = marketCanary.length
-    ? `${marketCanary.filter((row) => row.latestStatus === "ok").length}/${marketCanary.length} 行情源探测成功`
-    : "尚未跑过 canary 探测（npm run canary）";
+  // Every card below is derived from real canary probes
+  // (packages/data-plane/src/canary.ts calls each registered external adapter
+  // against a real ticker), never from `Boolean(process.env.X_API_KEY)` —
+  // "configured but the probe fails" must be visible, not silently reported as
+  // "ok" (docs/PLAN.md P1 "canary 真探测"). A capability with no adapter at all
+  // says so rather than borrowing a sibling's env key as proof of life.
+  const capabilityStatus = (capability: string, noun: string) => {
+    const rows = canaryHealth.filter((row) => String(row.source).startsWith(`${capability}:`));
+    if (!rows.length) return { status: "limited" as const, detail: "尚未跑过 canary 探测（npm run canary）" };
+    const okRows = rows.filter((row) => row.latestStatus === "ok");
+    const failed = rows.filter((row) => row.latestStatus !== "ok").map((row) => sourceLabels[String(row.source)] || String(row.source));
+    return {
+      status: okRows.length > 0 ? "ok" as const : "limited" as const,
+      detail: `${okRows.length}/${rows.length} ${noun}探测成功${failed.length ? `；未通过：${failed.join("、")}` : ""}`
+    };
+  };
   return {
     sources: [
-      { id: "market", name: "港美股行情", status: marketStatus, detail: marketDetail },
-      { id: "financials", name: "财务数据", status: hasFmp ? "ok" as const : "limited" as const, detail: hasFmp ? "FMP 已配置；一手 filing 交叉验证" : "一手 filing 为主，标准化三表覆盖有限" },
-      { id: "news", name: "新闻舆情", status: hasNews ? "ok" as const : "limited" as const, detail: hasNews ? "新闻供应商已配置" : "公开新闻源有限" },
-      { id: "web_evidence", name: "网页证据层", status: hasWebSearch ? "ok" as const : "limited" as const, detail: hasWebSearch ? "可信搜索证据已配置" : "公开证据检索有限" },
+      { id: "market", name: "港美股行情", ...capabilityStatus("market", "行情源") },
+      {
+        id: "financials", name: "财务数据",
+        ...(hasFmp
+          ? capabilityStatus("financials", "财务源")
+          : { status: "limited" as const, detail: "未配置 FMP_API_KEY；港/A 股由一手 filing 覆盖，美股标准化三表缺失" })
+      },
+      // No news adapter exists anywhere in the repo. The old card read the
+      // FINNHUB/ALPHAVANTAGE/TWELVEDATA keys — which are registered for *quotes*
+      // only — and reported 新闻舆情 as "ok": exactly the 配置剧场 red line 2 forbids.
+      { id: "news", name: "新闻舆情", status: "limited" as const, detail: "未接通：仓库内无新闻适配器（P1 待办）" },
+      { id: "web_evidence", name: "网页证据层", status: "limited" as const,
+        detail: hasWebSearch ? "已配置搜索密钥，但适配器尚未接通（P1 待办）" : "未接通：无搜索适配器，且未配置 TAVILY/SERPAPI 密钥" },
       { id: "filings", name: "公告数据", status: "ok" as const, detail: "HKEX、CNINFO、SEC 一手公告管道" },
-      { id: "earnings", name: "财报日历", status: hasNews ? "ok" as const : "limited" as const, detail: hasNews ? "财报日历已配置" : "未配置日历供应商" },
-      { id: "comp_peers", name: "同业可比", status: hasNews ? "ok" as const : "limited" as const, detail: hasNews ? "同业数据已配置" : "同业自动匹配有限" }
+      {
+        id: "earnings", name: "财报日历",
+        ...(hasFinnhub
+          ? capabilityStatus("earnings", "日历源")
+          : { status: "limited" as const, detail: "未配置 FINNHUB_API_KEY；仅剩无写入方的 postgres 缓存" })
+      },
+      { id: "comp_peers", name: "同业可比", status: "limited" as const, detail: "未接通：无同业适配器（P1 待办）" }
     ],
     evidenceBacklog: [
       { id: "financial_snapshots", label: "财报三表与估值倍数", priority: "P0", providers: ["FMP", "Intrinio"] },

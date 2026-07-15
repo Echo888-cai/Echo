@@ -5,7 +5,11 @@ import tseslint from "typescript-eslint";
 
 /** Correctness rules for the TypeScript workspaces and Node.js domain modules. */
 export default [
-  { ignores: ["node_modules/**", "**/dist/**", "coverage/**", "playwright-report/**", "test-results/**", "packages/finance-native/index.cjs", "packages/finance-native/index.d.ts"] },
+  // .claude/** holds agent git worktrees — full repo checkouts, each with its
+  // own tsconfig.json. They're gitignored but were not eslint-ignored, so
+  // `npm run lint` (a release gate) walked into them and failed every
+  // TS file with "multiple candidate TSConfigRootDirs are present".
+  { ignores: [".claude/**", "node_modules/**", "**/dist/**", "coverage/**", "playwright-report/**", "test-results/**", "packages/finance-native/index.cjs", "packages/finance-native/index.d.ts"] },
   js.configs.recommended,
   {
     files: ["apps/web/public/sw.js"],

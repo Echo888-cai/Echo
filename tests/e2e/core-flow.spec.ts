@@ -33,9 +33,13 @@ test("research → follow → portfolio → notification works through the final
   await page.getByRole("link", { name: "看盘", exact: true }).click();
   await expect(page).toHaveURL(/\/watch/);
   await expect(page.locator(".wd-ticker", { hasText: "0700.HK" })).toBeVisible({ timeout: 10_000 });
+  // Scope to 0700.HK's own card: the desk is watchlist ∪ 持仓 ∪ 公司画像, so any
+  // extra researched company puts another 移出关注 button on the page and an
+  // unscoped locator dies on strict mode — and would remove the wrong company.
+  const tencentCard = page.locator(".wl-item", { has: page.locator(".wd-ticker", { hasText: "0700.HK" }) });
   await Promise.all([
     page.waitForResponse((res) => res.url().includes("watch.untrack") && res.ok()),
-    page.getByRole("button", { name: /移出关注/ }).click()
+    tencentCard.getByRole("button", { name: /移出关注/ }).click()
   ]);
   await page.reload();
   await expect(page.locator(".wd-ticker", { hasText: "0700.HK" })).not.toBeVisible({ timeout: 10_000 });
