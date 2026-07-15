@@ -147,6 +147,49 @@ npm run db:recovery-drill
 - [x] R7 记分卡/画像/监控闭环接回（`researchReview` + `portraitRules` + F-3 基本面证伪线）：全仓库扫描 28 个 repository 的写入函数，找出"有 schema、有 repository、有 upsert，就是没人调"的冻结表。查明根因不是"没建好"而是**被删掉了**——`research_snapshots` 里存着 2026-07-11/13 的真实数据（带 session_id 和价格），`git log -S` 定位到 #27 终局迁移重建底盘时，把 `persistResearch` 的几个副作用连同覆盖它们的测试（旧 `tests/research-scorecard.test.mjs`）一起删了，测试没了所以两个月无人报警。本轮接回三条链路，均经真实模型调用逐字段核对落库：①**R7 记分卡**——`research.scorecard` 端点一直在读快照但没有写入方，命中率永远对着零条快照算；快照按原设计的"建档/判断变化"节奏落（不是每轮都落，否则同一判断被复制几十份一起成熟、挤进命中率分母），新增迁移 `0005` 的 (user,ticker,valid_time) 唯一索引。②**研究→监控闭环**——`replaceFalsifierRules` 零调用，导致 worker 的 `checkFalsifiers` 一直对着零条规则空跑、盘前速报永远播报"当前有 0 条有效监控条件"，证伪告警整体静默失效。③**画像的估值带与证伪条件**——`upsertCompanyProfile` 一直支持 falsifiers/valuation 字段但没人传，画像 markdown 那两节从来渲染不出来（估值明明已在 ctx 里算好）。**F-3 基本面证伪线**同步接回：域层的白名单校验/剥离/评估代码全在，缺的是提示词指令（随旧底盘丢失，已从 `ce58d27:src/prompts.js` 取回原文）、抽取接线与 worker 巡检；`evaluateRule` 对 `fundamental_*` 规则一律返回 `sane:false`（它就地拦截防止拿毛利率阈值当股价比），故这类规则过去登记了也永远不会被触发，现由 `evaluateFundamentalRule` + 新导出的 `financialsDataFor` 走同一份 `financialsData` 口径核对。真实回测：`FALSIFIERS_JSON` 在正文出现 0 次（剥离成功），3 条规则带真实指标落库，造一条必然触线的规则验证推送带当期实测值（"毛利率跌破60%（当前 55.7）"）且 `last_triggered_at` 写入。过程中修了 6 个真实 bug：①**主线自我复制**——`thesis: panel.oneLineView` 而 `oneLineView = profile?.thesis || 兜底句`，主线写回自己，一旦建档就永远冻结、新研究再也改不动；改用 `extractThesisFromAnswer(content)` 后，存的从"腾讯是中国互联网生态核心公司…"（复制粘贴的兜底句）变成"腾讯当前处于'利润质量高但增长停滞'的稳态"（本轮研究的真实判断）。②**提取器正则对不上 composer**——正则锚定 `^#{0,3}` 但模型实际吐的是 `**我的判断**`（粗体），开头的 `**` 直接让匹配失败；只改标题名不够，第一次修完真跑仍写入空快照才定位到，不做真实验证的话接线会"成功"写入一堆空主线，比表空着更难发现。③**差点写出的破坏性 bug**——`replaceFalsifierRules` 先删后插，而真实证伪条件绝大多数是基本面口径、`parseFalsifierRules` 会正确拒绝并返回空数组，拿空数组去调它会把已有盯盘规则全删光；新增 `kinds` 范围限定，价格线与基本面线各自只替换自己 kind 的规则。④**引导语被当成证伪条件**——"以下事实出现任意一项，即需重估…："被收成第一条假证伪线（"非列表项就停"只在已收集到条目后才生效）。⑤**freeCashFlow 是哑指标**——filing schema 没有 capex 列，FCF 根本算不出来，`financialsData.freeCashFlow` 恒为 undefined，这类规则永远不会触发却让用户以为在盯；真实回测里模型还把它当比率用（0.8=现金流/净利润），已移出白名单与提示词，等 capex 有真实来源再加回。⑥**threshold 为 null 恒真误报**——`currentValue >= null` 被 JS 强制成 `>= 0`，任何 `fundamental_above` 规则无条件触发。另修 `scorecardFor` 漏传 `earningsRow`（F-2 的 postEarnings/epsBeatRate 恒为 null，而 earnings_calendar 自 #28 起早有真实数据）与 `markTriggered` 零调用（`last_triggered_at` 恒为 null）。新增两个回归测试文件锁住"不报错、只是永远不生效"的契约（小标题三代格式、JSON 行泄露、白名单外指标硬凑、回购口径纪律）。仍待做：证据覆盖率/引用可打开率/结论可追溯率评分（依赖 P1 未接通的网页证据源）。
 - [x] 港股回购接回研究链路（`hk_buybacks` 由"写而不读"变为真实事实源）：`hkFilingsPipeline` 一直在采 HKEX 翌日披露报表（腾讯已有 29 条真实场内购回记录），但全仓库没有任何读取方——数据白采半年，而同一份提示词里 composer 还在对模型说"回购分红口径还没核到，股东回报判断暂为低置信度"，真实回测中模型原话正是"当前财报未披露回购具体金额"。这是 P1/P2 那批冻结表的镜像问题（那些是读而不写，这个是写而不读）。新增域层纯函数 `hkBuybackToPrompt`（移植自 `ce58d27:src/financialData.js` 的 `hkBuybackToMarkdown`，保留两条口径纪律：只统计已成交的场内购回、不含未执行授权额度；已发行股份只给"逐次披露间的粗线趋势"并明说购回注销有滞后，不是即时净股本），经 `answerComposition.ts` 的 `buybacksToPrompt` 端口注入 composer。同步修了那句会谎报的缺口提示——一份提示词里既给真实购回数据、又声明它未核到，等于教模型忽略整个事实块。真实模型回测：同一问题的回答从"当前财报未披露回购具体金额"变为"根据HKEX翌日披露报表，2026年3月26日至7月8日期间累计场内购回24,195,700股，总代价约109.58亿港元，占已发行股份约0.27%，且已发行股份数量呈下降趋势"——股数/金额/比例/区间/股本趋势与喂入的事实块逐项一致，零编造。非港股诚实输出"未核到"，不让模型把"我们没接这个源"读成"这家公司没回购"。
 
+#### 2026-07-15 数据可得性勘察（真读财报 PDF / 真调数据源换来的结论，下次从这里起步，勿重新推导）
+
+三个"看起来只差接线"的候选，实测都卡在数据本身。记在这里是因为**它们都长得像能做**，
+不写下来下个 session 会重新推一遍，或者更糟——直接开做然后产出自信的错数字。
+
+- [ ] **A/H 双重上市 / ADR 溢价**：`composerContext.dualListing`/`dualQuote` 一直传 null，
+  但**不是接上就行**，两个坑：
+  ①`answerComposer` 里那句"基本面/估值一律按美股 ADR 口径（**数据更全**）"写于港股财务恒空的年代，
+  现在我们有自己的一手 filing 管道（比 ADR 准），照原样接等于让模型舍弃最好的数据——**接之前必须先改这句**。
+  ②溢价计算需要**每家的 ADR 比例**，而 `hkAdr.ts` 的映射表只有代码、没有比例。实测：
+  腾讯 474.00 HKD×0.1276=60.48 USD vs TCEHY 58.34 → 约 **1:1**；阿里 113.40 HKD×0.1276=14.47 USD
+  vs BABA 112.32 → 约 **1:8**。**每家不同**，不带比例直接算，阿里会显示"溢价 676%"。
+  从价格反推是推断不是核实（7.76 应该 round 成 8 吗？真实是 7.5 就永远错 6%），
+  必须像映射表当初那样逐条人工核实（去存托银行/官方披露），9 条，有界但要认真做。
+
+- [ ] **capex → freeCashFlow（点亮 valuation.js 的 FCF Yield + DCF）**：先做范围修正——
+  三个字段里**只有 capex 有价值**：`bookValue` 点亮不了任何东西（PB 方法读的是 `company.pb`，
+  且只对金融业生效，而 #31 之后 `company` 只传 `{ticker,currency,sector}`，`company.pb` 恒为 undefined；
+  JSDoc 里的 `opts.bookValue` 是幽灵参数）；`totalDebt` 只在 `netCash` 缺失时兜底，而 filing 已直接给 `netCash`。
+  加这两个字段等于新造没人消费的冻结列。
+  **但 capex 在港股 filing 里不可靠提取**（真读 0700/0857 三份 PDF 确认）：
+  ①简明现金流量表只给"投資活動耗用淨額"（腾讯 -10,560、中石油 -265,705），那是投资净额，混着
+  投资/处置/理财，**不是 capex**；②唯一的"資本開支"在非 GAAP 摘要表里，**列数每份都变**
+  （腾讯季报 3 列、年报 5 列），且是**权责制**不是现金支付；③那张表**本期在首列**，而解析器的
+  `pick()` 注释写的是"首列=去年同期、末列=本期"——顺序相反，照抄会把一年前的数当本期。
+  ④**口径根本对不上**：腾讯自己写 FCF 567 億 = OCF 1,014 − 資本開支付款 370 − **媒體內容 59**
+  − **租賃負債 18**。按 `OCF−capex` 算得 644 億，**差 14%**；每家定义还不一样。
+  ⑤**4 倍陷阱**：567 億是单季，而 FCF Yield 用 `freeCashFlow/sharesOutstanding` 直接推目标价，
+  季度数当年度用则估值带整体偏 4 倍——与已修的 EPS 年化 bug（Q1 eps 反推出 70x PE）同一类。
+  **推荐路径**：不自己推导，改为解析**公司自报的 FCF**（"自由現金流為人民幣 567 億元"）——
+  一手事实、公司自己背书、分析师也引这个数，比用一个公司不认的定义去推更站得住；
+  但必须处理正文散文解析（脆）、億/百萬单位混用、季度→年化（照搬 `epsAnnualized: false` 的诚实标记）。
+
+- [ ] **历史估值分位（`historical_valuation` + `historicalValuation.js` 接回）**：
+  **纠正此前"必须先有历史 PE 序列源、需要花钱"的判断——价格那一半是免费的**。
+  `yahooQuoteAdapter` 用的 chart 接口本来就给历史：实测 `range=5y&interval=1mo` 对
+  0700.HK / 600519.SS / AAPL **都返回 61 个月度点**（2021-08~2026-07），无需密钥
+  （注意其 `authorization.commercialUseAllowed=false`，商用前要换源）。
+  **真瓶颈是 EPS 深度**：`computeHistoricalValuationPercentile` 要的是**年度**序列（`sampleYears`），
+  而 `hk_financials`/`cn_financials` 每只票只有 1-3 期（腾讯 3 期 ≈ 半年）。故：
+  **美股现在就能做**（FMP `stable` income-statement 给 5 年年度 EPS + Yahoo 给价格）；
+  **港股/A股要先把 filing 管道回补几年**。讽刺的是能做的是商品化的美股，护城河所在的港股反而卡住。
+
 退出指标：关键数字证据覆盖率 ≥ 95%；已知严重数字错误率 < 0.1%；首 token 时间 < 3s；研究回答中"未核到"来自真实探测而非未接线。
 
 ### P3 · 投资研究工作流与留存
