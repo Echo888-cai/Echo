@@ -1,25 +1,25 @@
-# Echo Research 产品计划与验收底账
+# Echo Research 产品计划与架构底账（v3）
 
-> 更新于 2026-07-15。本文是仓库唯一计划文档，取代 2026-07-13 版本；旧版的红线、架构与门禁已吸收进来，旧版第 3 节"架构换血完成底账"因与代码实况不符而废止，以本文第 3 节诊断底账为准。生产切流仍须本地验收、GitHub 必需检查和发布演练全部通过并由负责人批准。
->
-> **2026-07-15 架构审计**：P0 全部清零、P1/P2 主体完成（余项见各节 `[ ]`），诊断底账 13 条中 12 条已闭环。据此重写第 5 节 P3 之后的路线图——剩余工作按商业化护城河重排为 P3（证据与数据资产收口）→ P4（留存工作流）→ P5（发布准备与商业化），原 P3/P4 条目全部吸收、无删失；护城河判定新增为第 6 节，作为后续取舍准绳。
+> 更新于 2026-07-15。本文是仓库唯一计划文档，取代所有旧版本，可独立阅读，不需要任何前情。
+> 定位调整：**只做美股与港股，核心研究对象是两地科技股；A 股退场**（退场步骤见第 5 节 P3 第一项）。
+> 历史修复过程与排查记录不再保留在本文——可复用的结论已固化为第 6 节数据可得性事实表与第 7 节发布门禁；需要考古时看 git log 与已合并 PR。
 
-## 1. 产品目标与永久红线
+## 1. 产品定位与永久红线
 
-Echo Research 是面向港股、美股与 A 股价值投资者的证据优先 AI 研究台。北极星不是回答数量，而是让用户更快形成可复核、可持续追踪、能被新证据推翻的投资判断。
+Echo Research 是面向美股与港股价值投资者的证据优先 AI 研究台。北极星不是回答数量，而是让用户更快形成可复核、可持续追踪、能被新证据推翻的投资判断。
 
 永久红线：
 
-1. 不给买卖指令，只输出研究判断、监控条件和风险检查点。
-2. 不编数字；取不到就明确显示"未核到"，近似口径必须标注。
+1. 不给买卖指令，正反向措辞都算（"不建议追高买入"也是买卖指令）；只输出研究判断、监控条件和风险检查点，用"赔率偏低/偏高"类纯研究语言。
+2. 不编数字；取不到就明确显示"未核到"，近似口径必须标注。不得用"我们没接这个源"冒充"这家公司没有这项数据"，反之亦然。
 3. 私有数据由应用层租户过滤和 PostgreSQL 强制 RLS 双重隔离。
-4. 金额、股数、比率与估值不使用二进制浮点：存储用 `NUMERIC`，计算用 Rust 十进制定点；展示边界之外新增浮点金融计算即违规。
-5. 密钥只存服务端环境；未获商用授权的数据源不得进入商用路径。
+4. 金额、股数、比率与估值不使用二进制浮点：存储用 `NUMERIC`，计算用 Rust 十进制定点（`@echo/finance-native`）；展示边界之外新增浮点金融计算即违规。
+5. 密钥只存服务端环境；未获商用授权的数据源不得进入商用路径（`packages/data-plane` 的 `authorization.ts` 强制执行）。
 6. 组合净值缺日即断口，不插值、不回填。
 7. UI 变更必须通过 375/768/1280 三档视口与双主题实跑。
 8. 数据变更必须可恢复；发布采用 expand-contract 与蓝绿方式。
-9. **（新增）端到端契约唯一**：tRPC procedure 的输入与输出都必须挂 zod schema（源在 `packages/contracts`）；前端不得读取契约之外的幻想字段，后端不得返回契约之外的私有形状。本轮排查证明"只校验输入不校验输出"必然导致前后端静默漂移。
-10. **（新增）用户显式删除必须终局生效**：删除/移除操作在任何缓存层（React Query、Service Worker、公司画像并集、后台任务）之后都不得复活；每类删除都要有对应的"删除→刷新→不复活" E2E。
+9. 端到端契约唯一：tRPC procedure 的输入与输出都必须挂 zod schema（源在 `packages/contracts`）；前端不得读取契约之外的字段，后端不得返回契约之外的形状。
+10. 用户显式删除必须终局生效：删除操作在任何缓存层之后都不得复活；每类删除都要有"删除→刷新→不复活"E2E。
 
 ## 2. 唯一运行架构
 
@@ -28,48 +28,127 @@ React/PWA ── tRPC + Hono SSE ── Hono API ── PostgreSQL
                                   │
                                   └── Temporal ── worker / filing / backup
 
-packages/domain       纯领域规则、答案与报告编排
+packages/domain       纯领域规则、答案与报告编排（不接触 IO）
 packages/application  研究用例编排
 packages/contracts    zod 契约单一源（输入 + 输出）
 packages/db           Drizzle、双时态财务仓库、强制 RLS
-packages/data-plane   授权感知的供应商适配器
+packages/data-plane   授权感知的供应商适配器（熔断 + 链式降级 + canary 真探测）
 packages/ui           品牌与组件
 crates/finance-core   十进制定点金融数值内核
 ```
 
-端与端之间只有 zod 契约；领域包不接触 IO；多步任务由 Temporal 提供可重放语义；结构化研究数据保留 valid time 与 knowledge time。仓库布局见 [architecture/repository-layout.md](architecture/repository-layout.md)。
+端与端之间只有 zod 契约；多步任务由 Temporal 提供可重放语义（本地不可达时降级为内联执行并诚实标注）；结构化研究数据保留 valid time 与 knowledge time。仓库布局见 [architecture/repository-layout.md](architecture/repository-layout.md)。
 
-架构骨架已经就位并真实工作的部分：Hono+tRPC 边界、会话认证与邀请、Postgres 限流、租户 `withTenant` + RLS 迁移、双时态 `market_snapshots`、行情唯一入口 `ensureFreshMarketSnapshot`（15 分钟新鲜窗、外源失败退回旧快照、核不到即 null）、研究会话与公司画像持久化、LLM 调用审计、Temporal workflow/schedule 定义、IaC。
+## 3. 能力现状（2026-07-15 审计）
 
-## 3. 现状诊断底账（2026-07-14 全链路排查）
+### 已接通且经真实数据端到端验证
 
-这是本计划的事实基础。旧版声称"架构换血完成、React/PWA 覆盖研究/关注/持仓/画像/通知/引导"，排查结论是：**骨架完成，但研究质量层、数据源层和看盘/持仓的可用性都存在真实断裂**。修复顺序即第 5 节路线图。
+- **行情**：多源适配器链（Finnhub → Twelve Data → Yahoo → Alpha Vantage）+ 熔断降级；唯一入口 `ensureFreshMarketSnapshot`（15 分钟新鲜窗、失败退旧快照、核不到即 null）。港股实际只有 Yahoo 一路真实覆盖（见第 6 节）。
+- **财务**：美股走 FMP `stable`（三表 + TTM 比率，含真实 trailing PE）；港股走一手 HKEX filing 解析管道（`hkFilingsPipeline`，含场内回购翌日披露）。
+- **财报日历**：美股 Finnhub；港股经人工核实的 HK→ADR 映射表（9 支，`hkAdr.ts`）查 ADR 日历。
+- **研究链路**：`answerComposer`（意图分类路由段落结构）+ `reportComposer`（深度报告与对话回答共享取数、分开渲染）+ 估值区间（`valuation.js`，bear/base/bull）+ 同业可比（`comp_peers`，24h TTL，倍数可比上限过滤离群值）。
+- **防幻觉**：`factGuard` 事实登记表交叉核对模型正文（shadow/soft 模式，审计写入 `fact_guard_audit`）；报表币种与报价币种分离；EPS 一律 TTM 年化后才允许反推 PE（`deriveAnnualEps`，缺数据标 `epsAnnualized: false` 并禁用相关方法）。
+- **证伪闭环**：研究落判断快照（R7 记分卡）→ `replaceFalsifierRules` 登记价格线与基本面线 → worker 巡检触发通知 → 业绩复盘 workflow 骨架。
+- **真流式**：`/api/ask` SSE 真实转发 provider delta（按 ~24 字符合并防止前端主线程阻塞），首 token < 3s；管线阶段事件驱动等待提示。
+- **红线兑现**：持仓盈亏/市值走 Rust 定点内核；通知偏好在 `insertNotification` 唯一咽喉处检查；SW 对 `/api/*`、`/trpc/*` network-only。
+- **门禁**：冻结表 CI 门禁 `check:frozen`（写入方零调用=表永远空；读取方零调用=数据白采，双向拦截）；契约输出 schema；删除闭环 E2E；canary 真探测驱动状态页（配置态不算存活证明）。
 
-### 3.1 已确认缺陷（按用户可感知程度排序）
+### 未接通（按优先级，对应第 5 节路线图）
 
-1. **看盘删不掉、必复活**：`watch.untrack` 只往 `watchlist_prefs` 写 `mode="hide"` 墓碑（`packages/db/src/repositories/watchlistRepository.ts:25`），但整个生产代码没有任何地方读 `getHiddenTickers`；同时 `watchDesk`（`apps/api/src/app.ts:158`）把 watchlist ∪ 持仓 ∪ **全部公司画像** 并集成卡片，而每跑一次研究就会 `upsertCompanyProfile`（`packages/application/src/research.ts:136`）。结果：研究过的公司永久出现在看盘，移除后 refetch 立即复活。
-2. **Service Worker 把所有同源 GET 做 cache-first 且永不失效**（`apps/web/public/sw.js:22`）：`/trpc/*` 查询和 `/api/*` GET 一旦被缓存就永远返回旧数据，缓存名 `echo-shell-v1` 从未升级。这是"持仓删了刷新又出现"的直接根因（删除 mutation 成功，但 refetch 被 SW 用旧响应应答），也让一切数据更新在装过 PWA 的浏览器里不可信。
-3. **看盘列表前后端契约漂移**：API 卡片返回 `{state, price, changePct, thesis, ...}`，前端 `WatchList.tsx` 读的是 `status`（值域还是 `at_risk` 而非 `atRisk`）、`priceStatus`、`market`、`held`、`spark`、`earnings`、`topEvent`——全部不存在。结果：价格列恒显示"—"，证伪状态恒为"逻辑还在"，港/美/A/持仓/预警筛选全部失效，迷你走势图恒空。`WatchCard` 在 `lib/api.ts:56` 是 `Record<string, any>`，typecheck 拦不住。
-4. **个股详情页契约漂移**：`watch.stock` 返回 `{company, profile, market, rules}`，前端 `StockDetail.tsx` 读 `series / fundamentals / events / watchRules`——价格曲线、基本面格子、事件流、证伪规则在详情页全部渲染为空。
-5. **数据源"配置剧场"**：`FMP_API_KEY / TAVILY_API_KEY / FINNHUB_API_KEY / ALPHAVANTAGE_API_KEY / TWELVEDATA_API_KEY / EODHD_API_KEY` 在全仓库只有 `apps/api/src/status.ts` 引用，且只用来把设置页显示成"已配置/ok"。没有任何适配器调用这些供应商；行情实际只有 `yahooQuoteAdapter` 一个源。`.env` 注释承诺的"Alpha Vantage → Twelve Data → Finnhub → Yahoo 兜底"和"FMP 解锁真实 EPS/FCF/forwardPE"均未实现。这就是"研究功能数据源接通有问题"的本体。
-6. **研究链路极浅**：`runResearch`（`packages/application/src/research.ts`）只拼"现价 + 港/A 本地财务表 + 既有画像主线"三行事实喂给一次 DeepSeek chat 调用，失败则回落到固定模板。美股财务恒为空数组；港/A 财务依赖 filing 工作流入库（本地 Temporal 未跑则同样为空）；无网页证据、无估值、无同业、无财报日历。`newsSnapshot: null`、`factGuard: null` 是硬编码。
-7. **领域层 ~3200 行核心资产大半是死代码**（2026-07-15 更新：已大幅收敛）：`answerComposer`（956 行）、`valuation`（462 行）、`factGuard`（488 行）、`reportComposer`、`compPeerRules`、`intentClassifier` 已在 P2 接回主链路；`portraitRules`、`researchReview`、`falsifyRules` 的结构化部分（F-3）已于 2026-07-15 接回（见第 5 节 P2 最后两条）。**仍无人调用**：`historicalValuation`（依赖尚无来源的历史 PE 序列）、`eventRules` 的新闻分类部分（`classifyNewsSeverity`/`dedupeSimilarNews`/`newsMentionsCompany`，依赖 P1 未接通的新闻源）、`risk`。前端 `AnswerCard.tsx`（787 行）期待的 `evidence / grounding / analyst / dualQuote / completeness` 等字段研究链路仍不产出（`valuation` 已接回并出图）。
+- **网页证据层**：无搜索适配器。"证据优先"定位当前最大的名不副实处，P3 头号项。
+- **earnings_calendar 无写入方**：业绩复盘 workflow 跑在死数据上；需接 Finnhub `/stock/earnings`（提供上期实际值/预期/惊喜幅度）。
+- **factGuard `full` 模式**：拦截+定向重答未实现，现等同 soft。
+- **历史估值分位**：美股可做（FMP 5 年年度 EPS + Yahoo 月度价格）；港股需先把 filing 回补到 ≥5 个财年。
+- **FCF / 财务质量红旗**：港股走"解析公司自报 FCF"路径（见第 6 节，不自行推导）；应收/存货字段需扩数据管道。
+- **港股 ADR 溢价**：需逐条人工核实 9 家 ADR 比例后才能接 `dualQuote`（见第 6 节）。
+- **两类通知不存在**：`position_alert`/`review_reminder` 设置页开关已标注"未接通"。
+- **AnswerCard 字段**：`evidence / grounding / analyst / dualQuote / completeness` 等待上述数据源。
+- **死代码待清账**：`risk.js`、`eventRules` 的新闻分类部分——随对应数据源接回，或明确移入 retired，不允许第三种状态。
+- **A 股全链路待删**：见 P3 第一项。
 
-   **这一批的共同教训（值得写进底账）**：这些资产不是"没建好"，多数是**建好后在 #27 终局迁移里被连同测试一起删掉了写入方**——代码、schema、repository、域测试全在，只是没人调，于是不报错、不告警，只是永远不生效。识别方法：对每个 repository 的写入函数扫全仓库调用点，零调用即"冻结表"；反向也要扫（`hk_buybacks` 是有写入方、没有读取方，采了半年没人用）。这类失效比崩溃难发现得多，接回时必须用真实数据端到端验证——`portraitRules` 的提取器正则曾与 composer 的小标题漂移到完全对不上，只改接线的话会"成功"写入一堆空值。
-8. **Temporal 是隐性硬依赖**：`reports.generate`（深度报告）和 `/api/hk-financials/ingest` 直连 Temporal（`apps/api/src/temporal.ts`），本地没有 Temporal server 时这两个入口直接失败，没有降级路径，也没有任何 UI 提示原因。
-9. **假流式**：`/api/ask` 的 SSE 是把同步算完的全文按 24 字符切片回放（`apps/api/src/rest-routes.ts:43`），首 token 等待时间等于全量生成时间，流式体验是装饰性的。
-10. **Rust 内核未接线**（2026-07-15 审计更新：已接线）：`apps/api/src/app.ts` 的持仓盈亏/市值/止损止盈距离已改走 `@echo/finance-native` 的 `multiplyDecimal/subtractDecimal/ratioDecimal`（带跨货币一致性检查）；估值链路的近似区间仍在展示边界内用 JS 浮点，属红线 4 允许的展示口径。
-11. **组合体检半空壳**：`portfolioReview`（`apps/api/src/app.ts:129`）的 `weights / marketExposure / sectorWeights` 硬编码为空，而前端有完整渲染代码——组合权重、市场暴露、行业集中度永远不显示。
-12. **引导进度硬编码**：`Onboarding.tsx:29` 的 `researched/watched/held` 全是 `false`，三步引导永远不会打勾。
-13. **门禁测不到以上任何一条**：E2E 只测"添加"从不测"删除"，不断言价格真实显示；tRPC 输出无 schema；canary 状态页展示的是 env 配置态而非真实探测。这是缺陷能全部漏网的结构性原因。
+## 4. 商业化护城河底账
 
-### 3.2 结论
+新需求与资源分配以此为准绳：投入优先流向护城河项，商品化能力只做到"够用且诚实"。
 
-产品的骨架（认证、租户、持久化、行情快照、页面框架）是真实的，但"证据优先的研究台"这一层——数据源、证据、估值、防幻觉——目前处于**未接线**状态，且三个核心页面（研究、看盘、持仓）各有一个用户立刻能撞上的可用性断裂。下一步不是加新功能，而是按 P0→P2 把已有资产接回主链路。
+**是护城河的（按强度排序）：**
 
-## 4. 发布门禁
+1. **港股一手数据管道与数据可得性 know-how**。实测证明 Finnhub/Twelve Data/FMP/Alpha Vantage 的免费与常规付费档对港股行情、财务、日历、同业全线"无权限/Premium/仅 ADR"。美股数据是商品（谁都能买 FMP），港股科技股（腾讯/阿里/美团…）只能靠一手 HKEX filing 解析、回购翌日披露、人工核实的 ADR 映射——"每份 PDF 列数都变、每家 FCF 定义都不同"这类脏活正是竞品不愿做的；第 6 节事实表本身就是排他性资产。
+2. **防幻觉工程栈**。factGuard 事实登记表 + 冻结表 CI 门禁 + "未核到"诚实语义 + 输出 zod 契约，构成"数字可核对的研究输出"——通用 LLM 包壳产品没有这一层，且它随每个已修误报持续变深。
+3. **证伪闭环与研究资产沉淀**。用户的判断历史、证伪规则与命中率是随时间增值且不可迁移的私有数据，是留存钩子也是数据飞轮。
+4. **双时态底座**（valid time + knowledge time）。"当时知道什么"可审计，是机构/合规场景的准入能力。
 
-### 本地与 CI 必须全部通过
+**不是护城河的（不追加超出"可用"的投入）：** 多源行情路由与熔断、美股基本面、PWA/UI 本身、模型调用与提示词模板。
+
+**商业化含义**：目标客群是美股与港股科技股的严肃个人投资者与小型机构；定价锚在"可审计的证据链与证伪跟踪"，不是"AI 问答"。最大商业化阻塞是港股行情唯一源 Yahoo 不可商用（见 P5 第一条）。
+
+## 5. 路线图（严格按 P3 → P5；P0–P2 已完成并合入 main）
+
+### P3 · 市场聚焦与证据收口
+
+**第一项：A 股退场（纯减法，先做完再做证据层）**
+
+A 股链路是港股链路的平行副本，删除不触碰港股/美股逻辑。按 expand-contract 分两个 PR：
+
+1. **下线 PR（可回滚）**：契约 `marketEnum` 收窄为 `["US","HK"]`；前端 `market.ts` 的 CN 识别、看盘 `cn` 筛选、详情页"A股"标签、组合"A股暴露"行下线；`research.ts` 的 `getCnFinancials` 分支与 `isFirstPartyFiling` 正则收窄为 `.HK`；worker 的 `cnFilingsPipeline.js`、`ingestCnFilings` activity 与 workflow 分支删除；data-plane 各适配器 `supports()` 与 `authorization.ts` 注释去 CN；status 页 CN filing 卡移除；测试基准票 `600519.SS` 全部换成 `0700.HK`/`AAPL`；`check:frozen` 的 ALLOWED 清账。
+2. **收缩 PR（破坏性，单独审批）**：`cn_financials`、`cn_filing_ingest_log` 备份后 DROP。
+3. **存量用户数据纪律**：用户看盘/持仓里已有的 `.SS`/`.SZ` 条目**不静默删除**（违反红线 10 的精神），UI 标注"已停止覆盖"，不再提供行情与研究；用户自行删除后按正常删除闭环处理。
+
+预估规模：约 600–800 行删除、20–25 个调用点修改、1 个破坏性迁移。
+
+**证据收口（护城河基建）**
+
+- 网页证据层接通：换有真实配额的搜索源（Tavily 续费或 SerpAPI/Brave）；引用可打开率校验（打不开不进答案）；证据条目带来源/时间戳/获知时间；回填 `AnswerCard` 的 `evidence/grounding/completeness` 与 answerComposer 的对应端口。
+- earnings_calendar 真写入方：接 Finnhub `/stock/earnings`，救活 `postgresCalendarAdapter`、业绩复盘 workflow 与记分卡的 `postEarnings`/`epsBeatRate`。
+- 港股 filing 历史回补至 ≥5 个财年，解锁历史估值分位与年度 EPS 序列；美股分位先行（注意 Yahoo 商用限制，见 P5）。
+- 公司自报 FCF 解析（第 6 节路径）；季度→年化沿用 `epsAnnualized: false` 的诚实标记模式。
+- 港股 ADR 溢价：逐条人工核实 9 家 ADR 比例后接 `dualQuote`；先修正 answerComposer 里"ADR 口径数据更全"的过时措辞（我们的一手 filing 比 ADR 准）。
+- 数字级可追溯：每个核心数字展示来源、口径、有效时间、获知时间与新鲜度；"未核到/口径冲突/来源过期"统一待办。
+- factGuard soft→full：拦截+定向重答闭环；settings 的 FactGuardCard 随真实流量出数。
+- 死代码清账：`risk.js`、`eventRules` 新闻分类部分接回或移入 retired。
+
+退出指标：A 股零残留（全仓库 `\.SS|\.SZ|CN` 市场分支零命中）；引用可打开率 ≥ 99%；关键数字证据覆盖率 ≥ 95%；业绩复盘对真实日历跑通一个完整财报季。
+
+### P4 · 留存工作流（把单次研究变成持续资产）
+
+- 证伪"温度计"：距阈值、数据时点、触发历史可解释展示（`evaluateRule` 已有 `distancePct` 基础，纯前端+编排工作）。
+- 业绩期驾驶舱：预期/实际/差异/管理层口径变化/下一证伪点同一视图；披露后 30 分钟内出第一版复盘（workflow 骨架已有，等 P3 的真日历数据）。
+- `position_alert` / `review_reminder` 两类通知真正建出来。
+- 研究记忆自动沉淀：已确认事实/未决问题/观点变化/待复核日期；日/周摘要只推有新证据、接近证伪或即将披露的变化。
+- 提醒强度/静默时段/来源偏好可调；反馈闭环（标记数字错误/来源失效）进可追踪队列。
+- 新手引导、示例公司、空状态与失败恢复打磨；UX/动效/视觉质量是一等验收维度。
+
+退出指标：完成一家公司"提问 → 证据 → 估值 → 证伪 → 跟踪"的中位时间下降 40%；核心流程完成率 ≥ 70%；通知有用率 ≥ 70%；次周留存持续增长。
+
+### P5 · 发布准备与商业化
+
+- **第一优先：港股商用行情源替换**。港股行情目前唯一真实覆盖是 Yahoo chart 接口，`commercialUseAllowed=false`——商业化前必须换成有授权的源（港交所 OMD 转售商、EODHD、iTick 等），否则商用路由里整条港股行情线会被 `authorization.ts` 正确地拒绝。数据供应商商用授权清单、字段级来源登记随此项一起做。
+- 托管 PostgreSQL、Temporal Cloud、对象存储、OTel 与告警在预生产完整接通；蓝绿切换、恢复、故障与降级联合演练。
+- `npm run test:load` 预生产实测并发研究、长报告、披露高峰与供应商限流，校准伸缩阈值与 WAF 限速（IaC/限流/WAF 见 [architecture/system-overview.md](architecture/system-overview.md)）。
+- 团队空间、细粒度权限、共享模板、评论与审计日志；可控导出（Markdown/PDF、证据清单、观点变更记录、合规水印）。
+- 套餐、用量、成本归因、预算上限与账单管理；密钥轮换与最小权限审计；渗透测试、隐私政策、数据处理协议与法务发布审查。
+- 发布负责人、回滚阈值、事故分级与用户通知模板。
+
+退出指标：RPO ≤ 24h、RTO ≤ 2h、核心 API 可用性 ≥ 99.9%；商用路由零未授权源；租户隔离与权限测试全绿；删除/导出请求可审计；法务与安全清单签署。
+
+## 6. 数据可得性事实表（全部为实测结论，勿重新推导、勿凭直觉推翻）
+
+| 事项 | 实测结论 |
+| --- | --- |
+| Finnhub / Twelve Data 免费档 | 美股行情可用；港股直接"无权限/需付费计划"。Finnhub `/stock/peers`、`/stock/metric` 美股可用、港股 403；`/calendar/earnings` 只覆盖美股，不带 `from/to` 参数会静默返回空数组 |
+| Alpha Vantage | 无 HKEX 原始代码（SYMBOL_SEARCH 只命中法兰克福/伦敦/ADR 挂牌）；25 次/天，只作美股最后兜底 |
+| FMP `stable` | 美股三表 + TTM 比率可用（用它的 `priceToEarningsRatioTTM`，勿拿季度 EPS 反推 PE）；港股三表一律"Premium Query Parameter"；legacy v3 端点已退役（200 状态但返回错误体）；`profile` 无 ADR/underlying 字段，`search-name` 模糊匹配不可靠 |
+| Yahoo chart 接口 | 港股行情唯一真实源；`range=5y&interval=1mo` 免费给 61 个月度历史点、无需密钥；**`commercialUseAllowed=false`，商用前必须换源** |
+| HK→ADR 映射 | 只能人工核实维护（`hkAdr.ts`，9 支，每条经真实 Finnhub 调用核实）；自动发现两条路径都不可靠，错配代价（自信地给错日期）比"未核到"更糟 |
+| ADR 比例 | 每家不同（腾讯 1:1，阿里 1:8），必须去存托银行/官方披露逐条核实；从价格反推是推断不是核实，禁止 |
+| 港股 capex/FCF | 简明现金流量表只给"投資活動耗用淨額"（不是 capex）；非 GAAP 摘要表列数每份都变、权责制、本期在首列；各家 FCF 定义不同（腾讯含媒体内容与租赁负债扣减，按 OCF−capex 算差 14%）。**正确路径：解析公司自报 FCF**（"自由現金流為人民幣 567 億元"），一手事实、公司自己背书；注意億/百萬单位混用与季度→年化 |
+| EPS 年化 | filing 给的是累计值，直接反推 PE 会虚高 2–4 倍（曾给腾讯算出 70.9x，真实 18–25x）；必须 `deriveAnnualEps` TTM 年化，缺上一财年数据时标 `epsAnnualized: false` 并禁用所有 PE 反推/相乘方法 |
+| 历史估值分位 | 价格免费（Yahoo 5y 月度）；瓶颈是年度 EPS 深度——美股 FMP 给 5 年可直接做，港股 filing 表现存仅 1–3 期，需回补 |
+| 同业倍数 | 必须设可比上限（PE 100x / EV-Sales 50x）过滤离群 peer（曾因 TTM 盈利趋零的 peer 把锚点中位数抬到 366x）；先过滤可定价再截断数量 |
+| 冻结表模式 | 本仓库头号缺陷类型："写好了没人调"不报错、不告警、只是永远不生效。`check:frozen` 双向拦截（写入方零调用/读取方零调用）；接回任何冻结资产必须用真实数据端到端验证，只改接线会"成功"写入空值 |
+
+## 7. 发布门禁
+
+本地与 CI 必须全部通过：
 
 ```bash
 export DATABASE_URL=postgresql:///echo_dev
@@ -89,177 +168,21 @@ npm run db:recovery-drill
 同时满足：
 
 - 仓库扫描不存在已退役入口、文件数据库依赖、迁移兼容层或提交的密钥与构建产物。
-- **（新增 2026-07-15）冻结表门禁**：`npm run check:frozen` 扫描每个 repository 的导出函数，零生产调用方即失败——本仓库反复出现的头号缺陷类型是"写好了没人调"（earnings_calendar #28、comp_peers #31、research_snapshots/watch_rules #32、hk_buybacks 反向），它们不报错、不告警，只是永远不生效，CI 全绿。两个方向都拦（写入方零调用=表永远是空的；读取方零调用=数据白采）。例外必须在脚本的 `ALLOWED` 里记账并写明解除条件；条目一旦重新有了调用方，门禁会要求删除它，防止白名单替真问题挡枪。
-- 全新 PostgreSQL 数据库可迁移、首次启动并完成私有数据写入。
-- GitHub 必需检查为绿色，契约、E2E、Temporal 故障恢复与 PostgreSQL RLS 测试均通过。
-- 备份可在隔离数据库恢复，关键表数量、约束和强制 RLS 保持一致。
-- **（新增）契约门禁**：`watch.desk`、`watch.stock`、`portfolio.list`、`ask` 的输出必须通过 `packages/contracts` 的 zod 输出 schema 校验；前端类型从契约推导，禁止 `Record<string, any>` 直连页面。
-- **（新增）删除闭环 E2E**：看盘移除、持仓删除、研究会话删除三条流程都必须包含"删除 → 强制刷新 → 不复活"断言，并在注册了 Service Worker 的 preview 构建下跑一遍。
-- **（新增）canary 真探测**：`npm run canary` 对每个已配置数据源做真实调用探测，状态页只展示探测结果，不展示配置态。
-- 生产切流前完成数据授权核对、密钥配置、容量验证（`npm run test:load` 对预生产实跑）、回滚和蓝绿切换演练。
+- 冻结表门禁：repository 导出函数零生产调用方即失败；例外须在脚本 `ALLOWED` 记账并写明解除条件，重新有调用方后门禁强制删除该条目。
+- 契约门禁：核心 tRPC 输出全部过 zod 输出 schema；前端类型从契约推导，禁止 `Record<string, any>` 直连页面。
+- 删除闭环 E2E：看盘移除、持仓删除、研究会话删除均含"删除 → 强制刷新 → 不复活"断言，并在注册了 Service Worker 的 preview 构建下跑一遍。
+- canary 真探测：`npm run canary` 对每个已注册外部适配器发真实请求，状态页只展示探测结果，不展示配置态。
+- 全新 PostgreSQL 数据库可迁移、首次启动并完成私有数据写入；备份可在隔离数据库恢复，关键表数量、约束和强制 RLS 保持一致。
+- 生产切流前完成数据授权核对、密钥配置、容量验证（`npm run test:load`）、回滚和蓝绿切换演练。
 
-## 5. 路线图（严格按 P0 → P5）
-
-### P0 · 可用性止血（当前迭代，不做完不允许做任何新功能）
-
-目标：用户报告的三类断裂（研究数据源、看盘 bug、删除复活）全部闭环。
-
-- [x] **修看盘删除复活**：`watchDesk` 构造 ticker 并集后应用 `getHiddenTickers` 墓碑过滤；画像/持仓并入的卡片同样受墓碑过滤，移除持久生效。涉及 `apps/api/src/app.ts`、`packages/db/src/repositories/watchlistRepository.ts`。
-- [x] **修 Service Worker 缓存策略**：`/api/*` 与 `/trpc/*` 一律 network-only（离线返回明确错误，不返回旧数据）；静态资源改 stale-while-revalidate；`CACHE` 升级到 `echo-shell-v2` 并在 activate 时清旧缓存。涉及 `apps/web/public/sw.js`。
-- [x] **修看盘列表契约**：`packages/contracts/src/watch.ts` 新增字段精确的 `watchCardSchema`（`status`/`priceStatus`/`market`/`held`/`returnPct`/`earnings`/`spark`/`topEvent`），`watch.desk` 挂输出 schema 并补齐字段，前端 `WatchCard` 类型从契约推导（`apps/web/src/lib/api.ts`）。
-- [x] **修个股详情契约**：`watch.stock` 按 `stockDetailSchema` 返回 `series`（`market_snapshots` 历史，新增 `listRecentMarketSnapshots`）、`watchRules`（已求值的证伪结果）、`events`（HK/CN 走 filings 适配器，其余显式空数组）、`fundamentals`（未接通显式 `status: "unavailable"`，P1 接 FMP 后填充）。
-- [x] **Temporal 本地开发路径**：新增 `npm run temporal:dev` 启动脚本；`reports.generate` 在 Temporal 不可达时降级为内联 `runReport` 并标注 `engine: "inline-fallback"`，前端 toast 提示；`/api/hk-financials/ingest` 同样不再裸 500，返回明确的 503 说明。
-- [x] **组合体检补全**：`portfolioReview` 用真实持仓算出 `weights / marketExposure / sectorWeights`（近似 USD 汇率仅用于展示权重，不进入任何 NUMERIC 记账路径），契约同步收紧为字段精确 schema。
-- [x] **引导进度接真状态**：新增 `preferences.onboardingProgress`（纯 DB 计数，不含行情/LLM 调用），`Onboarding` 三步从真实研究会话数、watchlist、持仓推导。
-- [x] **门禁同步落地**：`tests/e2e/core-flow.spec.ts` 新增看盘移除、持仓删除的"删除 → 刷新 → 不复活"断言；`portfolio.review`/`watch.desk`/`watch.stock` 均已挂 tRPC 输出 schema。契约测试、DB/RLS 测试、Rust 测试、Playwright E2E、Web build、恢复演练本轮全部本地跑绿。
-
-退出标准：三条删除闭环 E2E 全绿；看盘显示真实价格、涨跌与证伪状态；筛选可用；无 Temporal 环境下研究与报告可用且有诚实标注；用户三个原始报告问题复测通过。
-
-### P1 · 数据源真实接通与证据层
-
-目标：让设置页"已配置"的每一个源都真的在研究链路里产生数据；未接通的显示真实探测状态。
-
-- [x] 行情多源：Finnhub / Twelve Data / Alpha Vantage 已实现为 `packages/data-plane/src/adapters/{finnhub,twelveData,alphaVantage}QuoteAdapter.ts`，接入 `registry.ts` 的 `liveQuoteAdapters`。真实调用三家免费档确认过覆盖边界：Finnhub 与 Twelve Data 免费键完全没有 HK/CN（`0700.HK`/`600519.SS` 直接返回"无权限"或"需付费计划"）；Alpha Vantage 的 HK 相关 SYMBOL_SEARCH 命中只有法兰克福/伦敦/美股 ADR 挂牌，不是 HKEX 原始代码——三者 `supports()` 因此如实只声明 US，HK/CN 仍只有 Yahoo 一路真实覆盖，不是"多源覆盖假象"。qualityRank：Finnhub(1)/Twelve Data(2)/Yahoo(3)/Alpha Vantage(4，25 次/天配额最紧，仅作最后兜底)。`router.ts` 新增 `selectAdapterChain`，`registry.ts` 的 `fetchLiveQuote` 按序尝试整条链，配合新增的 `circuitBreaker.ts`（连续 3 次失败熔断 5 分钟）在某源故障时自动降级到下一个，而不是把单源故障直接暴露为整条链路失败——之前这条降级路径完全不存在（`fetchLiveQuote` 只取 router 选出的单一适配器，失败就是失败）。真实回测：AAPL 命中 finnhub；把 `FINNHUB_API_KEY` 改成假值后自动降级到 twelvedata；0700.HK/600519.SS 始终落在 yahoo。`canary` 真探测：`packages/data-plane/src/canary.ts`（`npm run canary`）对每个已注册适配器发真实请求并写入 `canary_runs`，`apps/api/src/status.ts` 的 `market` 状态改为从这些真实探测结果推导（此前硬编码 `status:"ok"`），实测输出"4/4 行情源探测成功"。踩过一个真实坑：`canary.ts` 一开始把 `registry.js` 放在静态 import，导致其模块顶层读取 `process.env.FINNHUB_API_KEY` 时 `.env` 还没被 `loadRootEnv()` 加载（ES 模块 import 提升早于本文件顶层代码执行）——只探测到 yahoo 一个源；改成沿用 `apps/api/src/server.ts` 已有的模式（`loadRootEnv()` 后 `await import()` 动态加载）后四个源全部探测成功。仍待做：网页证据（Tavily，已尝试实现，见下方"暂停"记录）尚未接入，`hasWebSearch` 在 status.ts 里仍是装饰性的 env-key 判断。
-- [x] 财务基本面：`packages/data-plane/src/adapters/fmpFundamentalsAdapter.ts` 接入 FMP `stable` API（美股三表 + TTM 比率），注册进 `registry.ts` 的 `fundamentalsAdapters`（仅 `FMP_API_KEY` 已配置时）；`runResearch`（`packages/application/src/research.ts` 新增 `getUsFinancials`）美股分支不再恒为 `[]`，改为真实调 `getFundamentals`，失败或未配置降级为 `[]` 而非整体报错。真实探测确认过 FMP 免费档边界：legacy v3 端点已退役（200 状态但报"Legacy Endpoint"错误体），改用 `stable` API；`profile`（quote 级）对 HK/CN 也有真实数据，但三张报表端点（income/cash-flow/balance-sheet-statement）对非美股一律返回"Premium Query Parameter"——因此 `supports()` 如实只声明 US，HK/CN 财务继续由一手 filing 管道提供，FMP 从不冒充覆盖不到的市场。真实回测（AAPL）验证并修了一个由本项改动首次激活的估值 bug：`displayValuation` 此前从未见过非空的美股 `financialsData.eps`（因为美股财务此前恒为空），一旦真数据接入，`valuation.js` 里 `pe = price / financialsData.eps` 这条兜底路径就被触发——`eps` 是单季度值而非年化，对苹果这类有季节性的公司算出 158x 的荒谬 PE（真实 trailing PE 约 38x）。修法是让 `fmpFundamentalsAdapter` 额外拉 `ratios-ttm` 拿 FMP 自己算好的真实 trailing PE（`priceToEarningsRatioTTM`），经 `toDomainSources` 接到 `marketSnapshot.pe`，价内 `valuation.js` 优先用它而不是拿季度 EPS 反推——回测确认修复后估值带的 `keyAssumptions` 从"PE 158x"变为"PE 38.3x"。港/A 股同一逻辑位置的 `financialsData.eps`（来自 filing 季度行）此前也确认存在同款 bug：0700.HK 用 Q1 累计 eps=6.433 直接反推 PE 算出约 70.9x，而腾讯真实 trailing PE 常年在 18-25x 区间。已修复：`research.ts` 新增 `deriveAnnualEps`，用已抓取的最近 4 期 filing 历史（`本期累计净利润 + 上一完整财年净利润 - 去年同期累计净利润` = 真实 TTM 净利润）把 filing 的累计 eps 按同比例缩放成年化值，缺上一财年数据时诚实标记 `epsAnnualized: false` 而不是硬猜；`valuation.js` 的三处 PE 相关方法（兜底 PE 带、主 PE 方法、同业 PE 锚点、forward PE）全部加上 `epsAnnualized !== false` 门槛，只在 eps 是真年化值时才用它反推或相乘 PE。真实回测：0700.HK 与 600519.SS 修复后估值带的 `keyAssumptions` 均显示"PE 18.3x"（此前分别约 70.9x 和类似倍数的虚高值）。
-- 网页证据：Tavily 适配器 + 引用可打开率校验（打不开的链接不进答案）；证据条目带来源、时间戳、获知时间。2026-07-14 尝试接入时发现 `TAVILY_API_KEY` 已超出套餐用量（真实调用返回"exceeds your plan's set usage limit"），按"真实调用验证优先于 mock"的原则未在没有真实响应可验证的情况下写死适配器，暂停在此——`.env` 里也没有 `SERPAPI_API_KEY` 作为退路。恢复配额或换新 key 后可继续。
-- [x] 财报日历（美股 + 港股 ADR 映射）：`packages/data-plane/src/adapters/finnhubCalendarAdapter.ts` 接 Finnhub `/calendar/earnings`（真实探测确认端点不带 `from`/`to` 参数会静默返回空数组而非报错，端点本身只覆盖美股，HK 返回和行情/财务同款"无权限"），注册进 `registry.ts` 的 `calendarAdapters`。过程中发现 `postgresCalendarAdapter` 读的缓存表里已有几行 0700.HK/600519.SS 的"经 ADR 映射查到"数据，但 `upsertEarningsCalendar` 全仓库没有任何调用点——是此前某次未提交的临时脚本写入的冻结脏数据，永远不会刷新。核实后确认"HK 股票查其美股 ADR 代号的 Finnhub 财报日历"这条链路本身是真实可用的（用 `TCEHY` 查询会返回打着 `700.HK` 标签的真实条目，日期与冻结的旧数据一致），值得做成正式适配器而不是只清理数据：新增 `hkAdrCalendarAdapter.ts`，内置一张手工维护、每条都用真实 Finnhub 调用逐一核实过的 HK→ADR 映射表（Tencent/Alibaba/美团/小米/京东/平安/比亚迪/汇丰/中国移动共 9 支）；FMP 的 `profile` 端点没有 adr/underlying 字段（实测港股与 ADR 两份 profile 除公司名外无共享字段），`search-name` 按名字模糊匹配会把 TCEHY 和无关的 TCTZF 一起吐出来，两者都不可靠，因此没有做自动发现，只做小范围人工核实表，条目错配的代价（自信地给错日期）比"未核到"更糟。`registry.ts` 的 `getNextEarnings` 从单一 `selectAdapter` 改成 `selectAdapterChain` 逐个尝试直到拿到 `ok`：`hkAdrCalendarAdapter` 在端口层面只能声明整个 HK 市场都"支持"，未映射的港股会在它内部正确落到 `missing`，链式回退保证仍能继续尝试 `postgresCalendarAdapter`而不是直接判定整条链失败。同时给 `postgresCalendarAdapter` 加了 14 天新鲜度上限——这张表没有任何写入方，`fetched_at` 永远不会再变，超龄的 `ok` 行会被判定为 `missing` 并带上说明，而不是无限期地把一次性快照当成实时数据展示。真实回测：0700.HK/9988.HK 现在命中 `hk-adr-finnhub`（分别通过 TCEHY/BABA），日期与预期估值一致；未映射的港股（如 1234.HK）正确回退到 postgres 缓存的 `missing`；600519.SS（A 股无 ADR）不受影响，仍是诚实的 `missing`。同业（comp_peers）尚未接入，同样只在装饰性 env-key 判断里。
-- [x] status/settings 页改为展示 canary 真实探测结果与最近成功时间；"配置了但探测失败"必须可见。`canary.ts` 此前只探测行情适配器（`market:*`），FMP 财务与 Finnhub/HK-ADR 财报日历适配器虽已接通却从不被探测，状态页只能退回 env-key 判断；现改为按能力分组（`market`/`financials`/`earnings`）逐个真实调用，`registry.ts` 新增 `listExternalFundamentalsAdapters`/`listExternalCalendarAdapters`（只暴露真正走网络的第三方适配器，探测 postgres 缓存适配器等于探测自己的库，会把缓存读伪装成供应商可用）。`status.ts` 的 `financials`/`earnings` 卡改由真实探测推导并在失败时点名未通过的源；真实回测：把 `FMP_API_KEY` 改成假值后，财务卡从"ok / FMP 已配置"变为"limited / 0/1 财务源探测成功；未通过：财务 · FMP"（这正是旧实现永远看不见的状态）。`news`/`comp_peers`/`web_evidence` 三张卡此前读 FINNHUB/ALPHAVANTAGE/TWELVEDATA 键就报 ok，但这些键只注册了**行情**适配器，仓库里根本没有新闻/同业/搜索适配器——已如实改为"未接通（P1 待办）"，不再用兄弟能力的密钥冒充存活证明（红线 2）。顺带修了三个真实 bug：①`npm run canary` 打印完 "complete" 后永不退出（postgres 连接池吊住事件循环），人肉 ctrl-C 无感，但计划中的定时/CI 探测会一直挂到超时——补 `closeDatabase()`，现 6.8s 正常退出；②设置页每一行的"最近成功 {时间}"恒为空：`getSourceHealthSummary` 的窗口函数列以 Postgres 文本形式返回（`2026-07-15 10:02:37.254059+08`），前端 `notifWhen` 交给 `Date.parse` 的是空格分隔 + 两位时区偏移（`+08` 而非 `+08:00`），V8 一律判 NaN → 静默显示空白，正是本条要求的"最近成功时间"——在产生该格式的 `status.ts` 边界归一化为 ISO（而非放宽共享格式化函数）；③canary 健康面板在"状态来自真实数据调用，不是配置检查"的标题下，给 `网页证据层`/`同业可比` 这类**根本没有适配器**的能力常年打 ✓ 最近成功——它们是某个已删除的旧 canary 实现写入、再无写入方刷新的冻结脏数据（与 P1 财报日历那批同款），现按当前真实探测的 `capability:adapter` 源过滤，面板只剩 7 个真被探测的适配器。设置页"最近一批探测"取的是 `rows[0]`（按 source 名排序的第一个，不是最新一批），已改为取真实最新时间。
-- 为每个核心数字展示来源、口径、有效时间、获知时间和新鲜度；建立"未核到/口径冲突/来源过期"统一待办。
-
-退出指标：研究回答中行情/财务/网页证据三类源的真实命中率可度量并在状态页可见；所有"未核到"均有原因和下一步；引用可打开率 ≥ 99%。
-
-- [ ] **earnings_calendar 仍是冻结表（2026-07-15 由新上线的冻结表门禁首次抓到，纠正 #32 的一处错误陈述）**：#28 接通的是 finnhub/hkAdr 两个**实时**适配器（供 `getNextEarnings`），但 `upsertEarningsCalendar` 至今**零调用**——这张 postgres 缓存表从来没拿到写入方，表里现存的行是某个已删除的临时脚本写的，`knowledge_time` 永不更新。#32 的 PR 描述里写"earnings_calendar 自 #28 起早有真实数据"，**那句是错的**。真实影响面三处：①`postgresCalendarAdapter` 沦为永远返回 missing 的空壳（14 天上限一到就全部降级），在链路里是死重；②worker 的 `loadEarningsReviewCandidates` → `listWithLastReported()` 让**整个业绩复盘 workflow 跑在死数据上**；③F-2 的 `postEarnings`/`epsBeatRate` 拿不到 `last_*` 字段，永远为 null——#32 只修了"`scorecardFor` 漏传 earningsRow"，但它读的表本身是空的/脏的，属半接。已先止血：`scorecardFor` 加 14 天新鲜度门槛（`getEarningsCalendarRow` 自身不设门槛，门槛在适配器里，直接读等于把死数据当事实）。**真修需要一个提供"上期已报告实际值/预期/惊喜幅度"的源**（finnhub `/stock/earnings`）——现有 calendar 信封只有 `nextDate/quarter/year/epsEstimate`，给不了 `last_*`，属 P1 规模。
-- [ ] **通知偏好曾全部失效（2026-07-15 由冻结表门禁抓到 `notificationEnabled` 零调用）**：设置页 5 个开关一个都不起作用。三重原因：①`notificationEnabled` 全仓库无人调用，worker 的 3 处 `insertNotification` 都没查过偏好；②`kindPreference` 的 key 是 `digest`，而 #27 之后 worker 改发 `event_digest`——**kind 字符串漂移**，就算接上偏好也对不上（库里那 7 行 `digest` 是旧底盘遗留）；③`position_alert`/`review_reminder` **全仓库没有任何代码会发出**，对应的"持仓纪律"/"研究复盘"两个开关控制着不存在的功能。已修：偏好检查收敛进 `insertNotification` 这个唯一咽喉（5 个调用方各自记得查一遍，正是这次出事的原因）；修正 kind 字符串；两个未建功能的开关在设置页标注"未接通"，不冒充可用。仍待做：把这两类提醒真正建出来（P3）。
-
-> **P1 残留项去向（2026-07-15 审计）**：网页证据（Tavily 配额卡住）、earnings_calendar 真写入方、数字级来源/新鲜度标注归入新 P3；`position_alert`/`review_reminder` 两类通知归入新 P4。本节各条保留为勘察底账，不再作为待办清单维护。
-
-### P2 · 研究质量重建（把领域层资产接回主链路）
-
-目标：研究回答从"一次裸模型调用"升级为"多源事实 + 领域编排 + 数字护栏"的证据优先输出。这是产品差异化的本体。
-
-- [x]（部分）`runResearch` 改为经 `answerComposer` 组装多源事实块，意图分类驱动提示词。此前提示词是手写的 4 行 `facts` 字符串（现价 + 财务一行 + 估值一行 + 既有主线），而 956 行的 `answerComposer` 从架构换血起就只在 `index.js` 里被 re-export、无任何调用方。现已接回：`packages/application/src/answerComposition.ts` 用真实端口实例化 `createAnswerComposer`（时钟/档案/意图分类/格式化都注入，领域包仍不碰 IO），`runResearch` 改用 `buildChatPrompt` 生成提示词——它会渲染公司档案（护城河/商业模式/多空/监控项）、真实 filing 财务块、我们自己算的估值区间、下一业绩日和竞品候选，并按 `classifyResearchIntent` 路由到专属段落结构。意图分类规则从旧底盘（`ce58d27:src/server/services/intentClassifier.js`，换血时随旧栈删掉）按新分层重新落位到 `packages/domain/src/intentClassifier.js`（纯规则属领域层）。真实模型回测：问"0700.HK 靠什么赚钱？"命中 businessModel 意图，输出"简单说/拆开看/关键判断/主要风险"专属结构而不是千篇一律的完整研究模板，正文引用真实三表数字（收入 1943.71 亿、净利率 30.4%、经营现金流 1013.51 亿）、真实估值区间与**真实下一业绩日 2026-08-12**（经本轮新接的 `getNextEarnings` → HK ADR 日历，此前研究链路完全没有这个源），factGuard 0 处 hard。顺带把无模型兜底也统一到 composer 的 `researchReplyFromPanel`：原 `deterministicAnswer` 输出的是另一套结构（`## 核心判断`…），即模型调用成功与否会静默改变答案版式，而 E2E 恰好只断言了兜底那套（CI 无模型 key），等于从未覆盖过模型路径；两条路径现在共用同一意图路由与同一段落结构，E2E 断言改为两条路径都产出的"结论"，并分别在有 key（走模型）和空 key（走兜底）下各跑一遍验证。模型正文额外过一遍 `normalizeResearchAnswer` 补齐北京时间前缀与"来源"段（真实回测中模型确实漏掉过整个来源段）。过程中修了两个真实 bug：①`keyDrivers` 的 summary 带句末句号，而 composer 模板自己会追加（`{summary}；同时`、`{status}。{summary}。`），渲染成"净利率 30.4%。。"——模块里本就有 `cleanSentence` 说明契约是"summary 不带句末标点"，改在生产端去掉；②只给 composer 传了 `dataSources.market`，而它按 `dataSources.financials/filings/news/estimates` 决定"还缺什么"段落与推断段能否下强结论——导致每篇回答都在引用了 filing 数字三段之后又宣称"本轮财报三表或公告口径还没补齐"，现按真实覆盖传全能力状态（news/estimates 如实为 missing，港/A 才算一手 filing）。仍待做：网页证据/同业/持仓上下文/对比与双重上市分支仍传 null（依赖 P1 未接通的源）。
-- [x] `reportComposer` 承接深度报告：`runReport` 此前只是调 `runResearch` 再把 `content` 改名成 `markdown`——"深度研究"返回的就是用户刚读过的那篇对话回答，两者一字不差。现已拆开：`gatherResearchContext` 抽出共享的取数与 panel 构建（两种产物必须站在同一批数字上，只在渲染方式上分叉），`runReport` 改用 `buildReportPrompt`（判断优先的长文 Markdown：`## 核心判断 / 赚钱机制与护城河 / 财务质量 / 估值与赔率 / 风险与证伪条件 / 关键监控与下一步 / 来源`，1500-3000 字），无模型时由 `reportComposer.composeReport` 用同一份 panel 产出同构的本地报告。报告不过 `normalizeResearchAnswer`——那会在 `# 深度研究` 标题上面插一句"北京时间…最近的状态是："的对话式开场，那是聊天回答的口吻。真实回测：本地兜底 0.6s 出真实数字的完整 Markdown 报告；模型路径 20s 出约 3000 字深度报告，与同一公司的对话回答是两个明显不同的产物。
-- [x] factGuard 两类真实误报修复（都由深度报告真实回测抓到，两类都会在 `full` 模式下拦掉正确答案、在 `soft` 模式下告诉用户对的数字是错的）：①降幅词只认写死的双字词名单（`下滑|下降|…`），模型写"同比微降1.1%""同比仅微降0.5%"这种完全正确的中文被当成 +1.1% 判 hard——降/跌/滑 前面可挂任意修饰语（微降/大降/骤降/环比降/略降），穷举不完，改成认词尾的方向字，并补"回升"反例守住不过度匹配；②"符号相反"的判定窗口宽到绝对值 1/3~3 倍，等于宣称"任何落在某个负数事实 3 倍内的正数都是它写错了符号"——模型写"增速超过 3%"这类假设性阈值（不陈述登记表里的任何事实）被拿去跟"今日涨跌幅 =-1.5%"比，2 倍差也算 sameBallpark 直接判 hard；真正的符号错误是照抄同一数字写反方向（1.1 vs -1.06、30.4 vs -30.4）、量级天然相等，故窗口收紧到 1.25 倍，这类假设性数字落回 soft（未核到），符合本模块"宁可漏报不可误报"原则。修复后同一篇报告 hard 从 3 → 0，对话路径同样 0 hard；域测试从 53 增至 56 条。
-- [x] `factGuard` 接回输出校验（shadow/soft 模式已实装）：`runResearch` 用行情快照+最新一期财报构造事实登记表（`packages/application/src/research.ts` 的 `applyFactGuard`），对模型正文跑 `verifyAnswerNumbers`，写入 `fact_guard_audit`（此前"空转开关"，`getFactGuardStats` 永远为空的根因）；`FACT_GUARD_MODE` 默认 `shadow`，`soft`/`full`（`full` 的拦截+定向重答暂未实现，行为等同 soft，诚实标注）会在正文追加低调提示。真实模型回测（0700.HK）验证过一次关键 bug：`nativeCurrency` 必须取财报报表币种而非行情报价币种，否则港股通/A+H 这类"报价币种≠报表币种"的公司会把每一条真实引用的财务数字错判成 hard（跨币种换算路径把它们全部拿去和唯一的 HKD 现价比较）；修正后同一份回答从 20/47 处误判 hard 降到 0 处 hard。`valuation` 现已接入登记表（见下一条）；仍待做：同业倍数、历史分位接入登记表；`full` 模式的拦截+定向重答闭环；settings 页面暂无变化，等真实流量积累后 `FactGuardCard` 会自动出数。
-- [x]（同业部分）`factGuard` 覆盖率扩展：登记表接入同业倍数。排查发现 `buildFactsRegistry` 本来就有同业倍数/锚点分支、`valuation.js` 本来就有同业 PE 与 EV/Sales 锚点方法、`answerComposer` 本来就有"同业对照"提示词块——三处都建好且有测试，只是从来没人喂真数据（`upsertCompPeers` 全仓库无调用方，`comp_peers` 表里的行是某次未提交脚本写入、冻结在 2026-07-10 的脏数据，与 P1 的 earnings_calendar 同款）。本轮补齐真实链路：`finnhubPeersAdapter`（真实探测确认 `/stock/peers` 美股免费可用、港股 403，与行情/财务/日历同款边界，故港股复用 `hkAdr.ts` 的人工核实 ADR 表；`/stock/metric` 提供真实 peTTM/evRevenueTTM/epsTTM）；`compPeerRules.js` 按阶段分桶（复用已验证的 `classifyAssetStage`，不看供应商给没给 PE——真实探测到 IONQ 利润全靠一次性收益、Finnhub 仍吐 peTTM=44.8）；`packages/application/src/compPeers.ts` 编排并给 `comp_peers` 表补上第一个真实写入方（24h TTL + stale-if-error）。真实回测：AAPL 命中 5 家同业（DELL/SNDK/WDC/HPE/NTAP），锚点 PE p25 26.5 / 中位 35.0 / p75 41.8，模型正文如实引用这些真实倍数（此前"同业对照"永远只打印"没核到、禁止编造"那一支）；600519.SS 诚实返回"本市场没有可用的同业数据源"。过程中修了四个真实 bug：①`MAX_PEERS` 在"能不能定价"之前就截断——腾讯同业里 4 个无 ADR 的港股先占满 5 个名额再被丢弃，导致真正能定价的 BILI 根本没机会进来（只剩 1 家、无锚点），改为先过滤可解析再截断；②stale-if-error 会把"本市场根本没有适配器"这种结构性缺失也退回冻结缓存——600519.SS 一直在返回 2026-07-10 的脏行，连"港股无 ADR 映射"这种把 A 股说成港股的错误措辞都照搬，现按 `NoAuthorizedAdapterError` 区分并覆盖掉脏行；③BIDU 的 peTTM=698.7x（百度 TTM 盈利趋零）与 BILI 34.9x 一起入锚点算出中位 366.8x，会让腾讯套上 366 倍 PE 的估值带并把这个数字当事实喂给模型——新增倍数可比上限（PE 100x / EV-Sales 50x），越界的 peer 仍列出并说明原因但不进锚点，宁可"同业不足、沿用原方法"；④`buildFactsRegistry` 登记了 `netDebt` 却没登记 `netCash`，而管道产出的是 `netCash`、提示词也把它打印给模型——真实 AAPL 回测里模型如实引用"净现金 -483.83 亿美元"，却因为登记表里没有它而落到最近的另一个事实（毛利 +54.78 亿）判"符号相反"hard，一篇回答连中三次；补登记后同一问题 hard 3 → 0（30 项中 28 pass）。canary 与状态页同步接入 `comp_peers` 真探测（"1/1 同业源探测成功"）。仍待做：历史分位（`historical_valuation` 同样是无写入方的冻结表，需要先有真实历史 PE 序列源）；集齐后再推进 shadow→soft→full。
-- [x] 估值链路起步：`runResearch` 接回 `valuation.js` 的 `displayValuation`，用行情快照 + 最新一期财报算出真实 bear/base/bull 区间喂给模型（写进提示词，禁止模型自行编造倍数），估值数字同时进 factGuard 登记表交叉核对。真实模型回测抓到并修了一个 bug：`computeValuation` 会拿 `company.pe/price/pb` 当兜底，而 `getCompanyByTickerComplete()` 返回的是"约 18x"这类展示格式化字符串（不是数字），落地时把这类字符串当分母算出 NaN——修成只传 `{ticker, currency, sector}` 这三个干净字段，让估值只信任 marketSnapshot/financialsData 里真正是数字的字段，缺数据时诚实返回 `cannotValueReason` 而不是吐 NaN。仍待做：`historicalValuation`（历史分位）、行业估值路由、同业倍数（这些依赖尚未接通的数据源，见 P1）；估值计算目前仍是 JS 浮点（展示边界内的近似口径，未接 `finance-native`）。
-- 财务质量红旗：`financialQuality`（盈余质量、现金流质量、应收/存货异常、资本化倾向）进公司画像与回答——数据库财报表暂无应收/存货字段，需先扩数据管道。
-- [x]（部分）`AnswerCard` 的 `valuation` 字段：前端 `Valuation`/`ValuationNote` 组件本就存在渲染代码，此前从未收到过真数据；接回估值链路后自动出图，另修了"估值算不出来时静默不显示"的问题（`cannotValueReason` 现在会显示为一条说明，而不是整块消失）。仍待做：`evidence / grounding / analyst / dualQuote / completeness` ——这些字段依赖 P1 的网页证据/同业/分析师一致预期数据源，尚未接通。
-- [x] 红线1 提示词加固：系统提示词此前只禁止"给买卖指令"，但真实测试发现模型会用"不建议追高买入"这类反向劝阻规避检测——本质仍是买卖指令。提示词已明确列出禁止的正反向措辞，改用"赔率偏低/偏高""性价比一般，等待更好的验证点"等纯研究语言；直接问"值得买吗？"验证过，回答不再出现买卖劝阻措辞。
-- [x] 真流式：`/api/ask` 的 SSE 此前是"算完整段再假装打字机切片回放"（首 token 延迟＝全量生成时间）；`modelAnswer` 现在对 provider 发 `stream:true` 请求，真实解析 OpenAI 兼容的 SSE delta 帧，边生成边转发。真实回测：首 token 2.7s、全量生成 10.4s（此前用户要等满 10.4s 才看到任何字）。上线时被 E2E 抓到一个真实性能回归：provider 的原始 delta 太碎（单次真实调用产生 828 个小分片），逐个转发导致前端每次都重新渲染/解析累积 Markdown，把主线程钉死到"看盘"页面按钮点不动——服务端按 ~24 字符合并再转发（沿用旧版假流式的分片粒度，但现在是真的边生成边合并转发，不是生成完再切）解决，合并后 E2E 全绿。
-- [x] `waitPhase` 阶段提示与管线阶段对齐：此前是纯墙钟时间轮播（`WAIT_PHASES` 固定 4 条文案，按 `busyElapsedSeconds()/5` 取下标），文案里"正在检索公开网页证据"这类步骤后端根本不存在，且真正耗时的 factGuard 校验发生在模型生成完之后却没有任何提示。`runResearch`（`packages/application/src/research.ts`）新增 `onStage` 回调，在 `resolving`/`market_financials`/`valuation`/`generating`/`fact_check` 五个真实节点触发；`/api/ask` SSE（`apps/api/src/rest-routes.ts`）新增 `status` 事件转发；前端 `chatStream`（`apps/web/src/lib/api.ts`）解析该事件，`researchStore.ts` 用 `STAGE_LABELS` 映射替换硬编码轮播。真实回测确认五个阶段事件按管线实际顺序到达。顺带在验证时抓到并修了一个真实 bug：`applyChatResult`（`apps/web/src/lib/researchActions.ts`）只在 `newlyWatched` 非空时才刷新看盘缓存，但首次研究新公司走的是 `portrait.created` 分支（toast 显示"已加入看盘"但看盘页缓存从不失效）——这正是 E2E `core-flow.spec.ts` 偶发卡在"等待＋添加按钮"超时的根因，现在只要 `result.portrait` 存在就会 `refreshWatchDesk()`。
-- [x] R7 记分卡/画像/监控闭环接回（`researchReview` + `portraitRules` + F-3 基本面证伪线）：全仓库扫描 28 个 repository 的写入函数，找出"有 schema、有 repository、有 upsert，就是没人调"的冻结表。查明根因不是"没建好"而是**被删掉了**——`research_snapshots` 里存着 2026-07-11/13 的真实数据（带 session_id 和价格），`git log -S` 定位到 #27 终局迁移重建底盘时，把 `persistResearch` 的几个副作用连同覆盖它们的测试（旧 `tests/research-scorecard.test.mjs`）一起删了，测试没了所以两个月无人报警。本轮接回三条链路，均经真实模型调用逐字段核对落库：①**R7 记分卡**——`research.scorecard` 端点一直在读快照但没有写入方，命中率永远对着零条快照算；快照按原设计的"建档/判断变化"节奏落（不是每轮都落，否则同一判断被复制几十份一起成熟、挤进命中率分母），新增迁移 `0005` 的 (user,ticker,valid_time) 唯一索引。②**研究→监控闭环**——`replaceFalsifierRules` 零调用，导致 worker 的 `checkFalsifiers` 一直对着零条规则空跑、盘前速报永远播报"当前有 0 条有效监控条件"，证伪告警整体静默失效。③**画像的估值带与证伪条件**——`upsertCompanyProfile` 一直支持 falsifiers/valuation 字段但没人传，画像 markdown 那两节从来渲染不出来（估值明明已在 ctx 里算好）。**F-3 基本面证伪线**同步接回：域层的白名单校验/剥离/评估代码全在，缺的是提示词指令（随旧底盘丢失，已从 `ce58d27:src/prompts.js` 取回原文）、抽取接线与 worker 巡检；`evaluateRule` 对 `fundamental_*` 规则一律返回 `sane:false`（它就地拦截防止拿毛利率阈值当股价比），故这类规则过去登记了也永远不会被触发，现由 `evaluateFundamentalRule` + 新导出的 `financialsDataFor` 走同一份 `financialsData` 口径核对。真实回测：`FALSIFIERS_JSON` 在正文出现 0 次（剥离成功），3 条规则带真实指标落库，造一条必然触线的规则验证推送带当期实测值（"毛利率跌破60%（当前 55.7）"）且 `last_triggered_at` 写入。过程中修了 6 个真实 bug：①**主线自我复制**——`thesis: panel.oneLineView` 而 `oneLineView = profile?.thesis || 兜底句`，主线写回自己，一旦建档就永远冻结、新研究再也改不动；改用 `extractThesisFromAnswer(content)` 后，存的从"腾讯是中国互联网生态核心公司…"（复制粘贴的兜底句）变成"腾讯当前处于'利润质量高但增长停滞'的稳态"（本轮研究的真实判断）。②**提取器正则对不上 composer**——正则锚定 `^#{0,3}` 但模型实际吐的是 `**我的判断**`（粗体），开头的 `**` 直接让匹配失败；只改标题名不够，第一次修完真跑仍写入空快照才定位到，不做真实验证的话接线会"成功"写入一堆空主线，比表空着更难发现。③**差点写出的破坏性 bug**——`replaceFalsifierRules` 先删后插，而真实证伪条件绝大多数是基本面口径、`parseFalsifierRules` 会正确拒绝并返回空数组，拿空数组去调它会把已有盯盘规则全删光；新增 `kinds` 范围限定，价格线与基本面线各自只替换自己 kind 的规则。④**引导语被当成证伪条件**——"以下事实出现任意一项，即需重估…："被收成第一条假证伪线（"非列表项就停"只在已收集到条目后才生效）。⑤**freeCashFlow 是哑指标**——filing schema 没有 capex 列，FCF 根本算不出来，`financialsData.freeCashFlow` 恒为 undefined，这类规则永远不会触发却让用户以为在盯；真实回测里模型还把它当比率用（0.8=现金流/净利润），已移出白名单与提示词，等 capex 有真实来源再加回。⑥**threshold 为 null 恒真误报**——`currentValue >= null` 被 JS 强制成 `>= 0`，任何 `fundamental_above` 规则无条件触发。另修 `scorecardFor` 漏传 `earningsRow`（F-2 的 postEarnings/epsBeatRate 恒为 null，而 earnings_calendar 自 #28 起早有真实数据）与 `markTriggered` 零调用（`last_triggered_at` 恒为 null）。新增两个回归测试文件锁住"不报错、只是永远不生效"的契约（小标题三代格式、JSON 行泄露、白名单外指标硬凑、回购口径纪律）。仍待做：证据覆盖率/引用可打开率/结论可追溯率评分（依赖 P1 未接通的网页证据源）。
-- [x] 港股回购接回研究链路（`hk_buybacks` 由"写而不读"变为真实事实源）：`hkFilingsPipeline` 一直在采 HKEX 翌日披露报表（腾讯已有 29 条真实场内购回记录），但全仓库没有任何读取方——数据白采半年，而同一份提示词里 composer 还在对模型说"回购分红口径还没核到，股东回报判断暂为低置信度"，真实回测中模型原话正是"当前财报未披露回购具体金额"。这是 P1/P2 那批冻结表的镜像问题（那些是读而不写，这个是写而不读）。新增域层纯函数 `hkBuybackToPrompt`（移植自 `ce58d27:src/financialData.js` 的 `hkBuybackToMarkdown`，保留两条口径纪律：只统计已成交的场内购回、不含未执行授权额度；已发行股份只给"逐次披露间的粗线趋势"并明说购回注销有滞后，不是即时净股本），经 `answerComposition.ts` 的 `buybacksToPrompt` 端口注入 composer。同步修了那句会谎报的缺口提示——一份提示词里既给真实购回数据、又声明它未核到，等于教模型忽略整个事实块。真实模型回测：同一问题的回答从"当前财报未披露回购具体金额"变为"根据HKEX翌日披露报表，2026年3月26日至7月8日期间累计场内购回24,195,700股，总代价约109.58亿港元，占已发行股份约0.27%，且已发行股份数量呈下降趋势"——股数/金额/比例/区间/股本趋势与喂入的事实块逐项一致，零编造。非港股诚实输出"未核到"，不让模型把"我们没接这个源"读成"这家公司没回购"。
-
-#### 2026-07-15 数据可得性勘察（真读财报 PDF / 真调数据源换来的结论，下次从这里起步，勿重新推导）
-
-三个"看起来只差接线"的候选，实测都卡在数据本身。记在这里是因为**它们都长得像能做**，
-不写下来下个 session 会重新推一遍，或者更糟——直接开做然后产出自信的错数字。
-
-- [ ] **A/H 双重上市 / ADR 溢价**：`composerContext.dualListing`/`dualQuote` 一直传 null，
-  但**不是接上就行**，两个坑：
-  ①`answerComposer` 里那句"基本面/估值一律按美股 ADR 口径（**数据更全**）"写于港股财务恒空的年代，
-  现在我们有自己的一手 filing 管道（比 ADR 准），照原样接等于让模型舍弃最好的数据——**接之前必须先改这句**。
-  ②溢价计算需要**每家的 ADR 比例**，而 `hkAdr.ts` 的映射表只有代码、没有比例。实测：
-  腾讯 474.00 HKD×0.1276=60.48 USD vs TCEHY 58.34 → 约 **1:1**；阿里 113.40 HKD×0.1276=14.47 USD
-  vs BABA 112.32 → 约 **1:8**。**每家不同**，不带比例直接算，阿里会显示"溢价 676%"。
-  从价格反推是推断不是核实（7.76 应该 round 成 8 吗？真实是 7.5 就永远错 6%），
-  必须像映射表当初那样逐条人工核实（去存托银行/官方披露），9 条，有界但要认真做。
-
-- [ ] **capex → freeCashFlow（点亮 valuation.js 的 FCF Yield + DCF）**：先做范围修正——
-  三个字段里**只有 capex 有价值**：`bookValue` 点亮不了任何东西（PB 方法读的是 `company.pb`，
-  且只对金融业生效，而 #31 之后 `company` 只传 `{ticker,currency,sector}`，`company.pb` 恒为 undefined；
-  JSDoc 里的 `opts.bookValue` 是幽灵参数）；`totalDebt` 只在 `netCash` 缺失时兜底，而 filing 已直接给 `netCash`。
-  加这两个字段等于新造没人消费的冻结列。
-  **但 capex 在港股 filing 里不可靠提取**（真读 0700/0857 三份 PDF 确认）：
-  ①简明现金流量表只给"投資活動耗用淨額"（腾讯 -10,560、中石油 -265,705），那是投资净额，混着
-  投资/处置/理财，**不是 capex**；②唯一的"資本開支"在非 GAAP 摘要表里，**列数每份都变**
-  （腾讯季报 3 列、年报 5 列），且是**权责制**不是现金支付；③那张表**本期在首列**，而解析器的
-  `pick()` 注释写的是"首列=去年同期、末列=本期"——顺序相反，照抄会把一年前的数当本期。
-  ④**口径根本对不上**：腾讯自己写 FCF 567 億 = OCF 1,014 − 資本開支付款 370 − **媒體內容 59**
-  − **租賃負債 18**。按 `OCF−capex` 算得 644 億，**差 14%**；每家定义还不一样。
-  ⑤**4 倍陷阱**：567 億是单季，而 FCF Yield 用 `freeCashFlow/sharesOutstanding` 直接推目标价，
-  季度数当年度用则估值带整体偏 4 倍——与已修的 EPS 年化 bug（Q1 eps 反推出 70x PE）同一类。
-  **推荐路径**：不自己推导，改为解析**公司自报的 FCF**（"自由現金流為人民幣 567 億元"）——
-  一手事实、公司自己背书、分析师也引这个数，比用一个公司不认的定义去推更站得住；
-  但必须处理正文散文解析（脆）、億/百萬单位混用、季度→年化（照搬 `epsAnnualized: false` 的诚实标记）。
-
-- [ ] **历史估值分位（`historical_valuation` + `historicalValuation.js` 接回）**：
-  **纠正此前"必须先有历史 PE 序列源、需要花钱"的判断——价格那一半是免费的**。
-  `yahooQuoteAdapter` 用的 chart 接口本来就给历史：实测 `range=5y&interval=1mo` 对
-  0700.HK / 600519.SS / AAPL **都返回 61 个月度点**（2021-08~2026-07），无需密钥
-  （注意其 `authorization.commercialUseAllowed=false`，商用前要换源）。
-  **真瓶颈是 EPS 深度**：`computeHistoricalValuationPercentile` 要的是**年度**序列（`sampleYears`），
-  而 `hk_financials`/`cn_financials` 每只票只有 1-3 期（腾讯 3 期 ≈ 半年）。故：
-  **美股现在就能做**（FMP `stable` income-statement 给 5 年年度 EPS + Yahoo 给价格）；
-  **港股/A股要先把 filing 管道回补几年**。讽刺的是能做的是商品化的美股，护城河所在的港股反而卡住。
-
-退出指标：关键数字证据覆盖率 ≥ 95%；已知严重数字错误率 < 0.1%；首 token 时间 < 3s；研究回答中"未核到"来自真实探测而非未接线。
-
-### P3 · 证据与数据资产收口（2026-07-15 审计后的当前迭代）
-
-目标：完成"证据优先"的最后一块名不副实处（网页证据层），并把只有我们在做的港/A 数据脏活转成不可复制的数据资产。本阶段每一条都直接对应第 6 节护城河底账。
-
-- [ ] **网页证据层接通（P3 头号项）**：Tavily 配额恢复或换 SerpAPI/Brave 等有真实可验证配额的源；引用可打开率校验（打不开的链接不进答案）；证据条目带来源、时间戳、获知时间。接通后回填 `AnswerCard` 的 `evidence / grounding / completeness` 与 answerComposer 仍传 null 的证据端口，`status.ts` 的 `hasWebSearch` 从装饰性 env-key 判断改为 canary 真探测。产品自称"证据优先 AI 研究台"，这是当前最大的承诺缺口。
-- [ ] **earnings_calendar 真写入方**：接 Finnhub `/stock/earnings`（提供上期实际值/预期/惊喜幅度，现有 calendar 信封给不了 `last_*`），救活 `postgresCalendarAdapter`、业绩复盘 workflow 与 F-2 的 `postEarnings`/`epsBeatRate`（P1 遗留条目，勘察结论已在，勿重推）。
-- [ ] **港/A filing 历史回补**：`hk_financials`/`cn_financials` 从每票 1-3 期回补到 ≥5 个财年，解锁 `historicalValuation`（历史分位）与真实年度 EPS 序列；美股分位（FMP 5 年年度 EPS + Yahoo 月度价格）可先行，但 Yahoo 商用限制见 P5 第一条。
-- [ ] **公司自报 FCF 解析**：按上方 2026-07-15 勘察结论走"解析公司自报自由现金流"路径，不自己推导 OCF−capex；正文散文解析的脆性、億/百萬单位混用、季度→年化（沿用 `epsAnnualized: false` 的诚实标记模式）三个坑都要处理。
-- [ ] **A/H 溢价与双重上市**：先改 answerComposer 里"ADR 口径数据更全"的过时措辞（我们的一手 filing 已比 ADR 准），再逐条人工核实 9 家 ADR 换股比例（存托银行/官方披露，不从价格反推），最后接 `dualListing`/`dualQuote`（勘察结论已在，勿重推）。
-- [ ] **数字级可追溯**：每个核心数字展示来源、口径、有效时间、获知时间与新鲜度；"未核到/口径冲突/来源过期"统一待办（原 P1 未完成项吸收至此）。
-- [ ] **factGuard soft→full**：拦截+定向重答闭环；同业倍数与历史分位集齐后推进模式升级；settings 的 `FactGuardCard` 随真实流量出数。
-- [ ] **领域层死代码清账**：`risk.js`、`eventRules` 的新闻分类部分（`classifyNewsSeverity` 等）要么随新闻源接通而接回，要么明确移入 retired——不允许"建好、没人调、不报错"的第三种状态（冻结表门禁的精神延伸到领域模块）。
-
-退出指标：引用可打开率 ≥ 99%；关键数字证据覆盖率 ≥ 95%（原 P2 退出指标至此才真正可达）；业绩复盘 workflow 对真实日历完整跑通一个财报季；港/A 历史分位对已覆盖公司可算且诚实标注样本年数。
-
-### P4 · 留存工作流（把单次研究变成持续资产）
-
-目标：原 P3 全部条目吸收至此，依赖 P3 数据、按留存价值排序。
-
-- [ ] 证伪"温度计"：距阈值、数据时点和触发历史可解释展示（`evaluateRule` 已有 distancePct 基础，R7 监控闭环已接回，主要是前端与编排工作）。
-- [ ] 业绩期驾驶舱：预期、实际、差异、管理层口径变化和下一次证伪点同一视图；业绩复盘在披露后 30 分钟内出第一版（`earningsReviewWorkflow` 骨架已有，等 P3 的真实日历数据）。
-- [ ] `position_alert`/`review_reminder` 两类通知真正建出来（P1 遗留：设置页两个开关现标注"未接通"，不冒充可用）。
-- [ ] 研究记忆自动沉淀"已确认事实、未决问题、观点变化和待复核日期"；日/周摘要只推送有新证据、接近证伪或即将披露的变化。
-- [ ] 提醒强度、静默时段、来源偏好和研究模板可调；反馈闭环（标记数字错误/来源失效/结论无帮助）进可追踪队列。
-- [ ] 新手引导、示例公司、空状态和失败恢复打磨：首次用户 10 分钟内完成第一份研究卡。UX/动效/视觉质量是一等验收维度。
-
-退出指标：完成一家公司"提问 → 证据 → 估值 → 证伪 → 跟踪"的中位时间下降 40%；核心流程完成率 ≥ 70%；通知有用率 ≥ 70%；次周留存持续增长。
-
-### P5 · 发布准备与商业化
-
-目标：可信运行 + 团队协作 + 收费。吸收原 P4 全部内容，外加一条 2026-07-15 审计确认的前置阻塞。
-
-- [ ] **商用行情源替换（P5 第一优先，P3/P4 期间即应并行调研选型）**：HK/CN 行情当前唯一真实覆盖是 Yahoo chart 接口，其 `authorization.commercialUseAllowed=false`——商业化切流那天它必须已被有商用授权的源替换（港交所 OMD 转售商、EODHD 等候选逐一真实调用验证覆盖与授权条款），否则 `authorization.ts` 会在商用路由里正确地拒绝整条 HK/CN 行情线，产品开门即黑屏。数据供应商商用授权清单、字段级来源登记随此项一起做；未授权源不得进商用路由（红线 5）。
-- [ ] 托管 PostgreSQL、Temporal Cloud、对象存储、OTel 与告警在预生产完整接通；蓝绿切换、数据库恢复、Temporal 故障和供应商降级联合演练。
-- [ ] `npm run test:load` 对预生产实测并发研究、长报告、披露高峰和供应商限流，产出真实容量数字并校准伸缩阈值与 WAF 限速（已就绪的 IaC/限流/WAF 见 [architecture/system-overview.md](architecture/system-overview.md)）。
-- [ ] 团队空间、细粒度权限、共享模板、评论和审计日志；可控导出（Markdown/PDF、证据清单、观点变更记录、合规水印）。
-- [ ] 套餐、用量、成本归因、预算上限和账单管理；密钥轮换和最小权限审计；渗透测试、隐私政策、数据处理协议与法务发布审查。
-- [ ] 发布负责人、回滚阈值、事故分级和用户通知模板。
-
-退出指标：RPO ≤ 24h、RTO ≤ 2h、核心 API 可用性 ≥ 99.9%；商用路由零未授权源；租户隔离与权限测试全绿；删除/导出请求可审计；法务与安全清单签署。
-
-## 6. 商业化护城河底账（2026-07-15 架构审计）
-
-新需求与资源分配以此为准绳：投入优先流向护城河项，商品化能力只做到"够用且诚实"。
-
-**是护城河的（按强度排序）：**
-
-1. **港/A 一手数据管道与数据可得性 know-how**。P1/P2 的实测底账反复证明：Finnhub / Twelve Data / FMP / Alpha Vantage 的免费与常规付费档对 HK/CN 的行情、三表、日历、同业全线"无权限 / Premium / 仅 ADR 挂牌"。美股数据是商品（谁都能接 FMP），港/A 只能靠一手 HKEX/CNINFO filing 解析、回购翌日披露、逐条人工核实的 HK→ADR 映射——"每份 PDF 列数都变、每家 FCF 定义都不同"这类脏活正是通用竞品不愿做的；第 5 节的数据可得性勘察底账本身就是排他性资产。
-2. **防幻觉工程栈**。factGuard 事实登记表（含报表币种口径、EPS 年化、netCash 登记这些已踩坑修复）+ 冻结表 CI 门禁 + "未核到"诚实语义 + 端到端 zod 输出契约，共同构成"数字可核对的研究输出"。通用 LLM 包壳产品没有这一层，且它随每个已修误报持续加深，不随模型升级被稀释。
-3. **证伪闭环与研究资产沉淀**。研究→监控规则→告警→业绩复盘→R7 记分卡已接回主链路；用户的判断历史、证伪规则与命中率是随时间增值且无法迁移到竞品的私有数据——既是留存钩子也是数据飞轮。
-4. **双时态底座**（valid time + knowledge time）。"当时知道什么"可审计、可回放，是机构与合规场景的准入能力，个人工具竞品普遍没有。
-
-**不是护城河的（不追加超出"可用且诚实"的投入）：** 多源行情路由与熔断（商品能力）、美股基本面（FMP 谁都能接）、PWA/UI 框架本身、单次模型调用与提示词模板（会被模型升级稀释）。
-
-**商业化含义**：目标客群是港/A 股严肃个人投资者与小型机构研究团队；定价锚在"可审计的证据链 + 证伪跟踪"，不是"AI 问答"。最大商业化阻塞是 HK/CN 行情唯一源不可商用（P5 第一条）。
-
-## 7. 产品指标与优先级原则
+## 8. 优先级原则与核心看板
 
 所有新需求按以下顺序取舍：
 
-1. 是否修复用户已能感知的断裂（P0 未清零前，一票否决其他需求）。
+1. 是否修复用户已能感知的断裂（存在时一票否决其他需求）。
 2. 是否提高事实正确性、证据可追溯性或风险可见性。
-3. 是否缩短核心研究闭环，而不是单纯增加页面和模型调用。
-4. 是否减少打扰、重复劳动和供应商故障带来的不确定性。
+3. 是否加深第 4 节护城河，而不是单纯增加页面和模型调用。
+4. 是否缩短核心研究闭环、减少打扰与供应商故障带来的不确定性。
 5. 是否能用明确指标和真实用户行为验证。
 6. 是否保持唯一架构与唯一契约，不引入第二套 API、数据库、调度器、前端实现或字段形状。
 
