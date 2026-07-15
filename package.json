@@ -19,6 +19,7 @@
     "lint:rust": "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings",
     "lint": "eslint . --max-warnings=0",
     "check:retired": "node scripts/quality/check-retired-stack.mjs",
+    "check:frozen": "node scripts/quality/check-frozen-tables.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "db:migrate": "npm run migrate --workspace @echo/db",
     "db:recovery-drill": "npm run drill:recovery --workspace @echo/db",

@@ -69,11 +69,17 @@ function NotificationPreferencesCard() {
     queryClient.setQueryData(["preferences"], data);
   }
 
-  const row = (key: keyof UserPreferences, label: string, detail: string) => (
-    <label className="pref-row" key={key}>
+  // `pending` = 这类提醒还没有任何代码会发出（docs/PLAN.md P3 未建功能）。开关照常可存，
+  // 功能落地即自动生效，但不能让它看起来"已经在替你盯着"——一个控制着不存在功能的
+  // 开关，比没有这个开关更伤信任。
+  const row = (key: keyof UserPreferences, label: string, detail: string, pending = false) => (
+    <label className={`pref-row${pending ? " pref-row-pending" : ""}`} key={key}>
       <span>
-        <b>{label}</b>
-        <small>{detail}</small>
+        <b>
+          {label}
+          {pending && <em className="pref-pending-tag">未接通</em>}
+        </b>
+        <small>{pending ? `${detail}——该提醒尚未接通，开关暂不产生通知` : detail}</small>
       </span>
       <input
         className="pref-toggle"
@@ -89,9 +95,9 @@ function NotificationPreferencesCard() {
       <h2>通知偏好</h2>
       <p>每类提醒独立开关，关闭后不落应用内通知，也不会外推。</p>
       {row("notifyDigest", "盘前速报", "港股 / 美股关注公司的重要事件")}
-      {row("notifyPositions", "持仓纪律", "止损、止盈与大幅回撤")}
+      {row("notifyPositions", "持仓纪律", "止损、止盈与大幅回撤", true)}
       {row("notifyFalsify", "证伪命中", "研究时设置的价格 / 基本面条件")}
-      {row("notifyReview", "研究复盘", "判断长期未更新时提醒")}
+      {row("notifyReview", "研究复盘", "判断长期未更新时提醒", true)}
       {row("notifyEarnings", "业绩后复核", "实际值与预期到货后的核对")}
     </article>
   );

@@ -69,10 +69,10 @@ export async function getUnusedInvite(code: string) {
   return row ? { code: row.code, note: row.note } : null;
 }
 
-export async function consumeInvite(code: string, userId: string) {
-  return (await database().update(inviteCodes).set({ usedBy: userId, usedAt: new Date() })
-    .where(and(eq(inviteCodes.code, code), isNull(inviteCodes.usedBy))).returning({ code: inviteCodes.code })).length > 0;
-}
+// `consumeInvite(code, userId)` 曾在这里：一条**非原子**的销号路径（先查后改，中间有
+// TOCTOU 窗口，两个人能同时用掉同一个邀请码）。真正的注册流程走 `createUserWithInvite`,
+// 它在单个事务里 `SELECT ... FOR UPDATE` + update，没有这个窗口。旧函数零调用、且是个
+// 等人踩的陷阱，已删除——不是"清理死代码"，是移走一把上了膛的枪。
 
 export async function listInvites() {
   return database().select().from(inviteCodes).orderBy(desc(inviteCodes.createdAt));

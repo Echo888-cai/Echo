@@ -330,14 +330,35 @@ async function generateReport(input: unknown, userId: string) {
   }
 }
 
+/**
+ * earnings_calendar 的行**可能是冻结脏数据**，读之前必须过新鲜度门槛。
+ *
+ * `upsertEarningsCalendar` 至今没有任何调用方（#28 接通的是 finnhub/hkAdr 两个实时
+ * 适配器，供 `getNextEarnings` 用；这张 postgres 缓存表始终没拿到写入方）。表里现存的
+ * 行是某个已删除的临时脚本写的，`knowledge_time` 永远不会再变。`getEarningsCalendarRow`
+ * 本身不设门槛（14 天上限在 postgresCalendarAdapter 里，不在 repository），所以直接读
+ * 等于把死数据当事实。
+ *
+ * #32 接 F-2 时就踩了这个：当时误以为这张表已有真实数据。今天碰巧无害（冻结的
+ * last_date 比任何新快照都旧，computePostEarnings 正好返回 null），但等真财报到货，
+ * 这张表还会停在旧日期——那才是会骗人的时候。
+ */
+const EARNINGS_CACHE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+
+async function freshEarningsRow(ticker: string) {
+  const row = await getEarningsCalendarRow(ticker).catch(() => null);
+  if (!row?.fetched_at) return null;
+  return Date.now() - new Date(row.fetched_at).getTime() > EARNINGS_CACHE_MAX_AGE_MS ? null : row;
+}
+
 async function scorecardFor(ticker: string, userId: string) {
   // earningsRow 驱动 F-2「快照之后有没有新财报到货」（postEarnings / epsBeatRate）。
-  // 不传时 computeTickerScorecard 只能诚实地把这两项恒置为 null——earnings_calendar
-  // 自 postgresCalendarAdapter 接通后已有真实数据，没有理由再瞒着记分卡。
+  // 拿不到（含缓存超龄）时 computeTickerScorecard 会诚实地把这两项置为 null，
+  // 而不是拿旧财报冒充"快照之后的新事实"。
   const [snapshots, market, earningsRow] = await Promise.all([
     listResearchSnapshots(ticker, userId),
     ensureFreshMarketSnapshot(ticker),
-    getEarningsCalendarRow(ticker).catch(() => null)
+    freshEarningsRow(ticker)
   ]);
   return computeTickerScorecard(snapshots, { price: market?.price ?? null }, undefined, earningsRow);
 }

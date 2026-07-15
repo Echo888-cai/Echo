@@ -75,6 +75,7 @@ npm install
 npm run db:migrate
 npm run lint
 npm run check:retired
+npm run check:frozen
 npm run typecheck
 npm run lint:rust
 npm test
@@ -86,6 +87,7 @@ npm run db:recovery-drill
 同时满足：
 
 - 仓库扫描不存在已退役入口、文件数据库依赖、迁移兼容层或提交的密钥与构建产物。
+- **（新增 2026-07-15）冻结表门禁**：`npm run check:frozen` 扫描每个 repository 的导出函数，零生产调用方即失败——本仓库反复出现的头号缺陷类型是"写好了没人调"（earnings_calendar #28、comp_peers #31、research_snapshots/watch_rules #32、hk_buybacks 反向），它们不报错、不告警，只是永远不生效，CI 全绿。两个方向都拦（写入方零调用=表永远是空的；读取方零调用=数据白采）。例外必须在脚本的 `ALLOWED` 里记账并写明解除条件；条目一旦重新有了调用方，门禁会要求删除它，防止白名单替真问题挡枪。
 - 全新 PostgreSQL 数据库可迁移、首次启动并完成私有数据写入。
 - GitHub 必需检查为绿色，契约、E2E、Temporal 故障恢复与 PostgreSQL RLS 测试均通过。
 - 备份可在隔离数据库恢复，关键表数量、约束和强制 RLS 保持一致。
@@ -123,6 +125,9 @@ npm run db:recovery-drill
 - 为每个核心数字展示来源、口径、有效时间、获知时间和新鲜度；建立"未核到/口径冲突/来源过期"统一待办。
 
 退出指标：研究回答中行情/财务/网页证据三类源的真实命中率可度量并在状态页可见；所有"未核到"均有原因和下一步；引用可打开率 ≥ 99%。
+
+- [ ] **earnings_calendar 仍是冻结表（2026-07-15 由新上线的冻结表门禁首次抓到，纠正 #32 的一处错误陈述）**：#28 接通的是 finnhub/hkAdr 两个**实时**适配器（供 `getNextEarnings`），但 `upsertEarningsCalendar` 至今**零调用**——这张 postgres 缓存表从来没拿到写入方，表里现存的行是某个已删除的临时脚本写的，`knowledge_time` 永不更新。#32 的 PR 描述里写"earnings_calendar 自 #28 起早有真实数据"，**那句是错的**。真实影响面三处：①`postgresCalendarAdapter` 沦为永远返回 missing 的空壳（14 天上限一到就全部降级），在链路里是死重；②worker 的 `loadEarningsReviewCandidates` → `listWithLastReported()` 让**整个业绩复盘 workflow 跑在死数据上**；③F-2 的 `postEarnings`/`epsBeatRate` 拿不到 `last_*` 字段，永远为 null——#32 只修了"`scorecardFor` 漏传 earningsRow"，但它读的表本身是空的/脏的，属半接。已先止血：`scorecardFor` 加 14 天新鲜度门槛（`getEarningsCalendarRow` 自身不设门槛，门槛在适配器里，直接读等于把死数据当事实）。**真修需要一个提供"上期已报告实际值/预期/惊喜幅度"的源**（finnhub `/stock/earnings`）——现有 calendar 信封只有 `nextDate/quarter/year/epsEstimate`，给不了 `last_*`，属 P1 规模。
+- [ ] **通知偏好曾全部失效（2026-07-15 由冻结表门禁抓到 `notificationEnabled` 零调用）**：设置页 5 个开关一个都不起作用。三重原因：①`notificationEnabled` 全仓库无人调用，worker 的 3 处 `insertNotification` 都没查过偏好；②`kindPreference` 的 key 是 `digest`，而 #27 之后 worker 改发 `event_digest`——**kind 字符串漂移**，就算接上偏好也对不上（库里那 7 行 `digest` 是旧底盘遗留）；③`position_alert`/`review_reminder` **全仓库没有任何代码会发出**，对应的"持仓纪律"/"研究复盘"两个开关控制着不存在的功能。已修：偏好检查收敛进 `insertNotification` 这个唯一咽喉（5 个调用方各自记得查一遍，正是这次出事的原因）；修正 kind 字符串；两个未建功能的开关在设置页标注"未接通"，不冒充可用。仍待做：把这两类提醒真正建出来（P3）。
 
 ### P2 · 研究质量重建（把领域层资产接回主链路）
 
