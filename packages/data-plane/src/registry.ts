@@ -14,8 +14,9 @@ import { postgresFundamentalsAdapter } from "./adapters/postgresFundamentalsAdap
 import { fmpFundamentalsAdapter } from "./adapters/fmpFundamentalsAdapter.js";
 import { postgresFilingsAdapter } from "./adapters/postgresFilingsAdapter.js";
 import { postgresCalendarAdapter } from "./adapters/postgresCalendarAdapter.js";
-import { finnhubCalendarAdapter } from "./adapters/finnhubCalendarAdapter.js";
+import { finnhubCalendarAdapter, fetchFinnhubLastReported, type LastReportedEarnings } from "./adapters/finnhubCalendarAdapter.js";
 import { hkAdrCalendarAdapter } from "./adapters/hkAdrCalendarAdapter.js";
+import { adrOrBareSymbol } from "./hkAdr.js";
 import { finnhubPeersAdapter } from "./adapters/finnhubPeersAdapter.js";
 import { detectMarket, type Market } from "./market.js";
 import { selectAdapter, selectAdapterChain, type SelectOptions } from "./router.js";
@@ -135,6 +136,22 @@ export async function getNextEarnings(ticker: string, opts: SelectOptions = {}):
   }
   if (last) return last;
   throw new Error(`all calendar adapters failed for ${ticker}`);
+}
+
+/**
+ * Last reported quarter (EPS actual/estimate/surprise) — the write-side source
+ * for earnings_calendar's `last_*` columns (packages/application/src/
+ * earningsCalendar.ts owns the cache row, mirroring compPeers.ts). US tickers
+ * hit finnhub directly; HK goes through the hand-verified ADR map, same
+ * coverage story as the calendar and peers endpoints (HK direct = 403).
+ */
+export async function getLastReportedEarnings(ticker: string): Promise<ProviderEnvelope & { lastReported: LastReportedEarnings | null }> {
+  const symbol = adrOrBareSymbol(ticker);
+  if (!symbol) {
+    return { providerStatus: "missing" as const, source: null,
+      detail: "本市场没有已报告业绩源（无 ADR 映射）", lastReported: null } as any;
+  }
+  return fetchFinnhubLastReported(symbol);
 }
 
 /** Read-only view of the registered live quote adapters, for the canary probe script. */

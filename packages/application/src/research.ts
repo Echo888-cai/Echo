@@ -5,7 +5,8 @@ import { getCompanyProfile, upsertCompanyProfile } from "@echo/db/repositories/c
 import { saveResearchSession } from "@echo/db/repositories/researchSessionsRepository.js";
 import { getHkFinancials } from "@echo/db/repositories/hkFinancialsRepository.js";
 import { listRecentHkBuybacks } from "@echo/db/repositories/hkBuybackRepository.js";
-import { detectMarket, getFundamentals, getNextEarnings } from "@echo/data-plane";
+import { detectMarket, getFundamentals } from "@echo/data-plane";
+import { ensureEarningsCalendar } from "./earningsCalendar.js";
 import { composerFor, reportComposerFor } from "./answerComposition.js";
 import { getComparablePeers } from "./compPeers.js";
 import { insertLlmAudit } from "@echo/db/repositories/llmAuditRepository.js";
@@ -159,8 +160,10 @@ async function getUsFinancials(ticker: string): Promise<any[]> {
  */
 async function getEarnings(ticker: string): Promise<any> {
   try {
-    const { result } = await getNextEarnings(ticker);
-    return result;
+    // 经 ensureEarningsCalendar 走：同一次取数顺带刷新 earnings_calendar 缓存行
+    // （含 last_* 已报告字段）——这张表此前没有任何写入方，业绩复盘 workflow 和
+    // F-2 记分卡都跑在冻结脏数据上（check:frozen 首抓的真缺陷）。
+    return await ensureEarningsCalendar(ticker);
   } catch (error) {
     return { providerStatus: "missing", detail: error instanceof Error ? error.message : "日历源不可用" };
   }
