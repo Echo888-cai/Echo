@@ -26,6 +26,11 @@ import { readFileSync } from "node:fs";
 import process from "node:process";
 
 const REPO_DIR = "packages/db/src/repositories/";
+// 本文件必须把自己排除在扫描之外，否则 ALLOWED 里那些形如
+// "authRepository.ts::listInvites" 的 key 会让每个被记账的函数都显得"有人用"，
+// 全体误报成"白名单已过期"。本地一度是绿的，只因为脚本当时还没被 git 跟踪——
+// 一提交进 CI 就全红。它是描述 repository 的元文件，不是消费方。
+const SELF = "scripts/quality/check-frozen-tables.mjs";
 
 /**
  * 已知且**已记账**的例外。key 是 `文件名::导出函数名`，value 必须说明解除条件。
@@ -131,6 +136,7 @@ const repositoryFiles = files.filter((f) => f.startsWith(REPO_DIR) && f.endsWith
 // 正是这个盲区让三条链路静默了两个月。barrel 的 re-export 同理不算"有人用"。
 const productionFiles = files.filter((f) =>
   /\.(?:[cm]?js|jsx|ts|tsx)$/.test(f) &&
+  f !== SELF &&
   !f.startsWith(REPO_DIR) &&
   !/\.test\.|\/test\/|\/tests\/|__tests__/.test(f) &&
   !/\/index\.(?:ts|js)$/.test(f) &&
