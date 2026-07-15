@@ -5,7 +5,8 @@ import { getCompanyProfile, upsertCompanyProfile } from "@echo/db/repositories/c
 import { saveResearchSession } from "@echo/db/repositories/researchSessionsRepository.js";
 import { getHkFinancials } from "@echo/db/repositories/hkFinancialsRepository.js";
 import { getCnFinancials } from "@echo/db/repositories/cnFinancialsRepository.js";
-import { getFundamentals } from "@echo/data-plane";
+import { getFundamentals, getNextEarnings } from "@echo/data-plane";
+import { composerFor } from "./answerComposition.js";
 import { insertLlmAudit } from "@echo/db/repositories/llmAuditRepository.js";
 import { insertFactGuardAudit } from "@echo/db/repositories/factGuardRepository.js";
 import { buildFactsRegistry, buildSoftNote, displayValuation, summarizeVerdict, verifyAnswerNumbers } from "@echo/domain";
@@ -141,57 +142,99 @@ async function getUsFinancials(ticker: string): Promise<any[]> {
   }
 }
 
-function financialSummary(rows: any[]) {
-  const row = rows[0];
-  if (!row) return "最新完整三表当前未核到，以下判断降低置信度。";
-  const values = [
-    row.period_label || row.periodEnd,
-    row.revenue != null ? `收入 ${row.revenue} ${row.currency || ""}` : null,
-    row.net_income != null ? `净利润 ${row.net_income} ${row.currency || ""}` : null,
-    row.operating_cash_flow != null ? `经营现金流 ${row.operating_cash_flow} ${row.currency || ""}` : null
-  ].filter(Boolean);
-  return values.join("；");
+/**
+ * Next earnings date — real, freshly-probed source (Finnhub for US, the curated
+ * HK→ADR map for HK; A-shares honestly resolve to missing). The composer renders
+ * it into the prompt and forbids inventing a date when it's absent, which is the
+ * whole reason to pass the envelope through rather than only the date string.
+ * A calendar outage must not fail the research call, so errors degrade to the
+ * same "未核到" shape a missing entry produces.
+ */
+async function getEarnings(ticker: string): Promise<any> {
+  try {
+    const { result } = await getNextEarnings(ticker);
+    return result;
+  } catch (error) {
+    return { providerStatus: "missing", detail: error instanceof Error ? error.message : "日历源不可用" };
+  }
 }
 
-function deterministicAnswer(company: any, profile: any, market: any, financials: any[], question: string) {
-  const name = company?.nameZh || company?.nameEn || company?.ticker || "该公司";
-  const price = market?.price != null ? `${market.price} ${company?.currency || ""}` : "当前未核到";
-  const thesis = profile?.thesis || company?.summary?.[0] || "需要继续从赚钱机制、竞争壁垒和现金流兑现三条线验证";
-  const bull = profile?.bull?.length ? profile.bull : company?.bull || [];
-  const bear = profile?.bear?.length ? profile.bear : company?.bear || company?.risks || [];
-  const monitors = profile?.monitors?.length ? profile.monitors : company?.monitors || [];
-  return [
-    `## 核心判断`,
-    `${name} 当前更适合按“持续验证”处理：${thesis}。本轮问题是“${question}”；现价口径为 ${price}，价格只表示市场状态，不等于内在价值。`,
-    `## 财务质量`,
-    financialSummary(financials),
-    `## Bull case`,
-    ...(bull.length ? bull.slice(0, 5).map((item: string) => `- ${item}`) : ["- 主业增长、利润率与经营现金流若能同步改善，判断才会增强。"]),
-    `## 风险与证伪条件`,
-    ...(bear.length ? bear.slice(0, 5).map((item: string) => `- ${item}`) : ["- 若增长只靠投入、现金流不兑现或竞争压低利润率，当前逻辑会被削弱。"]),
-    `## 关键监控`,
-    ...(monitors.length ? monitors.slice(0, 6).map((item: string) => `- ${item}`) : ["- 收入质量、利润率、经营现金流、资本开支与股东回报"]),
-    `## 来源`,
-    `- PostgreSQL 研究档案与已摄取的一手公告`,
-    market?.source ? `- 行情来源：${market.source}（${market.as_of || "时间未标注"}）` : "- 行情：本轮未核到可用快照",
-    "",
-    "> 仅供研究学习，不构成投资建议。"
-  ].join("\n\n");
+/**
+ * `keyDrivers` are rendered into the prompt as 关键卡片 — the model's at-a-glance
+ * read of where this company actually stands. Every card is derived from a number
+ * we really hold (quote / filing / our own valuation band); a source we didn't
+ * resolve produces a 未核到 card rather than a confident-sounding empty one.
+ * The retired stack built these with a whole LLM agent-panel schema
+ * (ce58d27:src/server/schemas/agentPanel.js) — deriving them from the data we
+ * already fetched costs nothing and can't hallucinate.
+ *
+ * Summaries carry no trailing punctuation: the composer's templates append their
+ * own ("核心矛盾是：{summary}；同时…", "2. 基本面：{status}。{summary}。"), so a
+ * summary ending in 。 renders as "净利率 30.4%。。" — which is why the module
+ * keeps a cleanSentence() helper for exactly this shape of input.
+ */
+function keyDriversFrom(market: any, financialsData: any, valuation: any) {
+  const drivers = [];
+  drivers.push(market?.price != null
+    ? { name: "价格信号", status: market.change_percent != null ? `${Number(market.change_percent) >= 0 ? "+" : ""}${Number(market.change_percent).toFixed(2)}%` : "已核到",
+        summary: `现价 ${market.price}${market.source ? `，来源 ${market.source}` : ""}${market.as_of ? `，截至 ${market.as_of}` : ""}` }
+    : { name: "价格信号", status: "未核到", summary: "本轮没有取到可用行情快照，价格相关判断置信度下降" });
+  drivers.push(financialsData?.providerStatus === "ok"
+    ? { name: "基本面", status: financialsData.revenueGrowth != null ? `收入同比 ${Number(financialsData.revenueGrowth).toFixed(1)}%` : "已核到",
+        summary: `${financialsData.period ? `${financialsData.period} 期` : "最新期"}财报已核到（来源 ${financialsData.source}）${financialsData.netMargin != null ? `，净利率 ${Number(financialsData.netMargin).toFixed(1)}%` : ""}` }
+    : { name: "基本面", status: "未核到", summary: "本轮没有可用的标准化财报口径，财务数字一律不得估算" });
+  drivers.push(valuation && !valuation.cannotValueReason
+    ? { name: "估值", status: valuation.method, summary: `看空 ${valuation.bear} / 中性 ${valuation.base} / 看多 ${valuation.bull}，现价 ${valuation.currentPrice}` }
+    : { name: "估值", status: "未核到", summary: String(valuation?.cannotValueReason || "缺少定价所需的关键字段，本轮不给估值区间").replace(/[。；]+$/, "") });
+  return drivers;
 }
 
-function decisionPanel(company: any, profile: any, market: any) {
+function decisionPanel(company: any, profile: any, market: any, financialsData?: any, valuation?: any, earnings?: any) {
+  const connectedData = [
+    market ? "实时行情" : null,
+    financialsData?.providerStatus === "ok" ? "财报口径" : null,
+    valuation && !valuation.cannotValueReason ? "估值区间" : null,
+    earnings?.providerStatus === "ok" ? "财报日历" : null
+  ].filter(Boolean) as string[];
+  const missingData = [
+    market ? null : "实时行情",
+    financialsData?.providerStatus === "ok" ? null : "标准化财报",
+    valuation && !valuation.cannotValueReason ? null : "自洽估值区间",
+    earnings?.providerStatus === "ok" ? null : "下一业绩日",
+    // Honest, and load-bearing: the composer's rules tell the model to write
+    // 未核到 for anything outside the given blocks. Naming these two keeps it
+    // from quietly filling them from memory (docs/PLAN.md P1 — neither source
+    // has a working adapter).
+    "网页证据",
+    "同业可比倍数"
+  ].filter(Boolean) as string[];
+  // Share of the four sources we can actually resolve today — not a product
+  // score, just "how much of this answer is standing on checked numbers".
+  const dataCompleteness = Math.round((connectedData.length / 4) * 100);
   return {
     ticker: company.ticker,
     companyName: company.nameZh || company.nameEn || company.ticker,
     researchStatus: profile?.researchStatus || "watch",
     confidence: profile?.confidence || "中",
     oneLineView: profile?.thesis || company.summary?.[0] || "当前判断需要财务与现金流继续验证",
-    price: { value: market?.price ?? "暂不可用", source: market?.source || "未核到", asOf: market?.as_of || null },
+    price: {
+      value: market?.price ?? "暂不可用",
+      source: market?.source || "未核到",
+      asOf: market?.as_of || null,
+      // The composer reads price.change/timestamp (asOf is our own field name);
+      // without these the prompt's 行情 line silently dropped the move and the
+      // as-of date the model is supposed to cite.
+      change: market?.change_percent != null ? `${Number(market.change_percent) >= 0 ? "+" : ""}${Number(market.change_percent).toFixed(2)}%` : "暂不可用",
+      timestamp: market?.as_of || null
+    },
     bullCase: profile?.bull || company.bull || [],
     bearCase: profile?.bear || company.bear || company.risks || [],
     monitors: profile?.monitors || company.monitors || [],
     sources: market?.source ? [{ label: market.source, timestamp: market.as_of }] : [],
-    missingData: market ? [] : ["实时行情"]
+    keyDrivers: keyDriversFrom(market, financialsData, valuation),
+    connectedData,
+    missingData,
+    dataCompleteness
   };
 }
 
@@ -282,6 +325,10 @@ function toDomainSources(company: any, market: any, rows: any[]) {
   const { eps: annualEps, epsAnnualized } = deriveAnnualEps(rows);
   const financialsData = row ? {
     providerStatus: "ok" as const, currency: row.currency || company.currency,
+    // The composer's prompt cites this block as "唯一财务事实源（来源 X）" — without a
+    // source it rendered "来源 undefined", which reads like a bug to the model and
+    // undermines the very line telling it these numbers are authoritative.
+    source: row.source || (row.pe_ttm != null ? "FMP" : "一手 filing"),
     revenue: row.revenue, grossProfit: row.gross_profit, operatingIncome: row.operating_income,
     netIncome: row.net_income, operatingCashFlow: row.operating_cash_flow, cashAndEquivalents: row.cash_and_equivalents,
     netCash: row.net_cash, eps: annualEps, epsAnnualized, revenueGrowth: pctChange(row.revenue, row.revenue_prior),
@@ -364,34 +411,76 @@ export async function runResearch(input: ResearchInput, userId: string, onToken?
     decisionPanel: null, dataSources: {}, marketSnapshot: null, newsSnapshot: null, valuation: null, portrait: null
   };
   await onStage?.("market_financials");
-  const [profile, market, financials] = await Promise.all([
+  const [profile, market, financials, earnings] = await Promise.all([
     getCompanyProfile(company.ticker, userId),
     ensureFreshMarketSnapshot(company.ticker),
-    company.ticker.endsWith(".HK") ? getHkFinancials(company.ticker) : /\.(SS|SZ)$/.test(company.ticker) ? getCnFinancials(company.ticker) : getUsFinancials(company.ticker)
+    company.ticker.endsWith(".HK") ? getHkFinancials(company.ticker) : /\.(SS|SZ)$/.test(company.ticker) ? getCnFinancials(company.ticker) : getUsFinancials(company.ticker),
+    getEarnings(company.ticker)
   ]);
-  const fallback = deterministicAnswer(company, profile, market, financials, input.question);
   const { marketSnapshot, financialsData } = toDomainSources(company, market, financials);
   await onStage?.("valuation");
   const valuation = computeResearchValuation(company, marketSnapshot, financialsData);
-  const valuationFacts = valuation && !valuation.cannotValueReason
-    ? `\n估值（${valuation.method}）：看空 ${valuation.bear} / 中性 ${valuation.base} / 看多 ${valuation.bull} ${company.currency}（依据：${(valuation.keyAssumptions || []).join("；")}）`
-    : `\n估值：本轮数据不足以给出自洽估值区间（${valuation?.cannotValueReason || "缺少定价所需的关键字段"}）`;
-  const facts = `公司：${company.nameZh}（${company.ticker}）\n现价：${market?.price ?? "未核到"}\n财务：${financialSummary(financials)}${valuationFacts}\n既有主线：${profile?.thesis || company.summary?.join("；") || "未沉淀"}`;
+  const panel = decisionPanel(company, profile, market, financialsData, valuation, earnings);
+  // The prompt now comes from the domain composer instead of a hand-rolled
+  // 4-line facts string: it renders the company archive (护城河/商业模式/多空/
+  // 监控项), the real filing block, our own valuation band, the next earnings
+  // date, and — the point of docs/PLAN.md P2 — routes on classifyResearchIntent
+  // so a "靠什么赚钱" question gets business-model sections instead of the same
+  // full research template every time. Its anti-fabrication rules (no peer
+  // multiples outside the given list, no invented earnings dates, no "行业常识"
+  // escape hatch) are the reason to use it verbatim rather than paraphrase.
+  const composer = composerFor(company);
+  // Must carry every capability the composer keys off, not just market: it reads
+  // dataSources.financials/filings/news/estimates to decide which "还缺什么" gap
+  // lines to print and whether the 推断 section may draw firm conclusions. Passing
+  // market alone made every answer claim 财报三表还没补齐 while quoting the filing
+  // numbers three paragraphs above it. news/estimates are honestly missing — no
+  // adapter exists (docs/PLAN.md P1).
+  const isFirstPartyFiling = /\.(HK|SS|SZ)$/.test(company.ticker);
+  const composerSources = {
+    market: { provider: market?.source, asOf: market?.as_of, status: market ? "ok" : "missing" },
+    financials: { status: financialsData.providerStatus === "ok" ? "ok" : "missing" },
+    // Only HK/CN financials come from our own filing pipeline; US rows are FMP's
+    // standardized statements, which are not a filing feed.
+    filings: { status: financialsData.providerStatus === "ok" && isFirstPartyFiling ? "ok" : "missing" },
+    news: { status: "missing" },
+    estimates: { status: "missing" }
+  };
+  const composerContext = {
+    marketSnapshot, financialsData, valuation, earnings,
+    portraitContext: profile?.thesis ? `既有研究主线：${profile.thesis}` : "",
+    history: input.history,
+    // Not wired to any source yet (docs/PLAN.md P1) — passing null makes the
+    // composer print an explicit 未接通 block, which is what stops the model
+    // from filling the gap from memory.
+    webEvidence: null, newsSnapshot: null, compare: null, dualListing: null, dualQuote: null, otherHoldings: null
+  };
+  const prompt = composer.buildChatPrompt(input.question, panel, composerSources, composerContext);
+  // The no-model path composes from the same panel and the same intent router, so
+  // both answers share one section structure. It replaces a local
+  // `deterministicAnswer` template that emitted a completely different shape
+  // (## 核心判断 …) — meaning the answer silently changed layout depending on
+  // whether the model call succeeded, and the E2E only ever asserted the
+  // fallback's headings because CI has no model key.
+  const fallback = composer.researchReplyFromPanel(panel, input.question, composerSources, composerContext);
   await onStage?.("generating");
   const generated = await modelAnswer(
     "你是审慎的买方研究员。只使用给出的事实，不编数字；取不到就写未核到。估值区间必须使用给定的估值数据，不得自行编造倍数或目标价。" +
       "红线：只给判断，不给指令——禁止任何形式的买入/卖出/持有/加仓/减仓/追高/抄底建议，包括正向表述（“建议买入”）和反向劝阻（“不建议追高”“不建议此时买入”），这类劝阻性措辞本质上仍是买卖指令，同样禁止。" +
       "改用研究语言描述赔率与状态，例如“当前价位对应的赔率偏低/偏高”“性价比一般，等待更好的验证点或更低的安全边际”“逻辑需要重估”，只呈现判断依据，买卖时机与仓位决策留给用户自己判断。" +
-      "输出中文 Markdown，包含核心判断、赚钱机制、财务质量、估值与赔率、风险证伪、下一步、来源。",
-    `${facts}\n\n用户问题：${input.question}`,
+      "严格遵守用户消息里给出的段落结构与作答规则。",
+    prompt,
     userId,
     onToken
   );
-  const panel = decisionPanel(company, profile, market);
   const id = input.sessionId || `s_${randomUUID()}`;
   await onStage?.("fact_check");
+  // normalizeResearchAnswer backfills the two things the model drops most often:
+  // the 北京时间 prefix and a 来源 section (a real 靠什么赚钱 回测 ended with no
+  // 来源 at all despite the rules asking for one). Run it before the guard so
+  // factGuard verifies the exact text the user ends up reading.
   const guarded = generated
-    ? await applyFactGuard(generated.content, company, marketSnapshot, financialsData, valuation)
+    ? await applyFactGuard(composer.normalizeResearchAnswer(generated.content, panel, composerSources), company, marketSnapshot, financialsData, valuation)
     : { content: fallback, factGuard: null };
   const content = guarded.content;
   await saveResearchSession({ id, ticker: company.ticker, companyName: company.nameZh, title: input.question, question: input.question,

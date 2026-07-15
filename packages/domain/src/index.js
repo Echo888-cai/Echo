@@ -5,6 +5,7 @@ export * from "./falsifyRules.js";
 export * from "./financialQuality.js";
 export * from "./format.js";
 export * from "./historicalValuation.js";
+export * from "./intentClassifier.js";
 export * from "./portraitRules.js";
 export * from "./researchReview.js";
 export * from "./risk.js";
