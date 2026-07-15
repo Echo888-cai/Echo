@@ -26,7 +26,7 @@ try {
   await execFileAsync("pg_restore", ["--no-owner", "--dbname", drillUrl, dump], { timeout: 10 * 60_000 });
   const restored = postgres(drillUrl, { max: 1 });
   try {
-    const tables = ["companies", "users", "research_sessions", "company_profiles", "portfolio_positions", "notifications", "hk_financials", "cn_financials"];
+    const tables = ["companies", "users", "research_sessions", "company_profiles", "portfolio_positions", "notifications", "hk_financials"];
     for (const table of tables) {
       const [sourceCount] = await source.unsafe(`select count(*)::int as count from ${table}`);
       const [restoredCount] = await restored.unsafe(`select count(*)::int as count from ${table}`);

@@ -9,8 +9,9 @@
  *   010_insider_activity.sql (insider_activity)
  *   011_historical_valuation.sql (historical_valuation)
  *   012_hk_buybacks.sql (hk_buybacks)
- *   015_cn_financials.sql (cn_financials, cn_filing_ingest_log)
  * Structured from the canonical financial repository shapes.
+ * cn_financials / cn_filing_ingest_log 已随 A 股退场在 0006 迁移中 DROP（备份见
+ * 仓库外 cn_financials_backup_2026-07-15.sql）。
  */
 import {
   pgTable,
@@ -28,8 +29,6 @@ import { companies } from "./core.js";
 
 /**
  * hk_financials — first-party filing extracts (HKEX PDF).
- * cn_financials/cn_filing_ingest_log 仍在库里但已无任何读写方：A 股退场（PLAN v3），
- * 表定义保留到备份后的 DROP 迁移（单独审批的收缩 PR）为止。
  * `period_end` (the reporting period this row's figures pertain to) -> valid_time.
  * `extracted_at` (when our pipeline pulled + parsed the filing) -> knowledge_time.
  * Both are straight renames of an already-bitemporal pair; period_label/period_type
@@ -72,12 +71,8 @@ export const hkFinancials = pgTable("hk_financials", financialsColumns(), (t) =>
   tickerIdx: index("idx_hk_financials_ticker").on(t.ticker, t.validTime)
 }));
 
-export const cnFinancials = pgTable("cn_financials", financialsColumns(), (t) => ({
-  tickerIdx: index("idx_cn_financials_ticker").on(t.ticker, t.validTime)
-}));
-
 /**
- * hk_filing_ingest_log / cn_filing_ingest_log — ingestion-attempt log, one row per
+ * hk_filing_ingest_log — ingestion-attempt log, one row per
  * ticker (upserted on every scan). This is a pure operational log, not a fact with a
  * distinct reporting period — there's nothing to call valid_time except "when we
  * checked", so valid_time intentionally mirrors knowledge_time here (both map to the
@@ -100,7 +95,6 @@ function ingestLogColumns() {
 }
 
 export const hkFilingIngestLog = pgTable("hk_filing_ingest_log", ingestLogColumns());
-export const cnFilingIngestLog = pgTable("cn_filing_ingest_log", ingestLogColumns());
 
 /**
  * earnings_calendar — one row per ticker: latest known "next report" prediction plus
