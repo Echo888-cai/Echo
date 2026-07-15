@@ -118,7 +118,7 @@ export async function buildStatusSnapshot(userId = "local") {
         id: "financials", name: "财务数据",
         ...(hasFmp
           ? capabilityStatus("financials", "财务源")
-          : { status: "limited" as const, detail: "未配置 FMP_API_KEY；港/A 股由一手 filing 覆盖，美股标准化三表缺失" })
+          : { status: "limited" as const, detail: "未配置 FMP_API_KEY；港股由一手 filing 覆盖，美股标准化三表缺失" })
       },
       // No news adapter exists anywhere in the repo. The old card read the
       // FINNHUB/ALPHAVANTAGE/TWELVEDATA keys — which are registered for *quotes*
@@ -126,7 +126,7 @@ export async function buildStatusSnapshot(userId = "local") {
       { id: "news", name: "新闻舆情", status: "limited" as const, detail: "未接通：仓库内无新闻适配器（P1 待办）" },
       { id: "web_evidence", name: "网页证据层", status: "limited" as const,
         detail: hasWebSearch ? "已配置搜索密钥，但适配器尚未接通（P1 待办）" : "未接通：无搜索适配器，且未配置 TAVILY/SERPAPI 密钥" },
-      { id: "filings", name: "公告数据", status: "ok" as const, detail: "HKEX、CNINFO、SEC 一手公告管道" },
+      { id: "filings", name: "公告数据", status: "ok" as const, detail: "HKEX 一手公告管道" },
       {
         id: "earnings", name: "财报日历",
         ...(hasFinnhub

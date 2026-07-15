@@ -1,7 +1,7 @@
 // Shared date, market and number formatting helpers.
 import { marketLabel } from "./market";
 
-// Market label: three-way (港股/美股/A股), reuses market.ts's detectMarket. Blank ticker -> "".
+// Market label: 港股/美股/已停止覆盖(存量 A 股), reuses market.ts's detectMarket. Blank ticker -> "".
 export function marketLabelOf(ticker: string | null | undefined): string {
   if (!ticker) return "";
   return marketLabel(ticker);

@@ -47,7 +47,7 @@ export function Composer({ company, resolvingLabel, busySeconds, onSubmit }: { c
   ) : company ? (
     `${company.nameZh || company.ticker} · ${company.ticker}`
   ) : (
-    "先输入公司名、A股、港股或美股代码"
+    "先输入公司名、港股或美股代码"
   );
 
   return (
@@ -58,7 +58,7 @@ export function Composer({ company, resolvingLabel, busySeconds, onSubmit }: { c
           name="query"
           rows={2}
           maxLength={1200}
-          placeholder={company ? "继续追问：利润、护城河、估值或证伪条件" : "输入公司名、A股、港股或美股代码，例如：阿里巴巴最近怎么样？AAPL 赚钱吗？"}
+          placeholder={company ? "继续追问：利润、护城河、估值或证伪条件" : "输入公司名、港股或美股代码，例如：阿里巴巴最近怎么样？AAPL 赚钱吗？"}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}

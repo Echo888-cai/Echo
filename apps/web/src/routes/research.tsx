@@ -154,7 +154,7 @@ const EXAMPLES = [
   { name: "腾讯", ticker: "0700.HK", market: "港股", q: "腾讯最近怎么样？" },
   { name: "苹果", ticker: "AAPL", market: "美股", q: "苹果赚钱吗？" },
   { name: "英伟达", ticker: "NVDA", market: "美股", q: "英伟达的护城河在哪？" },
-  { name: "贵州茅台", ticker: "600519.SS", market: "A股", q: "贵州茅台靠什么赚钱？" }
+  { name: "阿里巴巴", ticker: "9988.HK", market: "港股", q: "阿里巴巴靠什么赚钱？" }
 ];
 const CAPS = ["赚钱机制", "护城河", "竞争格局", "估值赔率", "什么会证伪"];
 
@@ -171,7 +171,7 @@ function EmptyState({ onExample }: { onExample: (q: string) => void }) {
           <br />
           见真知。<span className="hero-slogan-en">Seek signal. Ignore noise.</span>
         </h2>
-        <p className="hero-sub">A 股、港股、美股与全球科技资产的 AI 价值研究。从财报、估值、新闻与行业趋势里提取真正有价值的信号，一句话就开始，复杂研究再沉到底层。</p>
+        <p className="hero-sub">港股、美股与全球科技资产的 AI 价值研究。从财报、估值、新闻与行业趋势里提取真正有价值的信号，一句话就开始，复杂研究再沉到底层。</p>
         <div className="hero-caps">
           {CAPS.map((c) => (
             <span className="cap-pill" key={c}>
@@ -185,7 +185,7 @@ function EmptyState({ onExample }: { onExample: (q: string) => void }) {
           <button className="example-card" type="button" onClick={() => onExample(item.q)} key={item.ticker}>
             <span className="ex-head">
               <strong>{item.name}</strong>
-              <span className={`ex-badge ${item.market === "美股" ? "us" : item.market === "A股" ? "cn" : "hk"}`}>{item.market}</span>
+              <span className={`ex-badge ${item.market === "美股" ? "us" : "hk"}`}>{item.market}</span>
             </span>
             <span className="ex-ticker">{item.ticker}</span>
             <span className="ex-q">{item.q}</span>

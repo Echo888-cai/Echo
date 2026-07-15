@@ -14,7 +14,9 @@
 import { z } from "zod";
 import { okEnvelope } from "./envelope.js";
 
-const marketEnum = z.enum(["US", "HK", "CN"]);
+// "unsupported" = 已停止覆盖的市场（A 股退场后的存量 .SS/.SZ 条目）：用户记录
+// 不静默删除，但不再提供行情与研究，UI 以"已停止覆盖"标注。
+const marketEnum = z.enum(["US", "HK", "unsupported"]);
 const cardStatusEnum = z.enum(["falsified", "at_risk", "intact"]);
 const priceStatusEnum = z.enum(["ok", "missing", "loading"]);
 

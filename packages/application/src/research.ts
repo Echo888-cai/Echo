@@ -5,8 +5,7 @@ import { getCompanyProfile, upsertCompanyProfile } from "@echo/db/repositories/c
 import { saveResearchSession } from "@echo/db/repositories/researchSessionsRepository.js";
 import { getHkFinancials } from "@echo/db/repositories/hkFinancialsRepository.js";
 import { listRecentHkBuybacks } from "@echo/db/repositories/hkBuybackRepository.js";
-import { getCnFinancials } from "@echo/db/repositories/cnFinancialsRepository.js";
-import { getFundamentals, getNextEarnings } from "@echo/data-plane";
+import { detectMarket, getFundamentals, getNextEarnings } from "@echo/data-plane";
 import { composerFor, reportComposerFor } from "./answerComposition.js";
 import { getComparablePeers } from "./compPeers.js";
 import { insertLlmAudit } from "@echo/db/repositories/llmAuditRepository.js";
@@ -437,7 +436,7 @@ const RESEARCH_SYSTEM_PROMPT =
  *  两处各写一份 dispatch，迟早会在"某个市场该用哪个源"上漂移。 */
 function fetchFinancialsRows(ticker: string): Promise<any[]> {
   if (ticker.endsWith(".HK")) return getHkFinancials(ticker);
-  if (/\.(SS|SZ)$/.test(ticker)) return getCnFinancials(ticker);
+  if (/\.(SS|SZ)$/.test(ticker)) return Promise.resolve([]); // A 股已停止覆盖（PLAN v3 市场聚焦）
   return getUsFinancials(ticker);
 }
 
@@ -460,6 +459,9 @@ export async function financialsDataFor(ticker: string) {
 async function gatherResearchContext(input: ResearchInput, userId: string, onStage?: StageCallback) {
   const company = await resolveInputCompany(input);
   if (!company) return null;
+  // A 股退场（PLAN v3 市场聚焦）：companies 表里的存量 A 股仍能被搜索命中，
+  // 但研究链路对它诚实拒答，而不是跑出一篇行情/财务/估值全部"未核到"的空壳报告。
+  if (detectMarket(company.ticker) === "unsupported") return { delisted: company.ticker as string };
   await onStage?.("market_financials");
   const [profile, market, financials, earnings, buybacks] = await Promise.all([
     getCompanyProfile(company.ticker, userId),
@@ -493,11 +495,11 @@ async function gatherResearchContext(input: ResearchInput, userId: string, onSta
   // market alone made every answer claim 财报三表还没补齐 while quoting the filing
   // numbers three paragraphs above it. news/estimates are honestly missing — no
   // adapter exists (docs/PLAN.md P1).
-  const isFirstPartyFiling = /\.(HK|SS|SZ)$/.test(company.ticker);
+  const isFirstPartyFiling = company.ticker.endsWith(".HK");
   const composerSources = {
     market: { provider: market?.source, asOf: market?.as_of, status: market ? "ok" : "missing" },
     financials: { status: financialsData.providerStatus === "ok" ? "ok" : "missing" },
-    // Only HK/CN financials come from our own filing pipeline; US rows are FMP's
+    // Only HK financials come from our own filing pipeline; US rows are FMP's
     // standardized statements, which are not a filing feed.
     filings: { status: financialsData.providerStatus === "ok" && isFirstPartyFiling ? "ok" : "missing" },
     // 港股回购是我们唯一真正接通的"公告级"一手事实，独立于 filings 报表本身。
@@ -522,7 +524,7 @@ async function gatherResearchContext(input: ResearchInput, userId: string, onSta
   return { company, profile, market, financials, earnings, marketSnapshot, financialsData, valuation, panel, composer, composerSources, composerContext, dataSources };
 }
 
-type ResearchContext = NonNullable<Awaited<ReturnType<typeof gatherResearchContext>>>;
+type ResearchContext = Exclude<NonNullable<Awaited<ReturnType<typeof gatherResearchContext>>>, { delisted: string }>;
 
 /** Persists the session + company profile and returns the fields both artifacts
  *  report back. Shared so a report and a chat answer can never drift on what
@@ -623,6 +625,11 @@ export async function runResearch(input: ResearchInput, userId: string, onToken?
     mode: "chat_local", provider: null, model: null, sessionId: null, content: "我还没识别出要研究的公司。请补充股票代码或完整公司名称。",
     decisionPanel: null, dataSources: {}, marketSnapshot: null, newsSnapshot: null, valuation: null, portrait: null
   };
+  if ("delisted" in ctx) return {
+    mode: "chat_local", provider: null, model: null, sessionId: null,
+    content: `${ctx.delisted} 属于 A 股。Echo 已停止覆盖 A 股市场，现只覆盖美股与港股，不再提供该市场的行情与研究。`,
+    decisionPanel: null, dataSources: {}, marketSnapshot: null, newsSnapshot: null, valuation: null, portrait: null
+  };
   const { company, market, marketSnapshot, financialsData, valuation, panel, composer, composerSources, composerContext } = ctx;
   const prompt = composer.buildChatPrompt(input.question, panel, composerSources, composerContext);
   // The no-model path composes from the same panel and the same intent router, so
@@ -696,6 +703,11 @@ export async function runReport(input: ResearchInput, userId: string) {
   if (!ctx) return {
     mode: "report_local", provider: null, model: null, sessionId: null, decisionPanel: null,
     markdown: "我还没识别出要研究的公司。请补充股票代码或完整公司名称。",
+    dataSources: {}, marketSnapshot: null, newsSnapshot: null, factGuard: null, portrait: null
+  };
+  if ("delisted" in ctx) return {
+    mode: "report_local", provider: null, model: null, sessionId: null, decisionPanel: null,
+    markdown: `${ctx.delisted} 属于 A 股。Echo 已停止覆盖 A 股市场，现只覆盖美股与港股，不再提供该市场的行情与研究。`,
     dataSources: {}, marketSnapshot: null, newsSnapshot: null, factGuard: null, portrait: null
   };
   const { company, market, marketSnapshot, financialsData, valuation, panel, composer, composerSources, composerContext } = ctx;

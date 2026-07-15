@@ -1,5 +1,5 @@
 import { getLatestMarketSnapshot, saveMarketSnapshot } from "@echo/db/repositories/companyRepository.js";
-import { fetchLiveQuote } from "@echo/data-plane";
+import { detectMarket, fetchLiveQuote } from "@echo/data-plane";
 
 export type MarketSnapshot = NonNullable<Awaited<ReturnType<typeof getLatestMarketSnapshot>>>;
 
@@ -22,6 +22,9 @@ export async function refreshMarketSnapshot(ticker: string): Promise<MarketSnaps
  * 外部源失败时退回旧快照（as_of 如实展示旧口径），核不到就是 null，不编数。
  */
 export async function ensureFreshMarketSnapshot(ticker: string): Promise<MarketSnapshot | null> {
+  // 已停止覆盖的市场（A 股退场后的存量 .SS/.SZ）不出行情——连旧快照也不给，
+  // 否则卡片会永远挂着一个再也不会更新的"最后价格"。
+  if (detectMarket(ticker) === "unsupported") return null;
   const cached = await getLatestMarketSnapshot(ticker);
   if (cached && Date.now() - Date.parse(cached.created_at) < FRESH_WINDOW_MS) return cached;
   const key = ticker.trim().toUpperCase();

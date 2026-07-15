@@ -20,7 +20,7 @@ export const postgresCalendarAdapter: CalendarPort = {
   // covers it should lose the tie; it still wins for HK/CN, where nothing
   // live is registered.
   qualityRank: 2,
-  supports(_market: Market) { return true; },
+  supports(market: Market) { return market !== "unsupported"; },
   async fetchNextEarnings(ticker: string) {
     const row = await getEarningsCalendarRow(ticker);
     if (!row) return { providerStatus: "missing" as const, source: null };

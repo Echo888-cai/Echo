@@ -30,9 +30,9 @@ const RS_LABEL: Record<string, string> = {
 const WL_BAD_THESIS = /不可用|无法形成|暂无|尚未|待补充|已有财务数据|缺一致预期|缺用户持仓|行情已接入/;
 
 function exBadge(marketOrTicker: string) {
-  const mkt = marketOrTicker === "US" || marketOrTicker === "HK" || marketOrTicker === "CN" ? marketOrTicker : detectMarket(marketOrTicker);
-  const label = mkt === "US" ? "美股" : mkt === "CN" ? "A股" : "港股";
-  return <span className={`ex-badge ${mkt.toLowerCase()}`}>{label}</span>;
+  const mkt = marketOrTicker === "US" || marketOrTicker === "HK" || marketOrTicker === "unsupported" ? marketOrTicker : detectMarket(marketOrTicker);
+  const label = mkt === "US" ? "美股" : mkt === "HK" ? "港股" : "已停止覆盖";
+  return <span className={`ex-badge ${mkt === "unsupported" ? "delisted" : mkt.toLowerCase()}`}>{label}</span>;
 }
 
 const STOCK_ICONS: Record<string, ReactElement> = {

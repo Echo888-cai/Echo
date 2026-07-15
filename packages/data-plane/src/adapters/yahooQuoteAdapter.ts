@@ -19,7 +19,7 @@ function finiteOrNull(value: unknown): number | null {
 }
 
 /**
- * Yahoo Finance 公共 chart 接口，港/美/A 股与外汇（如 HKDUSD=X）通用，无需密钥。
+ * Yahoo Finance 公共 chart 接口，港/美股与外汇（如 HKDUSD=X）通用，无需密钥。
  * 仅限研究用途；商用模式下 router 会因 commercialUseAllowed=false 自动排除它。
  */
 export const yahooQuoteAdapter: QuotePort = {
@@ -32,10 +32,10 @@ export const yahooQuoteAdapter: QuotePort = {
   },
   // Ranked below the US-only keyed adapters (finnhub=1, twelvedata=2) since
   // those are official exchange-sourced feeds when they're eligible; Yahoo's
-  // public chart endpoint remains the only source with HK/CN coverage, so it's
-  // still what actually gets selected for those markets regardless of rank.
+  // public chart endpoint remains the only source with HK coverage, so it's
+  // still what actually gets selected for that market regardless of rank.
   qualityRank: 3,
-  supports(_market: Market) { return true; },
+  supports(market: Market) { return market !== "unsupported"; },
   async fetchQuote(rawTicker: string): Promise<QuoteResult> {
     const ticker = normalizeTicker(rawTicker);
     let response: Response | null = null;

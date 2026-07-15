@@ -27,7 +27,9 @@ import {
 import { companies } from "./core.js";
 
 /**
- * hk_financials / cn_financials — first-party filing extracts (HKEX PDF / 巨潮资讯网).
+ * hk_financials — first-party filing extracts (HKEX PDF).
+ * cn_financials/cn_filing_ingest_log 仍在库里但已无任何读写方：A 股退场（PLAN v3），
+ * 表定义保留到备份后的 DROP 迁移（单独审批的收缩 PR）为止。
  * `period_end` (the reporting period this row's figures pertain to) -> valid_time.
  * `extracted_at` (when our pipeline pulled + parsed the filing) -> knowledge_time.
  * Both are straight renames of an already-bitemporal pair; period_label/period_type

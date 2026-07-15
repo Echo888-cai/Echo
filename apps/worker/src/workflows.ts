@@ -15,11 +15,9 @@ export async function deepResearchWorkflow(input: ResearchWorkflowInput) {
   return report;
 }
 
-export async function filingIngestionWorkflow(input: { market: "HK" | "CN"; ticker: string; limit?: number; force?: boolean }) {
+export async function filingIngestionWorkflow(input: { market: "HK"; ticker: string; limit?: number; force?: boolean }) {
   await activity.validateFilingRequest(input);
-  const result = input.market === "HK"
-    ? await activity.ingestHkFilings(input)
-    : await activity.ingestCnFilings(input);
+  const result = await activity.ingestHkFilings(input);
   await activity.recordWorkflowCompletion({ workflow: "filing-ingestion", referenceId: input.ticker });
   return result;
 }

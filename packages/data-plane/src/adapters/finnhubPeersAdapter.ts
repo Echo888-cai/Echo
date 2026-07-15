@@ -1,7 +1,7 @@
 import type { Market } from "../market.js";
 import type { CompPeersPort, PeerQuote } from "../ports.js";
 import { adrOrBareSymbol, adrForHk } from "../hkAdr.js";
-import { detectMarket, hkCode, isUS } from "../market.js";
+import { hkCode, isUS } from "../market.js";
 
 /**
  * Comparable-company discovery + per-peer multiples via Finnhub's free tier.
@@ -53,8 +53,7 @@ async function finnhub(path: string): Promise<any> {
 async function peerSymbolsFor(ticker: string): Promise<{ symbols: string[]; detail: string | null }> {
   const symbol = adrOrBareSymbol(ticker);
   if (!symbol) {
-    const market = detectMarket(ticker) === "CN" ? "A 股" : "港股";
-    return { symbols: [], detail: `${market}无美股 ADR 映射，Finnhub 免费档无法核到同业` };
+    return { symbols: [], detail: "港股无美股 ADR 映射，Finnhub 免费档无法核到同业" };
   }
   const data = await finnhub(`/stock/peers?symbol=${encodeURIComponent(symbol)}`);
   if (!Array.isArray(data)) throw new Error("finnhub peers 返回格式异常");
