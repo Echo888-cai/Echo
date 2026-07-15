@@ -106,6 +106,11 @@ function canaryMark(status: string): { mark: string; tone: string } {
 
 function CanaryCard({ canary }: { canary: any }) {
   const rows: any[] = canary?.sources || [];
+  const latestCheckedAt = rows
+    .map((r) => String(r.latestCheckedAt || ""))
+    .filter(Boolean)
+    .sort()
+    .at(-1) || "";
   if (!canary?.batchId) {
     return (
       <article className="settings-card">
@@ -119,7 +124,9 @@ function CanaryCard({ canary }: { canary: any }) {
   return (
     <article className="settings-card">
       <h2>数据源健康（canary）</h2>
-      <p>最近一批探测：{notifWhen(rows[0]?.latestCheckedAt || "")}。状态来自真实数据调用，不是配置检查。</p>
+      {/* rows arrive ordered by source name, so rows[0] is just whichever source
+          sorts first — not the most recent probe. Take the actual newest. */}
+      <p>最近一批探测：{notifWhen(latestCheckedAt)}。状态来自真实数据调用，不是配置检查。</p>
       {rows.map((r, i) => {
         const { mark, tone } = canaryMark(r.latestStatus);
         const failure =

@@ -66,7 +66,11 @@ pub fn equity_value_from_multiple_decimal(
 }
 
 #[napi]
-pub fn multiply_decimal(value: String, factor: String, currency_code: String) -> Result<NativeMoney> {
+pub fn multiply_decimal(
+    value: String,
+    factor: String,
+    currency_code: String,
+) -> Result<NativeMoney> {
     let unit = currency(&currency_code)?;
     let result = multiply(
         Money::new(decimal(&value, "value")?, unit),
