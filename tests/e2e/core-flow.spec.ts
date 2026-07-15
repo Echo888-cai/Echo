@@ -8,7 +8,12 @@ test("research → follow → portfolio → notification works through the final
   await composer.fill("0700.HK 最近怎么样？");
   await expect(page.getByRole("button", { name: "发送" })).toBeEnabled({ timeout: 10_000 });
   await page.getByRole("button", { name: "发送" }).click();
-  await expect(page.getByText("核心判断", { exact: true })).toBeVisible({ timeout: 20_000 });
+  // 结论 is the first section of the composer's fixed structure, produced by both
+  // the model prompt and the local no-model fallback (they now share one intent
+  // router). The old assertion looked for 核心判断, which only the retired
+  // deterministic fallback emitted — so it silently only ever covered CI's
+  // no-model path.
+  await expect(page.getByText("结论", { exact: true })).toBeVisible({ timeout: 20_000 });
 
   await page.getByRole("link", { name: "看盘", exact: true }).click();
   await expect(page).toHaveURL(/\/watch/);
