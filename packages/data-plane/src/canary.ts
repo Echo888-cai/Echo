@@ -22,7 +22,7 @@ import { detectMarket } from "./market.js";
 // execute — and .env must already be loaded — before registry.js is ever
 // imported, not just before its exports are called).
 loadRootEnv();
-const { listLiveQuoteAdapters, listExternalFundamentalsAdapters, listExternalCalendarAdapters } = await import("./registry.js");
+const { listLiveQuoteAdapters, listExternalFundamentalsAdapters, listExternalCalendarAdapters, listExternalCompPeersAdapters } = await import("./registry.js");
 
 // One representative ticker per market an adapter might plausibly serve —
 // each adapter's own supports() decides whether it's actually probed with it.
@@ -98,7 +98,18 @@ async function main() {
           ? { status: "ok" as const, detail: `nextDate=${String(result.nextDate)} source=${result.source ?? adapter.id}` }
           : { status: "missing" as const, detail: "adapter returned no calendar entry" };
       }
-    } satisfies ProbeGroup<ReturnType<typeof listExternalCalendarAdapters>[number]>
+    } satisfies ProbeGroup<ReturnType<typeof listExternalCalendarAdapters>[number]>,
+    {
+      capability: "comp_peers",
+      adapters: listExternalCompPeersAdapters(),
+      async probe(adapter, ticker) {
+        const result = await adapter.fetchPeers(ticker);
+        const peers = Array.isArray(result.peers) ? result.peers : [];
+        return result.providerStatus === "ok"
+          ? { status: "ok" as const, detail: `${peers.length} 家同业，source=${result.source ?? adapter.id}` }
+          : { status: "missing" as const, detail: String(result.detail ?? "adapter returned no peers") };
+      }
+    } satisfies ProbeGroup<ReturnType<typeof listExternalCompPeersAdapters>[number]>
   ];
   const total = groups.reduce((sum, group) => sum + group.adapters.length, 0);
   if (!total) {

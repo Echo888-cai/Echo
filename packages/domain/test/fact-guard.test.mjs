@@ -65,6 +65,20 @@ const registry = buildFactsRegistry(sampleSources);
   check("市值反解析成原始数值（3.92万亿）", registry.amounts.HKD?.some((f) => Math.abs(f.value - 3.92e12) < 1e9));
   check("收入进了金额桶", registry.amounts.HKD?.some((f) => f.value === 209921000000));
   check("净利率进了百分比桶", registry.percents.some((f) => f.value === 30.4));
+  // 真实 AAPL 回测：净现金为负（净债务口径），模型如实引用了提示词里给它的这个数字，
+  // 但登记表只登了 netDebt 没登 netCash → 落到最近的另一个事实（毛利，正数）判"符号相反"
+  // hard，一篇回答里连中三次。提示词给出的每个数字都必须先在登记表里。
+  {
+    const netCashRegistry = buildFactsRegistry({
+      ticker: "TEST", nativeCurrency: "USD",
+      marketSnapshot: { providerStatus: "ok", price: 314.86, currency: "USD" },
+      financialsData: { providerStatus: "ok", currency: "USD", grossProfit: 54_781_000_000, netCash: -48_383_000_000 }
+    });
+    check("净现金（含负值）进了金额桶", netCashRegistry.amounts.USD?.some((f) => f.label === "净现金" && f.value === -48_383_000_000),
+      JSON.stringify(netCashRegistry.amounts.USD?.map((f) => f.label)));
+    const v = verifyAnswerNumbers("经营现金流覆盖净现金缺口 -483.83 亿美元的能力有限。", netCashRegistry);
+    check("如实引用负净现金不再被误判 hard", !v.checked.some((c) => c.verdict === "hard"), JSON.stringify(v.checked));
+  }
   check("PE 进了倍数桶", registry.multiples.some((f) => f.value === 15.75 && f.label === "PE"));
   check("同业倍数进了倍数桶", registry.multiples.some((f) => f.value === 8.94 && f.label.includes("1024.HK")));
   check("同业锚点中位数进了倍数桶", registry.multiples.some((f) => f.value === 11.16 && f.label.includes("中位")));
