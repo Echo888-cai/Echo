@@ -10,14 +10,31 @@ function hydrate(row: typeof researchSnapshots.$inferSelect) {
     createdAt: row.knowledgeTime.toISOString() };
 }
 
-export async function insertResearchSnapshot(input: any) {
+/**
+ * 一天一条：研究是逐轮对话推进的，每轮插一条会让同一天堆出几十条近乎相同的快照，
+ * 它们同时"成熟"、同时进 computeTickerScorecard 的分母，等于让最啰嗦的那天决定命中率。
+ * 判断的粒度是"某天我们怎么看这家公司"，所以 (user, ticker, valid_time) 唯一，
+ * 当天复研究覆盖当天那条（见 0005_research_snapshots_daily_unique.sql）。
+ *
+ * 写入失败只记日志不抛：快照是复盘用的旁路账，不该让用户的这次研究回答失败。
+ */
+export async function upsertResearchSnapshot(input: any) {
   const userId = input.userId || "local";
+  const values = {
+    userId, ticker: String(input.ticker || "").toUpperCase(),
+    validTime: input.snapshotDate, thesis: input.thesis ?? null, valuationPosition: input.valuationPosition ?? null,
+    valuationBear: numeric(input.valuationBear), valuationBase: numeric(input.valuationBase), valuationBull: numeric(input.valuationBull),
+    valuationCurrency: input.valuationCurrency ?? null, priceAtSnapshot: numeric(input.priceAtSnapshot),
+    falsifiers: Array.isArray(input.falsifiers) ? input.falsifiers.slice(0, 6) : [], sessionId: input.sessionId ?? null
+  };
   try {
-    await withTenant(userId, (tx) => tx.insert(researchSnapshots).values({ userId, ticker: String(input.ticker || "").toUpperCase(),
-      validTime: input.snapshotDate, thesis: input.thesis ?? null, valuationPosition: input.valuationPosition ?? null,
-      valuationBear: numeric(input.valuationBear), valuationBase: numeric(input.valuationBase), valuationBull: numeric(input.valuationBull),
-      valuationCurrency: input.valuationCurrency ?? null, priceAtSnapshot: numeric(input.priceAtSnapshot),
-      falsifiers: Array.isArray(input.falsifiers) ? input.falsifiers.slice(0, 6) : [], sessionId: input.sessionId ?? null }));
+    await withTenant(userId, (tx) => tx.insert(researchSnapshots).values(values).onConflictDoUpdate({
+      target: [researchSnapshots.userId, researchSnapshots.ticker, researchSnapshots.validTime],
+      set: { thesis: values.thesis, valuationPosition: values.valuationPosition, valuationBear: values.valuationBear,
+        valuationBase: values.valuationBase, valuationBull: values.valuationBull, valuationCurrency: values.valuationCurrency,
+        priceAtSnapshot: values.priceAtSnapshot, falsifiers: values.falsifiers, sessionId: values.sessionId,
+        knowledgeTime: new Date() }
+    }));
   } catch (error) { console.error("[researchSnapshots] 写入失败：", error); }
 }
 

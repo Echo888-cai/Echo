@@ -41,6 +41,7 @@ import { listRules } from "@echo/db/repositories/watchRulesRepository.js";
 import { evaluateRule } from "@echo/domain";
 import { computeGlobalScorecard, computeTickerScorecard } from "@echo/domain";
 import { listSnapshots as listResearchSnapshots, listSnapshotTickers } from "@echo/db/repositories/researchSnapshotsRepository.js";
+import { getEarningsCalendarRow } from "@echo/db/repositories/earningsCalendarRepository.js";
 import { addToWatch, getHiddenTickers, listWatchAdds, removeFromWatch } from "@echo/db/repositories/watchlistRepository.js";
 import { listCompanyProfiles } from "@echo/db/repositories/companyProfilesRepository.js";
 import { runAsk, runReport } from "@echo/application/research";
@@ -330,8 +331,15 @@ async function generateReport(input: unknown, userId: string) {
 }
 
 async function scorecardFor(ticker: string, userId: string) {
-  const [snapshots, market] = await Promise.all([listResearchSnapshots(ticker, userId), ensureFreshMarketSnapshot(ticker)]);
-  return computeTickerScorecard(snapshots, { price: market?.price ?? null });
+  // earningsRow 驱动 F-2「快照之后有没有新财报到货」（postEarnings / epsBeatRate）。
+  // 不传时 computeTickerScorecard 只能诚实地把这两项恒置为 null——earnings_calendar
+  // 自 postgresCalendarAdapter 接通后已有真实数据，没有理由再瞒着记分卡。
+  const [snapshots, market, earningsRow] = await Promise.all([
+    listResearchSnapshots(ticker, userId),
+    ensureFreshMarketSnapshot(ticker),
+    getEarningsCalendarRow(ticker).catch(() => null)
+  ]);
+  return computeTickerScorecard(snapshots, { price: market?.price ?? null }, undefined, earningsRow);
 }
 
 export const appRouter = t.router({

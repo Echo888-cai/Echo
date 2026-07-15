@@ -3,18 +3,18 @@ import { createReadStream } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import { promisify } from "node:util";
 import { join } from "node:path";
-import { runReport } from "@echo/application/research";
+import { financialsDataFor, runReport } from "@echo/application/research";
 import { ensureFreshMarketSnapshot } from "@echo/application/market-data";
 import { listWithLastReported } from "@echo/db/repositories/earningsCalendarRepository.js";
 import { getCompanyProfile, appendProfileEvent, listCompanyProfiles } from "@echo/db/repositories/companyProfilesRepository.js";
-import { listAllActiveRules } from "@echo/db/repositories/watchRulesRepository.js";
+import { listAllActiveRules, markTriggered } from "@echo/db/repositories/watchRulesRepository.js";
 import { listPositions } from "@echo/db/repositories/portfolioRepository.js";
 import { listWatchAdds } from "@echo/db/repositories/watchlistRepository.js";
 import { computePortfolioValuationUsd, upsertSnapshot } from "@echo/db/repositories/portfolioSnapshotsRepository.js";
 import { insertNotification } from "@echo/db/repositories/notificationsRepository.js";
 import { ingestHkFinancials } from "./pipelines/hkFilingsPipeline.js";
 import { ingestCnFinancials } from "./pipelines/cnFilingsPipeline.js";
-import { evaluateRule } from "@echo/domain";
+import { evaluateFundamentalRule, evaluateRule } from "@echo/domain";
 import { listUsers } from "@echo/db/repositories/authRepository.js";
 import { S3Client } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
@@ -71,17 +71,45 @@ export async function buildDigest(input: { userId: string; slot: string }) {
   return { generatedAt, slot: input.slot, activeRuleCount: rules.length };
 }
 
+/**
+ * 证伪条件巡检。规则有两类，核对口径完全不同，必须分流：
+ * - price_below/above：阈值是股价，用实时行情核对。
+ * - fundamental_below/above（F-3）：阈值是毛利率/净利率/增速等财报口径，必须用
+ *   financialsData 核对。evaluateRule 对这类规则一律返回 sane:false（它自己就地拦截，
+ *   防止调用方拿毛利率阈值当股价比），所以过去这些规则登记了也永远不会被触发。
+ * 每个 ticker 的财报口径取一次就缓存：同一只票常有多条基本面规则，没必要重复取数。
+ */
 export async function checkFalsifiers(userId: string) {
   const rules = await listAllActiveRules(userId);
   const triggered = [];
+  const financialsCache = new Map<string, any>();
   for (const rule of rules) {
-    const market = await ensureFreshMarketSnapshot(rule.ticker);
-    if (market?.price == null) continue;
-    const result = evaluateRule(rule, market.price);
+    const isFundamental = rule.kind === "fundamental_below" || rule.kind === "fundamental_above";
+    let result;
+    let detail = rule.label;
+    if (isFundamental) {
+      // 登记不全的规则一律不核对：threshold 为 null 时 `currentValue >= null` 会被 JS
+      // 强制成 `>= 0`，让每一条 fundamental_above 规则恒真误报。缺字段就是没登记好，
+      // 不是"安全"，更不能猜。
+      if (rule.metric == null || rule.threshold == null) continue;
+      if (!financialsCache.has(rule.ticker)) {
+        financialsCache.set(rule.ticker, await financialsDataFor(rule.ticker).catch(() => null));
+      }
+      result = evaluateFundamentalRule({ kind: rule.kind, metric: rule.metric, threshold: rule.threshold }, financialsCache.get(rule.ticker));
+      // 触线时把当期实测值一并说明——"毛利率跌破 55%"本身不告诉用户现在是多少。
+      if (result.triggered && result.currentValue != null) detail = `${rule.label}（当前 ${Number(result.currentValue).toFixed(1)}）`;
+    } else {
+      const market = await ensureFreshMarketSnapshot(rule.ticker);
+      if (market?.price == null) continue;
+      result = evaluateRule(rule, market.price);
+    }
     if (!result.triggered) continue;
     triggered.push({ ticker: rule.ticker, ruleId: rule.id });
-    await insertNotification({ kind: "falsify_alert", title: `${rule.ticker} 证伪条件触线`, body: rule.label, ticker: rule.ticker, userId,
+    await insertNotification({ kind: "falsify_alert", title: `${rule.ticker} 证伪条件触线`, body: detail, ticker: rule.ticker, userId,
       dedupeKey: `falsifier:${rule.id}` });
+    // 重复推送由 notifications 的 dedupeKey 挡，但 last_triggered_at 从来没人写，
+    // watch_rules.lastTriggeredAt 便一直是 null——"这条线到底触没触过"无从回溯。
+    await markTriggered(rule.id, userId);
   }
   return { checked: rules.length, triggered };
 }

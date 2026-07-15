@@ -1,6 +1,25 @@
 import { computeFinancialQuality } from "./financialQuality.js";
 
 /**
+ * F-3 结构化证伪条件登记（原文恢复自 ce58d27:src/prompts.js，#27 迁移时随旧底盘一起丢失）。
+ *
+ * 为什么必须是结构化输出而不是事后解析正文：基本面证伪条件（"毛利率跌破 40%"）用正则从
+ * 自由文本里猜，误报率不可控（factGuard 的教训）。让模型直接吐白名单字段，domain 侧只做
+ * "抽取 + 校验"，校验不过就整条丢弃——不猜、不硬凑。
+ *
+ * 这一行是给系统看的，不是给用户看的：extractStructuredFalsifiers() 会把它从正文里剥离。
+ * 加这条指令和接上剥离逻辑必须同时落地，否则 `FALSIFIERS_JSON:[...]` 会直接漏进聊天气泡。
+ */
+const STRUCTURED_FALSIFIER_INSTRUCTION = `- 正文写完之后，另起一行输出一段机器可读的证伪条件登记（用户不会看到，系统自动隐藏，不占正文篇幅、不算入字数要求）：把正文里“能对应到具体财务指标”的证伪条件，转成一行 JSON，格式固定为：
+FALSIFIERS_JSON: [{"metric":"grossMargin","op":"below","threshold":29,"text":"毛利率跌破 29%"}]
+   - metric 只能是这 5 个之一（英文原样写，区分大小写）：revenueGrowth（营收增速）/ grossMargin（毛利率）/ operatingMargin（经营利润率）/ netMargin（净利率）/ profitGrowth（利润增速）。这 5 个都是百分比口径，都能在最新财报上独立核对。
+   - op 只能是 below（跌破/低于）或 above（涨破/高于）。
+   - threshold 必须是数字，直接填百分数本身（40 代表 40%，不要填 0.4）；不要把比率（如“现金流/净利润 0.8”）硬塞进这 5 个指标。
+   - 价格线证伪、以及无法精确对应到这 5 个指标的条件（如“订单环比转负”“竞争对手降价”“自由现金流转负”）不要放进这个 JSON，仍然只写在正文里。
+   - 正文里没有任何能对应上的条件时，输出 FALSIFIERS_JSON: []（不要省略这一行）。
+   - 这一行必须是全文最后一行，只能出现一次，不要用代码块包裹，不要在前面加任何说明文字。`;
+
+/**
  * 创建答案与报告提示词的纯领域编排器。所有时钟、公司档案、意图识别和展示格式均由端口注入，
  * 因此领域包不读取数据库、网络、环境变量或应用层模块。
  */
@@ -12,6 +31,7 @@ export function createAnswerComposer({
   researchIntents,
   webEvidenceToPrompt,
   financialsToMarkdown,
+  buybacksToPrompt,
   detectMarket,
   beijingMinute
 }) {
@@ -70,7 +90,14 @@ function backendGapLines(panel, dataSources = {}) {
   const newsMissing = dataSources.news?.status !== "ok" || [...missing].some((item) => /新闻|舆情|监管/.test(item));
   const estimatesMissing = dataSources.estimates?.status !== "ok" || [...missing].some((item) => /一致预期|评级|目标价/.test(item));
   if (financialMissing) gaps.push("完整财报三表、利润率和自由现金流还没核到，会拉低财务结论的置信度。");
-  if (filingsMissing) gaps.push("最近年报/中报、业绩公告和回购分红口径还没核到，股东回报判断暂为低置信度。");
+  // 回购已由 hk_buybacks（HKEX 翌日披露报表）真实核到时，不能再笼统说"回购口径还没核到"：
+  // 同一份提示词里既给出真实购回股数/代价、又声明它未核到，等于教模型忽略这个事实块。
+  const buybacksOk = dataSources.buybacks?.status === "ok";
+  if (filingsMissing) {
+    gaps.push(buybacksOk
+      ? "最近年报/中报和业绩公告口径还没核到（回购已按 HKEX 翌日披露报表逐次核到），其余公告类判断暂为低置信度。"
+      : "最近年报/中报、业绩公告和回购分红口径还没核到，股东回报判断暂为低置信度。");
+  }
   if (newsMissing) gaps.push("近期新闻、监管和行业事件还缺可信外部证据，风险信号本轮主要靠商业逻辑推断。");
   if (estimatesMissing) gaps.push("一致预期、目标价和盈利预测还没核到，估值判断暂不锁定区间。");
   return gaps.length ? gaps : ["关键证据基本到位，下一步主要做交叉校验。"];
@@ -737,6 +764,7 @@ function buildChatPrompt(question, panel, dataSources = {}, context = {}) {
     .join("\n") || "本地档案暂缺";
   const newsSignals = [...evidenceSignalsFromWeb(context.webEvidence), ...evidenceSignalsFromNews(context.newsSnapshot)].slice(0, 8).join("\n") || "本轮没有抓到可直接使用的竞争/行业外部信号";
   const webEvidencePrompt = webEvidenceToPrompt(context.webEvidence);
+  const buybackPrompt = buybacksToPrompt(context.buybacks);
   const portraitBlock = context.portraitContext ? `\n${context.portraitContext}\n` : "";
   const historyBlock = conversationHistoryBlock(context.history);
   const ranges = context.marketSnapshot?.ranges;
@@ -777,6 +805,7 @@ ${sources}
 ${hasLiveFin
     ? `已核到的实时财报（来源 ${context.financialsData.source}${context.financialsData.period ? ` · 截至 ${context.financialsData.period}` : ""}）——本轮所有财务数字的唯一事实源：\n${liveFinancialsBlock}`
     : `实时财报：${liveFinancialsBlock}`}
+${buybackPrompt}
 本地公司档案（定性参考，不能当财务数字来源）：
 - 护城河：${moat}
 - 商业模式：${businessModel}
@@ -808,7 +837,9 @@ ${webEvidencePrompt}
 - 对“赚不赚钱”，必须先回答赚钱机制和盈利质量：是否有收入来源、利润是否稳定、现金流是否支撑。
 - 不允许只说数据不足；数据不足只能作为置信度和证伪条件的一部分。
 - 禁止买入/卖出/持有建议，使用“观察、补充验证、赔率改善、逻辑重估”等研究语言。
-- 长度控制在 900-1800 字，信息密度优先。`;
+- 长度控制在 900-1800 字，信息密度优先。
+- 证伪条件尽量锚到可量化阈值（“毛利率跌破 29%”“Q2 收入增速低于 -2%”），不要只写“竞争加剧”“宏观承压”这种没法核对的泛条件。若估值判断有明确价格锚，可另给一条价格线证伪（如“股价跌破 85 美元触发逻辑复核”）——系统会自动盯这条线并在命中时提醒；没有估值依据就不要硬编价格线。
+${STRUCTURED_FALSIFIER_INSTRUCTION}`;
 }
 
 /**

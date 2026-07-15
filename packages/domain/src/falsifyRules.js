@@ -111,14 +111,20 @@ export function evaluateRule(rule, price) {
 //
 // 白名单刻意只覆盖能在 financialsData 上独立核对的指标——字段名直接对应
 // financialData.js 的输出（不建翻译层，减少一处可能出错的映射）。
-export const FUNDAMENTAL_METRICS = ["revenueGrowth", "grossMargin", "operatingMargin", "netMargin", "profitGrowth", "freeCashFlow"];
+// freeCashFlow 曾在这个白名单里，已移除：filing schema 没有 capex 列，任何来源都算不出
+// 自由现金流，financialsData.freeCashFlow 恒为 undefined —— evaluateFundamentalRule 会
+// 一律判 sane:false，于是这类规则登记了也永远不会触发。把一个核不了的指标摆给模型，
+// 只会换来"用户以为在盯、实际是哑规则"，外加模型拿它硬凑（真实回测里它被当成
+// "经营现金流/净利润比率 0.8" 塞了进来，量纲根本不是金额）。等 capex 有了真实来源再加回。
+export const FUNDAMENTAL_METRICS = ["revenueGrowth", "grossMargin", "operatingMargin", "netMargin", "profitGrowth"];
 export const FUNDAMENTAL_METRIC_LABELS = {
   revenueGrowth: "营收增速", grossMargin: "毛利率", operatingMargin: "经营利润率",
-  netMargin: "净利率", profitGrowth: "利润增速", freeCashFlow: "自由现金流"
+  netMargin: "净利率", profitGrowth: "利润增速"
 };
 const FUNDAMENTAL_OPS = new Set(["below", "above"]);
-// 百分比类指标的合理阈值范围（防模型给出离谱数字，如把小数误当百分比：0.4 而非 40）；
-// freeCashFlow 是金额，量级天然横跨几个数量级，不做范围校验，只做类型/有限性校验。
+// 百分比类指标的合理阈值范围（防模型给出离谱数字，如把小数误当百分比：0.4 而非 40）。
+// 移除 freeCashFlow 后白名单里已全是百分比指标，这个集合与 FUNDAMENTAL_METRICS 等价，
+// 但保留它作为独立概念：将来接回金额类指标（FCF/净债务）时，那些不能套百分比范围校验。
 const PERCENT_METRICS = new Set(["revenueGrowth", "grossMargin", "operatingMargin", "netMargin", "profitGrowth"]);
 
 // 只锚定前缀，不要求方括号闭合完整——模型偶尔会因为截断/token 限制吐出残缺 JSON，

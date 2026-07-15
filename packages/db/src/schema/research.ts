@@ -11,7 +11,7 @@
  *   canonical company profile and research session repository shapes,
  *     researchSnapshotsRepository.js for JSON column shapes.
  */
-import { pgTable, text, integer, bigserial, numeric, timestamp, jsonb, index, primaryKey, date } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, bigserial, numeric, timestamp, jsonb, index, primaryKey, uniqueIndex, date } from "drizzle-orm/pg-core";
 import { companies } from "./core.js";
 import { users } from "./auth.js";
 
@@ -141,6 +141,8 @@ export const researchSnapshots = pgTable(
   },
   (t) => ({
     tickerIdx: index("idx_research_snapshots_ticker").on(t.ticker, t.validTime),
-    userIdx: index("idx_research_snapshots_user").on(t.userId, t.ticker, t.validTime)
+    userIdx: index("idx_research_snapshots_user").on(t.userId, t.ticker, t.validTime),
+    // 0005: 一天一条判断——upsertResearchSnapshot 的冲突目标。
+    dayUq: uniqueIndex("uq_research_snapshots_user_ticker_day").on(t.userId, t.ticker, t.validTime)
   })
 );
