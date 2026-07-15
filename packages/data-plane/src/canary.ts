@@ -1,6 +1,6 @@
 /**
- * Real-probe canary for every live quote adapter (docs/PLAN.md P1 "canary 真
- * 探测"): calls each registered adapter against a real ticker and writes an
+ * Real-probe canary for every live quote adapter: calls each registered
+ * adapter against a real ticker and writes an
  * honest ok/error row to canary_runs, so the settings page can show "配置了
  * 但探测失败" instead of the old decorative "已配置" env-key check
  * (apps/api/src/status.ts previously only checked `Boolean(process.env.X_API_KEY)`,

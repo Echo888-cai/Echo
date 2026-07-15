@@ -37,7 +37,7 @@ const SELF = "scripts/quality/check-frozen-tables.mjs";
  * 加条目前先问一句：这真的是"等外部依赖"，还是"我刚把它接漏了"？
  */
 const ALLOWED = {
-  // docs/PLAN.md P1/P2：三张表都缺真实数据源，不是缺接线。硬接=编数据，撞红线。
+  // docs/PLAN.md P3：三张表都缺真实数据源，不是缺接线。硬接=编数据，撞红线。
   "historicalValuationRepository.ts::upsertHistoricalValuationSeries":
     "等真实历史 PE 序列源（market_snapshots 自建只有 7 天深、每天 +1 行，等不出五年分位）",
   "historicalValuationRepository.ts::getHistoricalValuationRow":
@@ -46,46 +46,26 @@ const ALLOWED = {
     "等内部人交易数据源（尚无任何已授权适配器）",
   "insiderActivityRepository.ts::getInsiderActivityRow":
     "同上",
-  "webEvidenceRepository.ts::saveWebEvidence":
-    "等网页证据源（Tavily 键已超配额，docs/PLAN.md P1 '暂停'记录）",
-  "webEvidenceRepository.ts::listWebEvidence":
-    "同上——composerContext.webEvidence 目前诚实传 null",
-
   // 供未来消费方使用的读取接口，写入方已真实接通，非冻结。
   "hkBuybackRepository.ts::getLatestHkBuybackFetchedAt":
     "回购新鲜度查询，留给 status 页真探测接入（#32 已接通写入与研究链路消费）",
 
-  // ── 以下为 2026-07-15 门禁上线时的存量，逐个人工核实过零调用。都不是"接漏了"，
-  //    而是功能未建/已被更好的实现取代。一次性删除属策略里的"大规模代码删除"，
-  //    需单独 PR 并先问过用户，故此处先记账。
-  "financialsRepository.ts::createFinancialsRepository":
-    "存量死代码：工厂函数已被模块级导出取代，无任何调用方。待清理 PR 删除",
-  "companyProfilesRepository.ts::listProfileEvents":
-    "存量冗余：getCompanyProfile() 的 hydrate 已内联返回 events，本函数无人再用。待清理 PR 删除",
-  "canaryRepository.ts::getLatestBatchResults":
-    "存量：status 页改用 getSourceHealthSummary() 后本函数无人调用。待清理 PR 删除",
-  "companyRepository.ts::getAllCompanies":
-    "刻意不用：answerComposition.ts 的 companies 端口传空数组——每次提问加载 ~650 家公司按行业字符串猜同业既浪费又误导（同行业≠同可比）。同业改由 compPeers 真实接通",
-  "companyRepository.ts::getCompaniesBySector":
-    "同上——同行业不等于同可比，不做基于 sector 的同业猜测",
   "factGuardRepository.ts::getRecentHardFails":
-    "等设置页 FactGuardCard 接入真实流量后消费（docs/PLAN.md P2）",
+    "等设置页 FactGuardCard 接入真实流量后消费（docs/PLAN.md P3）",
   "llmAuditRepository.ts::getRecentLlmAudits":
-    "等设置页 LLM 用量/成本卡（docs/PLAN.md P4 商业化需要成本可见）",
+    "等设置页 LLM 用量/成本卡（docs/PLAN.md P5 商业化需要成本可见）",
   "feedbackRepository.ts::listFeedback":
-    "等反馈队列管理界面（docs/PLAN.md P3 '反馈闭环进可追踪队列'）",
+    "等反馈队列管理界面（docs/PLAN.md P4 '反馈闭环进可追踪队列'）",
   "authRepository.ts::listInvites":
     "等 owner 的邀请码管理界面（当前只有生成，没有列表）",
   "authRepository.ts::deleteSessionsForUser":
-    "等'登出所有设备'功能（安全能力，P4 发布准备）",
-  "portfolioRepository.ts::getPosition":
-    "单条持仓查询；当前所有消费方走 listPositions()。待清理 PR 删除",
+    "等'登出所有设备'功能（安全能力，P5 发布准备）",
   "documentRepository.ts::getDocument":
-    "文档详情，等前端文档管理页（docs/PLAN.md P3）",
+    "文档详情，等前端文档管理页（docs/PLAN.md P4）",
   "documentRepository.ts::getDocumentsCount":
     "同上",
   "documentRepository.ts::deleteDocument":
-    "文档删除闭环，等前端文档管理页（docs/PLAN.md P3）",
+    "文档删除闭环，等前端文档管理页（docs/PLAN.md P4）",
 };
 
 const WRITE_RE = /^(?:upsert|insert|save|replace|record|write|create|delete|update|add|mark|bump|destroy)/i;

@@ -78,7 +78,7 @@ async function peerSymbolsFor(ticker: string): Promise<{ symbols: string[]; deta
     if (seen.has(normalized)) continue;
     // Only keep peers we can actually resolve to a Finnhub-servable symbol, and
     // check that *before* spending one of the MAX_PEERS slots. Real case: TCEHY's
-    // peer list is ["700.HK","1024.HK","300418.SZ","BIDU","1357.HK","9898.HK",…,
+    // peer list is ["700.HK","1024.HK","BIDU","1357.HK","9898.HK",…,
     // "BILI",…] — capping first burned all 5 slots on HK names with no ADR
     // (dropped later when their metric call couldn't resolve), leaving exactly
     // one usable peer and never reaching BILI, which we can price.

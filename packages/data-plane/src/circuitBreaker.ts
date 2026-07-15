@@ -1,6 +1,6 @@
 /**
- * Minimal in-memory circuit breaker for live external adapters (docs/PLAN.md
- * P1 "超时熔断"). Free-tier quote providers fail in bursts — a blown daily
+ * Minimal in-memory circuit breaker for live external adapters. Free-tier
+ * quote providers fail in bursts — a blown daily
  * quota or a transient outage means every call for the next N minutes will
  * fail too, so retrying each one anyway just adds latency to every request
  * until the router falls through to the next adapter. Trips after

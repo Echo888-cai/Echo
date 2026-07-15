@@ -1,5 +1,4 @@
 import { asc, desc, eq, ilike, or, sql } from "drizzle-orm";
-import { getTableColumns } from "drizzle-orm";
 import { companies, companyDetails, marketSnapshots } from "../schema/core.js";
 import { database, databaseRead, normalizeTicker, numberOrNull, numeric } from "./context.js";
 
@@ -160,37 +159,4 @@ export async function saveMarketSnapshot(data: any) {
     source: data.source || "api",
     validTime: data.asOf ? new Date(data.asOf) : new Date()
   });
-}
-
-function companyRow(row: typeof companies.$inferSelect & { hasPortrait?: boolean }) {
-  return {
-    ticker: row.ticker,
-    name_zh: row.nameZh,
-    name_en: row.nameEn,
-    sector: row.sector,
-    industry: row.industry,
-    listing_status: row.listingStatus,
-    exchange: row.exchange,
-    currency: row.currency,
-    market_cap_category: row.marketCapCategory,
-    is_hsi: row.isHsi ? 1 : 0,
-    created_at: row.createdAt.toISOString(),
-    updated_at: row.updatedAt.toISOString(),
-    ...(row.hasPortrait == null ? {} : { has_portrait: row.hasPortrait ? 1 : 0 })
-  };
-}
-
-export async function getCompaniesBySector() {
-  const rows = await database().select({ ...getTableColumns(companies), hasPortrait: sql<boolean>`${companyDetails.ticker} is not null` })
-    .from(companies).leftJoin(companyDetails, eq(companies.ticker, companyDetails.ticker))
-    .where(eq(companies.listingStatus, "active")).orderBy(asc(companies.sector), asc(companies.nameZh));
-  return rows.reduce<Record<string, ReturnType<typeof companyRow>[]>>((groups, row) => {
-    const sector = row.sector || "其他";
-    (groups[sector] ||= []).push(companyRow(row));
-    return groups;
-  }, {});
-}
-
-export async function getAllCompanies() {
-  return (await database().select().from(companies).orderBy(asc(companies.sector), asc(companies.nameZh))).map(companyRow);
 }

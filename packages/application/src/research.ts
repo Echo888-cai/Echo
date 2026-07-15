@@ -5,7 +5,8 @@ import { getCompanyProfile, upsertCompanyProfile } from "@echo/db/repositories/c
 import { saveResearchSession } from "@echo/db/repositories/researchSessionsRepository.js";
 import { getHkFinancials } from "@echo/db/repositories/hkFinancialsRepository.js";
 import { listRecentHkBuybacks } from "@echo/db/repositories/hkBuybackRepository.js";
-import { detectMarket, getFundamentals } from "@echo/data-plane";
+import { detectMarket, getFundamentals, searchWebEvidence } from "@echo/data-plane";
+import { saveWebEvidence, listWebEvidence } from "@echo/db/repositories/webEvidenceRepository.js";
 import { ensureEarningsCalendar } from "./earningsCalendar.js";
 import { composerFor, reportComposerFor } from "./answerComposition.js";
 import { getComparablePeers } from "./compPeers.js";
@@ -16,7 +17,7 @@ import { replaceFalsifierRules } from "@echo/db/repositories/watchRulesRepositor
 import {
   buildFactsRegistry, buildSoftNote, deriveValuationPosition, displayValuation,
   extractFalsifiersFromAnswer, extractStructuredFalsifiers, extractThesisFromAnswer, isDataFragmentThesis,
-  parseFalsifierRules, portraitJudgmentChanged, summarizeVerdict, topPortraitEvidence, verifyAnswerNumbers
+  parseFalsifierRules, portraitJudgmentChanged, renderHardFailIssues, summarizeVerdict, topPortraitEvidence, verifyAnswerNumbers
 } from "@echo/domain";
 
 type ResearchInput = {
@@ -136,7 +137,7 @@ async function modelAnswer(system: string, user: string, userId: string, onToken
 }
 
 /**
- * 美股财务三表此前恒为空数组（docs/PLAN.md P1 诊断#6）——港/A 有 filing 管道，
+ * 美股财务三表此前恒为空数组——港/A 有 filing 管道，
  * 美股完全没有对应来源。`getFundamentals` 接的是 FMP（US-only，见
  * fmpFundamentalsAdapter 里对免费档 HK/CN 覆盖边界的真实探测），未配置
  * FMP_API_KEY 或调用失败都返回 []，而不是让 runResearch 因单个数据源故障整体失败。
@@ -199,28 +200,25 @@ function keyDriversFrom(market: any, financialsData: any, valuation: any) {
   return drivers;
 }
 
-function decisionPanel(company: any, profile: any, market: any, financialsData?: any, valuation?: any, earnings?: any) {
+function decisionPanel(company: any, profile: any, market: any, financialsData?: any, valuation?: any, earnings?: any, webEvidence?: any) {
   const connectedData = [
     market ? "实时行情" : null,
     financialsData?.providerStatus === "ok" ? "财报口径" : null,
     valuation && !valuation.cannotValueReason ? "估值区间" : null,
-    earnings?.providerStatus === "ok" ? "财报日历" : null
+    earnings?.providerStatus === "ok" ? "财报日历" : null,
+    webEvidence ? "网页证据" : null
   ].filter(Boolean) as string[];
   const missingData = [
     market ? null : "实时行情",
     financialsData?.providerStatus === "ok" ? null : "标准化财报",
     valuation && !valuation.cannotValueReason ? null : "自洽估值区间",
     earnings?.providerStatus === "ok" ? null : "下一业绩日",
-    // Honest, and load-bearing: the composer's rules tell the model to write
-    // 未核到 for anything outside the given blocks. Naming these two keeps it
-    // from quietly filling them from memory (docs/PLAN.md P1 — neither source
-    // has a working adapter).
-    "网页证据",
+    webEvidence ? null : "网页证据",
     "同业可比倍数"
   ].filter(Boolean) as string[];
-  // Share of the four sources we can actually resolve today — not a product
+  // Share of the five sources we can actually resolve today — not a product
   // score, just "how much of this answer is standing on checked numbers".
-  const dataCompleteness = Math.round((connectedData.length / 4) * 100);
+  const dataCompleteness = Math.round((connectedData.length / 5) * 100);
   return {
     ticker: company.ticker,
     companyName: company.nameZh || company.nameEn || company.ticker,
@@ -268,6 +266,19 @@ function isoDate(value: unknown): string | null {
   if (!value) return null;
   const d = value instanceof Date ? value : new Date(String(value));
   return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+}
+
+function freshnessLabel(isoTimestamp: string | null | undefined): string | null {
+  if (!isoTimestamp) return null;
+  const ms = Date.now() - Date.parse(isoTimestamp);
+  if (ms < 0 || Number.isNaN(ms)) return null;
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes}分钟内`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}小时前`;
+  const days = Math.floor(hours / 24);
+  return `${days}天前`;
 }
 
 function numOrNull(value: unknown): number | null {
@@ -333,19 +344,24 @@ function toDomainSources(company: any, market: any, rows: any[]) {
   // period-cumulative figure, not TTM. Annualize it (or flag it unusable for PE
   // derivation) before handing it to valuation.js; see deriveAnnualEps above.
   const { eps: annualEps, epsAnnualized } = deriveAnnualEps(rows);
+  const filingSource = row?.source || (row?.pe_ttm != null ? "FMP" : "一手 filing");
+  const filingPeriod = row?.period_label || isoDate(row?.period_end) || isoDate(row?.published_at) || null;
+  const filingPublishedAt = isoDate(row?.published_at) || null;
+  const filingExtractedAt = row?.extracted_at || null;
   const financialsData = row ? {
     providerStatus: "ok" as const, currency: row.currency || company.currency,
-    // The composer's prompt cites this block as "唯一财务事实源（来源 X）" — without a
-    // source it rendered "来源 undefined", which reads like a bug to the model and
-    // undermines the very line telling it these numbers are authoritative.
-    source: row.source || (row.pe_ttm != null ? "FMP" : "一手 filing"),
+    source: filingSource,
     revenue: row.revenue, grossProfit: row.gross_profit, operatingIncome: row.operating_income,
     netIncome: row.net_income, operatingCashFlow: row.operating_cash_flow, cashAndEquivalents: row.cash_and_equivalents,
     netCash: row.net_cash, eps: annualEps, epsAnnualized, revenueGrowth: pctChange(row.revenue, row.revenue_prior),
     grossMargin: pctOf(row.gross_profit, row.revenue), operatingMargin: pctOf(row.operating_income, row.revenue),
     netMargin: pctOf(row.net_income, row.revenue), profitGrowth: pctChange(row.net_income, row.net_income_prior),
     sharesOutstanding: market?.market_cap && market?.price ? market.market_cap / market.price : null,
-    period: isoDate(row.period_end) || isoDate(row.published_at)
+    period: isoDate(row.period_end) || isoDate(row.published_at),
+    periodLabel: filingPeriod,
+    publishedAt: filingPublishedAt,
+    extractedAt: filingExtractedAt,
+    sourceUrl: row.source_url || null
   } : { providerStatus: "missing" as const };
   return { marketSnapshot, financialsData };
 }
@@ -385,11 +401,11 @@ function computeResearchValuation(company: any, marketSnapshot: any, financialsD
  * facts it was fed (market snapshot + latest filing row + our own valuation
  * band), so a fabricated or mis-transcribed number is caught rather than
  * shipped silently. Modes: off (skip entirely), shadow (audit only, never
- * shown), soft/full (audit + a low-key note appended to the answer). `full`'s
- * "拦截+定向重答" path isn't built yet — until it is, full behaves like soft
- * rather than silently no-op'ing.
+ * shown), soft (audit + a low-key note appended to the answer), full (intercept
+ * hard-fail answers and re-call the LLM with a targeted correction prompt; falls
+ * back to soft behavior if the retry still fails or the LLM call errors).
  */
-async function applyFactGuard(content: string, company: any, marketSnapshot: any, financialsData: any, valuation: any) {
+async function applyFactGuard(content: string, company: any, marketSnapshot: any, financialsData: any, valuation: any, userId: string) {
   const mode = (process.env.FACT_GUARD_MODE || "shadow").toLowerCase();
   if (mode === "off") return { content, factGuard: null };
   // "Native currency" for amount-matching purposes is the filing's reporting currency
@@ -413,6 +429,44 @@ async function applyFactGuard(content: string, company: any, marketSnapshot: any
   }
   const verdict = verifyAnswerNumbers(content, registry);
   const summary = summarizeVerdict(verdict);
+  if (!summary) {
+    return { content, factGuard: null };
+  }
+
+  if (mode === "full" && summary.hard > 0) {
+    await insertFactGuardAudit({ ticker: company.ticker, mode: "full_original", summary }).catch(() => {});
+
+    const issues = renderHardFailIssues(verdict);
+    const correctionPrompt = [
+      "以下研究回答中存在与已核实数据不一致的数字，请只修正标出的问题，其余内容（判断、结构、措辞）保持不变。",
+      "",
+      "【原始回答】",
+      content,
+      "",
+      `【需要修正的数字问题（共 ${summary.hard} 处）】`,
+      issues,
+      "",
+      "请输出修正后的完整回答。只修改上述标出的数字错误，不要改动其他内容。"
+    ].join("\n");
+
+    const retry = await modelAnswer(RESEARCH_SYSTEM_PROMPT, correctionPrompt, userId);
+    if (retry) {
+      const retryVerdict = verifyAnswerNumbers(retry.content, registry);
+      const retrySummary = summarizeVerdict(retryVerdict) ?? summary;
+      await insertFactGuardAudit({ ticker: company.ticker, mode: "full_retry", summary: retrySummary }).catch(() => {});
+
+      if (retrySummary.hard > 0) {
+        const withNote = retry.content + buildSoftNote(retryVerdict);
+        return { content: withNote, factGuard: { mode, ...retrySummary, retried: true, retryFixed: false } };
+      }
+      const withNote = retry.content + buildSoftNote(retryVerdict);
+      return { content: withNote, factGuard: { mode, ...retrySummary, retried: true, retryFixed: true } };
+    }
+    // LLM retry call failed — fall back to soft behavior on the original content
+    const withNote = content + buildSoftNote(verdict);
+    return { content: withNote, factGuard: { mode, ...summary, retried: false } };
+  }
+
   await insertFactGuardAudit({ ticker: company.ticker, mode, summary }).catch(() => {});
   const withNote = mode === "shadow" ? content : content + buildSoftNote(verdict);
   return { content: withNote, factGuard: { mode, ...summary } };
@@ -476,17 +530,51 @@ async function gatherResearchContext(input: ResearchInput, userId: string, onSta
     company.ticker.endsWith(".HK") ? listRecentHkBuybacks(company.ticker, 180).catch(() => []) : Promise.resolve([])
   ]);
   const { marketSnapshot, financialsData } = toDomainSources(company, market, financials);
+
+  // Web evidence: check DB cache first (same ticker + intent within 48h),
+  // only hit the search API when no fresh results exist.
+  const webEvidenceQuery = `${company.nameZh || company.nameEn || ""} ${company.ticker} ${input.question}`.trim();
+  const webEvidencePromise = (async () => {
+    const cached = await listWebEvidence({ ticker: company.ticker, intent: input.question.slice(0, 200), maxAgeHours: 48 }).catch(() => []);
+    if (cached.length) {
+      return {
+        evidence: cached.map((row: any) => ({ title: row.title, url: row.url, snippet: row.snippet, source: row.source, date: row.publishedAt || null, relevanceScore: row.relevanceScore })),
+        query: webEvidenceQuery, provider: "tavily-cache", searchedAt: cached[0]?.fetchedAt || new Date().toISOString()
+      };
+    }
+    return searchWebEvidence(webEvidenceQuery);
+  })().catch(() => ({ evidence: [] as any[], query: webEvidenceQuery, provider: "tavily", searchedAt: new Date().toISOString() }));
+
   await onStage?.("valuation");
   // Peers need the subject's own financials to classify its stage, so this can't
   // join the Promise.all above — it runs before valuation because the anchor is
   // an input to the band, not a decoration on it.
   const compPeers = await getComparablePeers(company.ticker, financialsData);
   const valuation = computeResearchValuation(company, marketSnapshot, financialsData, compPeers);
-  const panel = decisionPanel(company, profile, market, financialsData, valuation, earnings);
+
+  // Await web evidence (was kicked off in parallel before valuation).
+  const webEvidenceResult = await webEvidencePromise;
+  const webEvidence = webEvidenceResult.evidence.length ? webEvidenceResult : null;
+
+  // Persist evidence items to DB for future retrieval/auditing.
+  if (webEvidence?.evidence.length) {
+    const intent = input.question.slice(0, 200);
+    const dbItems = webEvidence.evidence.map((item: any) => ({
+      id: `${company.ticker}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+      ticker: company.ticker, intent, query: webEvidence.query,
+      title: item.title, url: item.url, snippet: item.snippet,
+      source: item.source, sourceType: "web_search",
+      relevanceScore: item.relevanceScore, credibilityScore: item.relevanceScore,
+      fetchedAt: webEvidence.searchedAt
+    }));
+    await saveWebEvidence(dbItems).catch(() => {});
+  }
+
+  const panel = decisionPanel(company, profile, market, financialsData, valuation, earnings, webEvidence);
   // The prompt now comes from the domain composer instead of a hand-rolled
   // 4-line facts string: it renders the company archive (护城河/商业模式/多空/
   // 监控项), the real filing block, our own valuation band, the next earnings
-  // date, and — the point of docs/PLAN.md P2 — routes on classifyResearchIntent
+  // date, and routes on classifyResearchIntent
   // so a "靠什么赚钱" question gets business-model sections instead of the same
   // full research template every time. Its anti-fabrication rules (no peer
   // multiples outside the given list, no invented earnings dates, no "行业常识"
@@ -497,7 +585,7 @@ async function gatherResearchContext(input: ResearchInput, userId: string, onSta
   // lines to print and whether the 推断 section may draw firm conclusions. Passing
   // market alone made every answer claim 财报三表还没补齐 while quoting the filing
   // numbers three paragraphs above it. news/estimates are honestly missing — no
-  // adapter exists (docs/PLAN.md P1).
+  // adapter exists (docs/PLAN.md P3).
   const isFirstPartyFiling = company.ticker.endsWith(".HK");
   const composerSources = {
     market: { provider: market?.source, asOf: market?.as_of, status: market ? "ok" : "missing" },
@@ -514,14 +602,22 @@ async function gatherResearchContext(input: ResearchInput, userId: string, onSta
     marketSnapshot, financialsData, valuation, earnings, buybacks,
     portraitContext: profile?.thesis ? `既有研究主线：${profile.thesis}` : "",
     history: input.history,
-    // Not wired to any source yet (docs/PLAN.md P1) — passing null makes the
-    // composer print an explicit 未接通 block, which is what stops the model
-    // from filling the gap from memory.
-    webEvidence: null, newsSnapshot: null, compare: null, dualListing: null, dualQuote: null, otherHoldings: null
+    webEvidence, newsSnapshot: null, compare: null, dualListing: null, dualQuote: null, otherHoldings: null
   };
   const dataSources = {
-    market: market ? { status: "ok", source: market.source, asOf: market.as_of } : { status: "missing" },
-    financials: financials.length ? { status: "ok" } : { status: "missing" },
+    market: market ? {
+      status: "ok", source: market.source, asOf: market.as_of,
+      freshness: freshnessLabel(market.created_at)
+    } : { status: "missing" },
+    financials: financialsData.providerStatus === "ok" ? {
+      status: "ok", source: financialsData.source,
+      period: financialsData.periodLabel || financialsData.period || null,
+      asOf: financialsData.publishedAt || null,
+      extractedAt: financialsData.extractedAt || null
+    } : { status: "missing" },
+    valuation: valuation && !valuation.cannotValueReason ? {
+      status: "ok", method: valuation.method
+    } : { status: "missing" },
     buybacks: buybacks.length ? { status: "ok", source: "HKEX 翌日披露报表", rows: buybacks.length } : { status: "missing" }
   };
   return { company, profile, market, financials, earnings, marketSnapshot, financialsData, valuation, panel, composer, composerSources, composerContext, dataSources };
@@ -658,7 +754,7 @@ export async function runResearch(input: ResearchInput, userId: string, onToken?
   // 来源 at all despite the rules asking for one). Run it before the guard so
   // factGuard verifies the exact text the user ends up reading.
   const guarded = generated
-    ? await applyFactGuard(composer.normalizeResearchAnswer(structured.cleanContent, panel, composerSources), company, marketSnapshot, financialsData, valuation)
+    ? await applyFactGuard(composer.normalizeResearchAnswer(structured.cleanContent, panel, composerSources), company, marketSnapshot, financialsData, valuation, userId)
     : { content: fallback, factGuard: null };
   const content = guarded.content;
   const saved = await persistResearch(ctx, input, userId, content, structured.rules);
@@ -693,7 +789,7 @@ export async function runAsk(input: ResearchInput, userId: string, onToken?: Tok
  * Deep report — a different artifact from the chat answer, not a relabelled one.
  * It previously called `runResearch` and renamed `content` to `markdown`, so
  * "深度研究" returned the exact conversational reply the user had already read
- * (docs/PLAN.md P2 "`reportComposer` 承接深度报告").
+ * (`reportComposer` 承接深度报告).
  *
  * Same gathered facts and same panel as chat — only the rendering differs:
  * `buildReportPrompt` asks for long-form judgment-first Markdown (## 核心判断 /
@@ -723,7 +819,7 @@ export async function runReport(input: ResearchInput, userId: string) {
   // conversational lead-in, which belongs above a chat reply, not above a report's
   // "# 深度研究" title. buildReportPrompt already mandates its own header and 来源.
   const guarded = generated
-    ? await applyFactGuard(generated.content, company, marketSnapshot, financialsData, valuation)
+    ? await applyFactGuard(generated.content, company, marketSnapshot, financialsData, valuation, userId)
     : { content: fallback, factGuard: null };
   const markdown = guarded.content;
   const saved = await persistResearch(ctx, input, userId, markdown);

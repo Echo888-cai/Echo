@@ -158,12 +158,12 @@ export async function searchHkexAllAnnouncements(ticker, { rowRange = 30, yearsB
   return parseGeneralAnnouncements(raw);
 }
 
-/** 最近两年的业绩公告列表（新→旧）。 */
-export async function searchHkexResultsAnnouncements(ticker) {
+/** 最近 yearsBack 年的业绩公告列表（新→旧）。 */
+export async function searchHkexResultsAnnouncements(ticker, { yearsBack = 2 } = {}) {
   const stockId = await lookupStockId(ticker);
   const now = new Date();
   const to = now.toISOString().slice(0, 10).replace(/-/g, "");
-  const from = `${now.getFullYear() - 2}0101`;
+  const from = `${now.getFullYear() - yearsBack}0101`;
   const url =
     `${HKEX_BASE}/search/titleSearchServlet.do?sortDir=0&sortByOptions=DateTime&category=0&market=SEHK` +
     `&stockId=${stockId}&documentType=-1&fromDate=${from}&toDate=${to}` +
@@ -314,7 +314,8 @@ const STATEMENT_FIELDS = [
   ["netIncomeAttributable", /(本公司(權益持有人|擁有人|股東)應佔(盈利|溢利|利潤)|歸屬於普通股股東的淨利潤|归属于普通股股东的净利润|股東應佔淨[（(]虧損[）)]收益|股东应占净[（(]亏损[）)]收益|股東應佔淨收益[（(]虧損[）)]|股东应占净收益[（(]亏损[）)]|股東應佔淨虧損|股东应占净亏损|股東應佔淨收益|股东应占净收益|^應佔淨[（(]虧損[）)]收益|^應佔淨虧損|^[－\-—–]?\s*母公司普通股股東|^[－\-—–]?\s*母公司股東)/],
   ["operatingCashFlow", /(經營活動所得現金流量淨額|經營活動產生的現金流量淨額|經營業務所得現金淨額|经营活动产生的现金流量净额)/],
   ["cashAndEquivalents", /^(期末)?現金及現金等價物/],
-  ["netCash", /^現金淨額/]
+  ["netCash", /^現金淨額/],
+  ["freeCashFlow", /^(自由現金流|自由现金流|Free Cash Flow)(?!量表)/]
 ];
 
 // 同行 EPS（阿里/汇丰式摘要表）：基本优先，只有摊薄时用摊薄。
@@ -564,12 +565,12 @@ async function extractPdfText(pdfPath) {
  * 摄取一只港股最近 N 份业绩公告 → hk_financials。
  * 幂等：同 source_url 已入库则跳过（force 覆盖）。
  */
-export async function ingestHkFinancials(ticker, { limit = 3, force = false } = {}) {
+export async function ingestHkFinancials(ticker, { limit = 3, yearsBack = 2, force = false } = {}) {
   const t = normalizeTicker(ticker);
   if (isUS(t)) throw new Error(`${t} 是美股，港股管道不适用`);
   let announcements;
   try {
-    announcements = await searchHkexResultsAnnouncements(t);
+    announcements = await searchHkexResultsAnnouncements(t, { yearsBack });
   } catch (error) {
     await logIngestOutcome({ ticker: t, status: "search_failed", detail: error.message || String(error) });
     throw error;
@@ -617,6 +618,7 @@ export async function ingestHkFinancials(ticker, { limit = 3, force = false } = 
         operatingCashFlow: f.operatingCashFlow?.current ?? null,
         cashAndEquivalents: f.cashAndEquivalents?.current ?? null,
         netCash: f.netCash?.current ?? null,
+        freeCashFlow: f.freeCashFlow?.current ?? null,
         sourceTitle: item.title,
         sourceUrl: item.url,
         publishedAt: item.publishedAt
@@ -798,6 +800,7 @@ export function hkRowToFinancials(row) {
     // 公告 PDF 通常只给"净现金"一个数，不拆分现金/负债——单独暴露出来，
     // 好让 valuationEngine 直接用它（而不是靠 cash-debt 相减，totalDebt 在这条链路上从不存在）。
     netCash: row.net_cash ?? null,
+    freeCashFlow: row.free_cash_flow ?? null,
     asOf: row.extracted_at || new Date().toISOString(),
     providerStatus: "ok",
     firstParty: true,

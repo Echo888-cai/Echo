@@ -478,6 +478,27 @@ function EvidenceBlock({ evidence }: { evidence: any[] }) {
   );
 }
 
+function DataSourceLine({ dataSources }: { dataSources: any }) {
+  if (!dataSources) return null;
+  const chips: string[] = [];
+  const mkt = dataSources.market;
+  if (mkt?.status === "ok") {
+    const detail = [mkt.source, mkt.freshness || mkt.asOf].filter(Boolean).join(" · ");
+    chips.push(detail ? `行情：${detail}` : "行情");
+  }
+  const fin = dataSources.financials;
+  if (fin?.status === "ok") {
+    const detail = [fin.source, fin.period].filter(Boolean).join(" ");
+    chips.push(detail ? `财报：${detail}` : "财报");
+  }
+  const val = dataSources.valuation;
+  if (val?.status === "ok" && val.method) {
+    chips.push(`估值：${val.method}`);
+  }
+  if (!chips.length) return null;
+  return <div className="data-source-line">{chips.join("　")}</div>;
+}
+
 function AnswerMeta({ meta }: { meta: any }) {
   const spans: ReactNode[] = [];
   if (meta.confidence) {
@@ -767,6 +788,7 @@ export function AnswerCard({ message }: { message: Message }) {
           )}
         </div>
         {isPortfolio ? null : <GroundingBar meta={meta} />}
+        {isPortfolio ? null : <DataSourceLine dataSources={meta.dataSources} />}
         {isPortfolio ? null : <ComparisonTable comparison={meta.comparison} />}
         {isPortfolio ? null : <FocusStrip meta={meta} />}
         {isPortfolio ? null : <DualQuote dq={meta.dualQuote} />}

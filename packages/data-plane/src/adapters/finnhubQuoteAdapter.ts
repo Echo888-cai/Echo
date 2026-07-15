@@ -2,13 +2,10 @@ import { detectMarket, type Market } from "../market.js";
 import type { QuotePort, QuoteResult } from "../ports.js";
 
 /**
- * Finnhub free-tier /quote. Verified live against real tickers before wiring
- * this in: the free key has no HK/CN coverage at all (returns
- * `{"error":"You don't have access to this resource."}` for 0700.HK and
- * 600519.SS) — only US-listed symbols resolve. `supports()` reflects that
- * honestly rather than registering for markets it can't actually serve, which
- * would otherwise silently downgrade to "missing" at call time instead of the
- * router routing around it up front.
+ * Finnhub free-tier /quote. Verified live: no HK coverage (returns
+ * `{"error":"You don't have access to this resource."}` for 0700.HK)
+ * — only US-listed symbols resolve. `supports()` reflects that honestly
+ * rather than registering for markets it can't actually serve.
  */
 export const finnhubQuoteAdapter: QuotePort = {
   id: "finnhub",

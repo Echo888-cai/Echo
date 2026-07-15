@@ -7,8 +7,8 @@ function toFinite(value: unknown): number | null {
 }
 
 /**
- * Twelve Data free-tier /quote. Verified live: HK/CN symbols (both bare
- * `0700.HK`/`600519.SS` and `mic_code`-qualified forms) come back
+ * Twelve Data free-tier /quote. Verified live: HK symbols (both bare
+ * `0700.HK` and `mic_code`-qualified forms) come back
  * `{"code":404,"message":"...available starting with the Pro or Venture
  * plan..."}` on the free key — only US symbols resolve. `supports()` reflects
  * that instead of registering for markets this key can't serve.

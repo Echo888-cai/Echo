@@ -1,4 +1,4 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { desc, sql } from "drizzle-orm";
 import { canaryRuns } from "../schema/misc.js";
 import { database } from "./context.js";
 
@@ -9,13 +9,6 @@ export async function insertCanaryResult(input: any) {
 
 export async function getLatestBatchId() {
   return (await database().select({ value: canaryRuns.batchId }).from(canaryRuns).orderBy(desc(canaryRuns.createdAt)).limit(1))[0]?.value || null;
-}
-
-export async function getLatestBatchResults() {
-  const batchId = await getLatestBatchId();
-  if (!batchId) return { batchId: null, ranAt: null, results: [] };
-  const results = await database().select().from(canaryRuns).where(eq(canaryRuns.batchId, batchId));
-  return { batchId, ranAt: results[0]?.createdAt.toISOString() || null, results };
 }
 
 export async function getSourceHealthSummary() {

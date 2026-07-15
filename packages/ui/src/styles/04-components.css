@@ -895,6 +895,16 @@
   .grounding-bar .ground-complete.pending { animation: none; }
 }
 
+/* Data source provenance line — P3 数字级可追溯 */
+.data-source-line {
+  margin: -8px 0 14px;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
 /* 推荐选项消息（对比意图弹出的选择卡） */
 .choice-prompt { margin: 4px 0 14px; font-size: 15px; line-height: 1.6; color: var(--ink); }
 .choice-options { display: flex; flex-direction: column; gap: 10px; }

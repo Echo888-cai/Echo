@@ -18,6 +18,7 @@ import { finnhubCalendarAdapter, fetchFinnhubLastReported, type LastReportedEarn
 import { hkAdrCalendarAdapter } from "./adapters/hkAdrCalendarAdapter.js";
 import { adrOrBareSymbol } from "./hkAdr.js";
 import { finnhubPeersAdapter } from "./adapters/finnhubPeersAdapter.js";
+import { tavilySearchAdapter, type WebSearchResult } from "./adapters/tavilySearchAdapter.js";
 import { detectMarket, type Market } from "./market.js";
 import { selectAdapter, selectAdapterChain, type SelectOptions } from "./router.js";
 import { isBreakerOpen, recordFailure, recordSuccess } from "./circuitBreaker.js";
@@ -43,7 +44,7 @@ const liveQuoteAdapters: QuotePort[] = [
 // so the canary can probe exactly them: probing the postgres cache/first-party
 // adapters would measure our own database, not a supplier's real availability,
 // and a green "financials" row backed by a cache read would be the same
-// decorative status the real-probe canary exists to kill (docs/PLAN.md P1).
+// decorative status the real-probe canary exists to kill.
 const externalFundamentalsAdapters: FundamentalsPort[] = process.env.FMP_API_KEY ? [fmpFundamentalsAdapter] : [];
 const fundamentalsAdapters: FundamentalsPort[] = [postgresFundamentalsAdapter, ...externalFundamentalsAdapters];
 const filingsAdapters: FilingsPort[] = [postgresFilingsAdapter];
@@ -75,8 +76,8 @@ export async function getQuote(ticker: string, opts: SelectOptions = {}): Promis
 /**
  * 直连外部行情源取实时报价（跳过 Postgres 缓存适配器），由快照刷新链路调用。
  * 按 qualityRank 顺序逐个尝试，任何一个适配器超时/报错/连续熔断都自动降级到
- * 链上下一个候选，而不是把单一供应商的故障直接暴露为整条链路失败（docs/PLAN.md
- * P1"逐级降级到 Yahoo"）。全部候选耗尽才抛出最后一次的错误。
+ * 链上下一个候选，而不是把单一供应商的故障直接暴露为整条链路失败。全部候选耗尽
+ * 才抛出最后一次的错误。
  */
 export async function fetchLiveQuote(ticker: string, opts: SelectOptions = {}): Promise<Routed<QuoteResult>> {
   const market = detectMarket(ticker);
@@ -190,3 +191,25 @@ export async function getCompPeers(ticker: string, opts: SelectOptions = {}): Pr
   const result = await selection.adapter.fetchPeers(ticker);
   return { result, adapterId: selection.adapter.id, quality: checkEnvelope(result) };
 }
+
+// ── Web evidence search (Tavily) ────────────────────────────────────────────
+// Not market-routed: a single query-based adapter, only registered when its
+// API key is set.  Exposed as a standalone function (like fetchLiveQuote)
+// rather than a port chain, because there's no market/router semantics here.
+const webSearchConfigured = tavilySearchAdapter.isConfigured();
+
+/**
+ * Search the web for evidence relevant to a research question. Returns an
+ * empty result set (never throws) when the adapter is unconfigured or the
+ * call fails — the research pipeline degrades to "未接通" rather than crash.
+ */
+export async function searchWebEvidence(query: string): Promise<WebSearchResult> {
+  return tavilySearchAdapter.search(query);
+}
+
+/** Whether a web search adapter is registered (key configured). */
+export function isWebSearchConfigured(): boolean {
+  return webSearchConfigured;
+}
+
+export type { WebSearchResult };

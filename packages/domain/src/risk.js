@@ -147,13 +147,13 @@ export function buildRiskRadar(company, { marketSnapshot, financialsData, newsSn
     }
   }
 
-  // 5. "No news" gap risk
+  // 5. News source gap — informational rather than risk, since no news adapter is connected
   if (!hasNews) {
     risks.push({
-      label: "新闻源缺失，无法评估舆情风险",
+      label: "新闻舆情暂未接通",
       severity: "低",
-      trigger: "新闻接口 timeout —— 配置 Finnhub 或新闻 API 后可补全",
-      evidence: [evidence({ source: "新闻源", confidence: "低", missingReason: "新闻接口 timeout 或无返回" })]
+      trigger: "网页证据层建设中——暂不影响核心研究判断",
+      evidence: [evidence({ source: "新闻源", confidence: "低", missingReason: "新闻适配器尚未接通（P3 待办）" })]
     });
   }
 

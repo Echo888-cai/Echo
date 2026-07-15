@@ -6,7 +6,7 @@
  * since the schema landed but had **no caller anywhere in the repo** — the rows
  * sitting in comp_peers were written by an uncommitted script and frozen since
  * 2026-07-10, the same frozen-dirty-data shape already found in
- * earnings_calendar (docs/PLAN.md P1). A cache nobody writes is not a cache,
+ * earnings_calendar. A cache nobody writes is not a cache,
  * it's a fossil, so it is only read here behind a TTL that our own writes keep
  * refreshing.
  *

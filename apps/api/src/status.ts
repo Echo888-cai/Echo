@@ -20,8 +20,7 @@ const sourceLabels: Record<string, string> = {
  *  implementation that no longer exists: nothing will ever refresh them, so the
  *  settings panel rendered a permanent ✓ 最近成功 for 网页证据层 and 同业可比 —
  *  capabilities with no adapter at all — under a header promising 状态来自真实数据
- *  调用. Same frozen-dirty-data shape as the earnings_calendar rows in docs/PLAN.md
- *  P1; drop them from the health view rather than present them as live truth. */
+ *  调用. Drop them from the health view rather than present them as live truth. */
 const PROBE_CAPABILITIES = ["market", "financials", "earnings", "comp_peers"];
 
 function isLiveProbeSource(source: string) {
@@ -99,7 +98,7 @@ export async function buildStatusSnapshot(userId = "local") {
   // (packages/data-plane/src/canary.ts calls each registered external adapter
   // against a real ticker), never from `Boolean(process.env.X_API_KEY)` —
   // "configured but the probe fails" must be visible, not silently reported as
-  // "ok" (docs/PLAN.md P1 "canary 真探测"). A capability with no adapter at all
+  // "ok". A capability with no adapter at all
   // says so rather than borrowing a sibling's env key as proof of life.
   const capabilityStatus = (capability: string, noun: string) => {
     const rows = canaryHealth.filter((row) => String(row.source).startsWith(`${capability}:`));
@@ -123,9 +122,11 @@ export async function buildStatusSnapshot(userId = "local") {
       // No news adapter exists anywhere in the repo. The old card read the
       // FINNHUB/ALPHAVANTAGE/TWELVEDATA keys — which are registered for *quotes*
       // only — and reported 新闻舆情 as "ok": exactly the 配置剧场 red line 2 forbids.
-      { id: "news", name: "新闻舆情", status: "limited" as const, detail: "未接通：仓库内无新闻适配器（P1 待办）" },
-      { id: "web_evidence", name: "网页证据层", status: "limited" as const,
-        detail: hasWebSearch ? "已配置搜索密钥，但适配器尚未接通（P1 待办）" : "未接通：无搜索适配器，且未配置 TAVILY/SERPAPI 密钥" },
+      { id: "news", name: "新闻舆情", status: "limited" as const, detail: "未接通：仓库内无新闻适配器（P3 待办）" },
+      { id: "web_evidence", name: "网页证据层",
+        ...(hasWebSearch
+          ? { status: "ok" as const, detail: "Tavily 搜索适配器已接通，研究链路自动调用" }
+          : { status: "limited" as const, detail: "未接通：未配置 TAVILY_API_KEY" }) },
       { id: "filings", name: "公告数据", status: "ok" as const, detail: "HKEX 一手公告管道" },
       {
         id: "earnings", name: "财报日历",
@@ -143,8 +144,8 @@ export async function buildStatusSnapshot(userId = "local") {
     evidenceBacklog: [
       { id: "financial_snapshots", label: "财报三表与估值倍数", priority: "P0", providers: ["FMP", "Intrinio"] },
       { id: "hkex_filings", label: "HKEX 公告与公司 IR PDF", priority: "P0", providers: ["HKEXnews", "Company IR"] },
-      { id: "web_evidence", label: "可信 web 搜索证据层", priority: "P1", providers: ["Tavily", "SerpAPI"] },
-      { id: "analyst_estimates", label: "一致预期与目标价", priority: "P1", providers: ["Finnhub", "FMP"] }
+      { id: "web_evidence", label: "可信 web 搜索证据层", priority: "P3", providers: ["Tavily", "SerpAPI"] },
+      { id: "analyst_estimates", label: "一致预期与目标价", priority: "P3", providers: ["Finnhub", "FMP"] }
     ],
     ai, db: { companies: "PostgreSQL" }, canary: { batchId: canaryBatchId, sources: canaryHealth }, hkFilingCoverage,
     llmAudit, usage, factGuard, updatedAt: new Date().toISOString()

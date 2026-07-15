@@ -59,6 +59,7 @@ function financialsColumns() {
     operatingCashFlow: numeric("operating_cash_flow"),
     cashAndEquivalents: numeric("cash_and_equivalents"),
     netCash: numeric("net_cash"),
+    freeCashFlow: numeric("free_cash_flow"),
     sourceTitle: text("source_title"),
     sourceUrl: text("source_url").unique(),
     publishedAt: timestamp("published_at", { withTimezone: true }),

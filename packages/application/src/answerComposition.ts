@@ -2,8 +2,7 @@
  * Wires the pure domain `answerComposer` (956 lines, dead code since the
  * architecture migration — docs/PLAN.md 诊断#7) to real ports, so `runResearch`
  * can stop hand-rolling a 4-line facts string and use the real multi-source
- * prompt builder (docs/PLAN.md P2 "runResearch 改为经 answerComposer 组装多源事实
- * 块，意图分类驱动提示词").
+ * prompt builder.
  *
  * The composer is a factory precisely so the domain package touches no clock,
  * database, network or env — every impure thing it needs is injected here.
@@ -96,7 +95,7 @@ function buybacksToPrompt(buybacks: any) {
 /**
  * Web evidence (Tavily) is not connected — the key is over its plan quota, so no
  * adapter was written rather than one that couldn't be verified against a real
- * response (docs/PLAN.md P1). Tell the model plainly instead of leaving the
+ * response (docs/PLAN.md P3). Tell the model plainly instead of leaving the
  * block blank, which reads as "nothing newsworthy happened".
  */
 function webEvidenceToPrompt(webEvidence: any) {
@@ -113,7 +112,7 @@ function webEvidenceToPrompt(webEvidence: any) {
  * what the composer reads: moat/businessModel/metrics/bull/bear/monitors).
  *
  * `companies` backs the composer's same-sector peer suggestions. It's empty:
- * comp_peers has no connected source (docs/PLAN.md P1), and loading all ~650
+ * comp_peers uses Finnhub live peers (not sector-based guessing), and loading all ~650
  * companies on every question to guess peers by sector string would be both
  * wasteful and misleading — same-sector is not same-comparable. With an empty
  * pool the composer falls back to its hand-curated COMPETITOR_MAP and otherwise

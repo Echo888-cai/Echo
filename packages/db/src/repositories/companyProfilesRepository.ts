@@ -81,11 +81,6 @@ export async function appendProfileEvent(ticker: string, event: any = {}, userId
   await withTenant(userId, (tx) => appendEventTx(tx, normalized, event, userId));
 }
 
-export async function listProfileEvents(ticker: string, limit = 200, userId = "local") {
-  const normalized = normalizeTicker(ticker);
-  return withTenant(userId, (tx) => listEventsTx(tx, normalized, limit, userId));
-}
-
 export async function getCompanyProfile(ticker: string, userId = "local") {
   const normalized = normalizeTicker(ticker);
   return withTenant(userId, async (tx) => hydrate(tx, (await tx.select().from(companyProfiles)
@@ -114,8 +109,8 @@ export async function upsertCompanyProfile(ticker: string, patch: any = {}, user
       ticker: normalized,
       nameZh: patch.companyName || normalized,
       nameEn: isUs ? patch.companyName || normalized : null,
-      exchange: isUs ? "US" : normalized.endsWith(".HK") ? "HKEX" : "CN",
-      currency: isUs ? "USD" : normalized.endsWith(".HK") ? "HKD" : "CNY"
+      exchange: isUs ? "US" : "HKEX",
+      currency: isUs ? "USD" : "HKD"
     }).onConflictDoNothing();
     const [currentRow] = await tx.select().from(companyProfiles)
       .where(and(eq(companyProfiles.userId, userId), eq(companyProfiles.ticker, normalized))).limit(1);

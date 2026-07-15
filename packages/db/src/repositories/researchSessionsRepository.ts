@@ -32,8 +32,8 @@ async function ensureCompany(tx: any, ticker: string, name?: string) {
     ticker,
     nameZh: name || ticker,
     nameEn: isUs ? name || ticker : null,
-    exchange: isUs ? "US" : ticker.endsWith(".HK") ? "HKEX" : "CN",
-    currency: isUs ? "USD" : ticker.endsWith(".HK") ? "HKD" : "CNY"
+    exchange: isUs ? "US" : "HKEX",
+    currency: isUs ? "USD" : "HKD"
   }).onConflictDoNothing();
 }
 

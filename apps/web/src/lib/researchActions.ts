@@ -275,7 +275,8 @@ function answerMetaFromResult(result: any) {
     comparison: result.comparison || null,
     otherHoldings: Array.isArray(result.otherHoldings) ? result.otherHoldings : null,
     dualQuote: result.dualQuote || null,
-    evidence: provenanceFromPanel(result.decisionPanel)
+    evidence: provenanceFromPanel(result.decisionPanel),
+    dataSources: result.dataSources || null
   };
 }
 

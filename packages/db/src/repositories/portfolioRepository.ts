@@ -17,12 +17,6 @@ function hydrate(row: typeof portfolioPositions.$inferSelect | undefined) {
   };
 }
 
-export async function getPosition(ticker: string, userId = "local") {
-  const normalized = normalizeTicker(ticker);
-  return withTenant(userId, async (tx) => hydrate((await tx.select().from(portfolioPositions)
-    .where(and(eq(portfolioPositions.userId, userId), eq(portfolioPositions.ticker, normalized))).limit(1))[0]));
-}
-
 export async function listPositions(userId = "local") {
   return withTenant(userId, async (tx) => (await tx.select().from(portfolioPositions)
     .where(eq(portfolioPositions.userId, userId)).orderBy(desc(portfolioPositions.updatedAt))).map((row) => hydrate(row)!));
@@ -38,8 +32,8 @@ export async function upsertPosition(ticker: string, patch: {
       ticker: normalized,
       nameZh: patch.companyName || normalized,
       nameEn: isUs ? patch.companyName || normalized : null,
-      exchange: isUs ? "US" : normalized.endsWith(".HK") ? "HKEX" : "CN",
-      currency: isUs ? "USD" : normalized.endsWith(".HK") ? "HKD" : "CNY"
+      exchange: isUs ? "US" : "HKEX",
+      currency: isUs ? "USD" : "HKD"
     }).onConflictDoNothing();
     const existing = hydrate((await tx.select().from(portfolioPositions)
       .where(and(eq(portfolioPositions.userId, userId), eq(portfolioPositions.ticker, normalized))).limit(1))[0]);
