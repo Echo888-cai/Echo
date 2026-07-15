@@ -1,5 +1,6 @@
 import { and, count, desc, eq, gte, isNull } from "drizzle-orm";
 import { notifications } from "../schema/notifications.js";
+import { notificationEnabled } from "./userPreferencesRepository.js";
 import { withTenant } from "./context.js";
 
 function hydrate(row: typeof notifications.$inferSelect) {
@@ -15,9 +16,18 @@ function hydrate(row: typeof notifications.$inferSelect) {
   };
 }
 
+/**
+ * 用户的通知偏好在这里生效，不在各调用方。
+ *
+ * `notificationEnabled` 此前全仓库零调用——设置页的 5 个开关一个都不起作用，关掉证伪
+ * 告警照样推。根因是"每个调用方各自记得查一遍"，而 5 处调用点没有一处记得。这里已经是
+ * dedupe 策略的咽喉（"这条通知该不该产生"本来就归它管），偏好检查放同一处，
+ * 新增调用方无从遗漏。
+ */
 export async function insertNotification({ kind, title, body = "", ticker = null, payload = null, dedupeKey = null, dedupeWindowHours = 12, userId = "local" }: {
   kind: string; title: string; body?: string; ticker?: string | null; payload?: unknown; dedupeKey?: string | null; dedupeWindowHours?: number; userId?: string;
 }) {
+  if (!await notificationEnabled(userId, kind)) return null;
   return withTenant(userId, async (tx) => {
     if (dedupeKey) {
       const cutoff = new Date(Date.now() - Math.max(1, Math.round(dedupeWindowHours)) * 3_600_000);
