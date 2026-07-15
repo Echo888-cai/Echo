@@ -85,13 +85,14 @@ function tickerCurrency(ticker: string) {
   return ticker.endsWith(".HK") ? "HKD" : /\.(SS|SZ)$/.test(ticker) ? "CNY" : "USD";
 }
 
-/** Mirrors apps/web/src/lib/market.ts detectMarket() so cards carry a real market badge. */
-function detectMarket(ticker: string): "US" | "HK" | "CN" {
+/** Mirrors apps/web/src/lib/market.ts detectMarket() so cards carry a real market badge.
+ *  "unsupported" = 已停止覆盖（A 股退场后的存量 .SS/.SZ 条目，不静默删除）。 */
+function detectMarket(ticker: string): "US" | "HK" | "unsupported" {
   const t = String(ticker || "").trim().toUpperCase().replace(/\s+/g, "");
   if (/\.US$/.test(t)) return "US";
   if (/\.HK$/.test(t)) return "HK";
-  if (/\.(SS|SZ)$/.test(t)) return "CN";
-  if (/^\d{6}$/.test(t)) return "CN";
+  if (/\.(SS|SZ)$/.test(t)) return "unsupported";
+  if (/^\d{6}$/.test(t)) return "unsupported";
   if (/^\d{1,5}$/.test(t)) return "HK";
   if (/^[A-Z][A-Z.]{0,6}$/.test(t)) return "US";
   return "HK";
@@ -289,7 +290,7 @@ async function stockDetail(ticker: string, userId: string) {
 
   let events: any[] = [];
   const market3 = detectMarket(normalized);
-  if (market3 === "HK" || market3 === "CN") {
+  if (market3 === "HK") {
     try {
       const { result } = await getFilings(normalized);
       if (result.providerStatus === "ok") {
@@ -305,7 +306,10 @@ async function stockDetail(ticker: string, userId: string) {
     price, currency: company?.currency || tickerCurrency(normalized), changePct: market?.change_percent ?? null,
     priceStatus: (price == null ? "missing" : "ok") as "ok" | "missing", held: Boolean(position), returnPct,
     asOf: market?.as_of || null, earnings,
-    series: { providerStatus: (series.length >= 2 ? "ok" : "unavailable") as "ok" | "unavailable", points: series },
+    // 已停止覆盖的市场不出历史曲线——价格都不再更新了，挂一条永远冻结的旧曲线比空白更误导。
+    series: market3 === "unsupported"
+      ? { providerStatus: "unavailable" as const, points: [] }
+      : { providerStatus: (series.length >= 2 ? "ok" : "unavailable") as "ok" | "unavailable", points: series },
     fundamentals: { status: "unavailable" as const, pe: null, revenueGrowth: null, grossMargin: null, freeCashFlow: null, currency: null },
     events,
     watchRules: evaluated.map(({ rule, result }) => ({ id: rule.id, label: rule.label, kind: rule.kind, threshold: rule.threshold, triggered: result.triggered, sane: result.sane, distancePct: result.distancePct })),

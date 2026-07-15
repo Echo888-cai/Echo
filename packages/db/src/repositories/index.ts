@@ -1,6 +1,5 @@
 export * as auth from "./authRepository.js";
 export * as canary from "./canaryRepository.js";
-export * as cnFinancials from "./cnFinancialsRepository.js";
 export * as company from "./companyRepository.js";
 export * as companyProfiles from "./companyProfilesRepository.js";
 export * as compPeers from "./compPeersRepository.js";

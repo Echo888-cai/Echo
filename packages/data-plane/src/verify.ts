@@ -8,7 +8,7 @@
  */
 import { getQuote, getFundamentals, getFilings, getNextEarnings, NoAuthorizedAdapterError } from "./registry.js";
 
-const TICKERS = ["0700.HK", "AAPL", "600519.SS"];
+const TICKERS = ["0700.HK", "AAPL"];
 
 async function verifyPort<T>(label: string, fn: (ticker: string, opts?: { commercialMode?: boolean }) => Promise<{ result: T; adapterId: string; quality: { score: number; issues: unknown[] } }>) {
   console.log(`\n== ${label}: research mode ==`);

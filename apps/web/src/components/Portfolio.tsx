@@ -124,7 +124,8 @@ const LEVEL: Record<string, { icon: string; cls: string }> = {
 const EXP_MARKETS: [string, string, string][] = [
   ["HK", "港股", "pr-exp-hk"],
   ["US", "美股", "pr-exp-us"],
-  ["CN", "A股", "pr-exp-cn"]
+  // 存量 A 股持仓（已停止覆盖）仍要在暴露里如实出现，不能静默把它从 100% 里抹掉。
+  ["unsupported", "已停止覆盖", "pr-exp-cn"]
 ];
 
 // P3 组合体检卡：一句话结论 + 币种总额/盈亏 + 市场暴露/权重条 + 纪律检查清单。

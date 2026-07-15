@@ -19,7 +19,7 @@ export async function executeResearchWorkflow(input: ResearchWorkflowInput) {
   });
 }
 
-export async function executeFilingWorkflow(input: { market: "HK" | "CN"; ticker: string; limit?: number; force?: boolean }) {
+export async function executeFilingWorkflow(input: { market: "HK"; ticker: string; limit?: number; force?: boolean }) {
   const temporal = await client();
   return temporal.workflow.execute("filingIngestionWorkflow", {
     taskQueue: temporalTaskQueue(),

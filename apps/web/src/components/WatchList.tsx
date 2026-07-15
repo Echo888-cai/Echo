@@ -31,9 +31,9 @@ const WD_REFRESH = (
 );
 
 function exBadge(marketOrTicker: string) {
-  const mkt = marketOrTicker === "US" || marketOrTicker === "HK" || marketOrTicker === "CN" ? marketOrTicker : detectMarket(marketOrTicker);
-  const label = mkt === "US" ? "美股" : mkt === "CN" ? "A股" : "港股";
-  return <span className={`ex-badge ${mkt.toLowerCase()}`}>{label}</span>;
+  const mkt = marketOrTicker === "US" || marketOrTicker === "HK" || marketOrTicker === "unsupported" ? marketOrTicker : detectMarket(marketOrTicker);
+  const label = mkt === "US" ? "美股" : mkt === "HK" ? "港股" : "已停止覆盖";
+  return <span className={`ex-badge ${mkt === "unsupported" ? "delisted" : mkt.toLowerCase()}`}>{label}</span>;
 }
 
 // Inline mini price sparkline (pure SVG, no deps): last-month closes → a 92×26
@@ -161,7 +161,6 @@ const WATCH_FILTERS: [string, string][] = [
   ["all", "全部"],
   ["hk", "港股"],
   ["us", "美股"],
-  ["cn", "A股"],
   ["held", "持仓"],
   ["risk", "预警"]
 ];
@@ -175,7 +174,6 @@ function applyWatchView(cards: WatchCard[], filter: string, sort: string): Watch
   let out = cards;
   if (filter === "hk") out = out.filter((c) => c.market === "HK");
   else if (filter === "us") out = out.filter((c) => c.market === "US");
-  else if (filter === "cn") out = out.filter((c) => c.market === "CN");
   else if (filter === "held") out = out.filter((c) => c.held);
   else if (filter === "risk") out = out.filter((c) => c.status === "falsified" || c.status === "at_risk");
   if (sort === "change") {
@@ -285,7 +283,7 @@ export function WatchListBody({ desk, loaded, onRefetch }: { desk: WatchDesk | n
         onRefetch();
         return;
       }
-      setAddError(`没识别出「${q}」，换个代码试试，如 AAPL、0700.HK、600519.SS`);
+      setAddError(`没识别出「${q}」，换个代码试试，如 AAPL、0700.HK`);
     } catch {
       setAddError("添加失败，请重试");
     }

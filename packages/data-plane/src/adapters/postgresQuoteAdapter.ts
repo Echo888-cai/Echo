@@ -10,13 +10,13 @@ export const postgresQuoteAdapter: QuotePort = {
     notes: "Authorization follows the original quote source; cached research quotes are never promoted to commercial use."
   },
   qualityRank: 1,
-  supports(_market: Market) { return true; },
+  supports(market: Market) { return market !== "unsupported"; },
   async fetchQuote(ticker: string): Promise<QuoteResult> {
     const row = await getLatestMarketSnapshot(ticker);
     if (!row) return { source: "postgres", ticker, currency: null, price: null, previousClose: null, change: null, changePercent: null,
       open: null, high: null, low: null, volume: null, marketCap: null, pe: null, dividendYield: null, week52High: null, week52Low: null,
       asOf: new Date().toISOString(), providerStatus: "missing" };
-    const currency = ticker.endsWith(".HK") ? "HKD" : /\.(SS|SZ)$/.test(ticker) ? "CNY" : "USD";
+    const currency = ticker.endsWith(".HK") ? "HKD" : "USD";
     return { source: row.source || "postgres", ticker: row.ticker, currency, price: row.price, previousClose: row.previous_close,
       change: row.change, changePercent: row.change_percent, open: row.open, high: row.high, low: row.low, volume: row.volume,
       marketCap: row.market_cap, pe: row.pe, dividendYield: row.dividend_yield, week52High: row.week_52_high, week52Low: row.week_52_low,

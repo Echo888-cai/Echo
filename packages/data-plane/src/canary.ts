@@ -26,7 +26,7 @@ const { listLiveQuoteAdapters, listExternalFundamentalsAdapters, listExternalCal
 
 // One representative ticker per market an adapter might plausibly serve —
 // each adapter's own supports() decides whether it's actually probed with it.
-const PROBE_TICKERS = ["AAPL", "0700.HK", "600519.SS"];
+const PROBE_TICKERS = ["AAPL", "0700.HK"];
 
 interface ProbeOutcome {
   status: "ok" | "missing";

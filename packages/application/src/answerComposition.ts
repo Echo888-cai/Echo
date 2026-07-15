@@ -13,7 +13,6 @@
  * composer's own rules tell the model to say 未核到 when a block is empty.
  */
 import { compactNumberServer, createAnswerComposer, createReportComposer, classifyResearchIntent, hkBuybackToPrompt, RESEARCH_INTENTS } from "@echo/domain";
-import { detectMarket } from "@echo/data-plane";
 
 /** Panel research-status → display label, recovered from the retired stack
  *  (ce58d27:src/server/schemas/agentPanel.js). The composer renders this into
@@ -130,7 +129,6 @@ export function composerFor(company: any) {
     webEvidenceToPrompt,
     financialsToMarkdown,
     buybacksToPrompt,
-    detectMarket,
     beijingMinute
   });
 }

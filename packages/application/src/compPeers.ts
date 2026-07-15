@@ -75,13 +75,10 @@ export async function getComparablePeers(ticker: string, financialsData: any) {
     return { ticker, ...composed, partial: Boolean((result as any).partial) };
   } catch (error) {
     // "No adapter serves this market" is structural, not a transient outage:
-    // A-shares have no ADR route and no Finnhub coverage, so there will never be
-    // a fresher row and stale-if-error would serve a fossil forever. Real case
-    // caught here: 600519.SS kept returning a 2026-07-10 row written by the
-    // uncommitted script — which even mislabelled the A-share as 港股 — long
-    // after this pipeline could tell the truth. Answer honestly and overwrite it.
+    // there will never be a fresher row and stale-if-error would serve a fossil
+    // forever. Answer honestly and overwrite any stale cached row.
     if ((error as any)?.name === "NoAuthorizedAdapterError") {
-      const detail = "本市场没有可用的同业数据源（A 股无美股 ADR 映射，Finnhub 免费档无 CN 覆盖）";
+      const detail = "本市场没有可用的同业数据源";
       await upsertCompPeers({ ticker, providerStatus: "missing", detail, peers: [], anchor: null }).catch(() => {});
       return { ticker, stage: null, peers: [], anchor: null, providerStatus: "missing" as const, detail, partial: false };
     }

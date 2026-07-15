@@ -22,7 +22,10 @@ export async function computePortfolioValuationUsd(fxToUsd: Record<string, strin
                case when p.ticker like '%.HK' then 'HKD'
                     when p.ticker like '%.SS' or p.ticker like '%.SZ' then 'CNY'
                     else 'USD' end as currency,
-               l.price
+               -- A 股已停止覆盖：market_snapshots 里的存量价永远不会再刷新，拿它入净值
+               -- 等于用冻结价无限期插值（违红线6）。按"缺价断口"处理，missing_price 会计入。
+               case when p.ticker like '%.SS' or p.ticker like '%.SZ' then null
+                    else l.price end as price
         from portfolio_positions p
         left join latest l on l.ticker = p.ticker
         where p.user_id = ${userId} and p.shares is not null

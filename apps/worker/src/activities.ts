@@ -13,7 +13,6 @@ import { listWatchAdds } from "@echo/db/repositories/watchlistRepository.js";
 import { computePortfolioValuationUsd, upsertSnapshot } from "@echo/db/repositories/portfolioSnapshotsRepository.js";
 import { insertNotification } from "@echo/db/repositories/notificationsRepository.js";
 import { ingestHkFinancials } from "./pipelines/hkFilingsPipeline.js";
-import { ingestCnFinancials } from "./pipelines/cnFilingsPipeline.js";
 import { evaluateFundamentalRule, evaluateRule } from "@echo/domain";
 import { listUsers } from "@echo/db/repositories/authRepository.js";
 import { S3Client } from "@aws-sdk/client-s3";
@@ -31,19 +30,14 @@ export async function generateResearchReport(input: { request: Record<string, un
   return runReport(input.request as any, input.userId);
 }
 
-export async function validateFilingRequest(input: { market: "HK" | "CN"; ticker: string }) {
+export async function validateFilingRequest(input: { market: "HK"; ticker: string }) {
   if (!input.ticker) throw new Error("ticker 不能为空");
-  if (input.market === "HK" && !input.ticker.toUpperCase().endsWith(".HK")) throw new Error("港股 workflow 只接受 .HK ticker");
-  if (input.market === "CN" && !/\.(SS|SZ)$/i.test(input.ticker)) throw new Error("A 股 workflow 只接受 .SS/.SZ ticker");
+  if (!input.ticker.toUpperCase().endsWith(".HK")) throw new Error("港股 workflow 只接受 .HK ticker");
   return true;
 }
 
 export async function ingestHkFilings(input: { ticker: string; limit?: number; force?: boolean }) {
   return ingestHkFinancials(input.ticker, { limit: input.limit, force: input.force });
-}
-
-export async function ingestCnFilings(input: { ticker: string; limit?: number; force?: boolean }) {
-  return ingestCnFinancials(input.ticker, { limit: input.limit, force: input.force });
 }
 
 export async function listTenantIds() {

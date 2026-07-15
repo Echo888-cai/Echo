@@ -1,10 +1,10 @@
-import { count, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { count, desc, eq, ilike, sql } from "drizzle-orm";
 import { companies } from "../schema/core.js";
-import { cnFilingIngestLog, cnFinancials, hkFilingIngestLog, hkFinancials } from "../schema/financials.js";
+import { hkFilingIngestLog, hkFinancials } from "../schema/financials.js";
 import { database, numberOrNull, numeric } from "./context.js";
 
-type FinancialTable = typeof hkFinancials | typeof cnFinancials;
-type LogTable = typeof hkFilingIngestLog | typeof cnFilingIngestLog;
+type FinancialTable = typeof hkFinancials;
+type LogTable = typeof hkFilingIngestLog;
 
 function values(row: any) {
   return {
@@ -33,7 +33,7 @@ function hydrate(row: any) {
   };
 }
 
-export function createFinancialsRepository(table: FinancialTable, logTable: LogTable, market: "HK" | "CN") {
+export function createFinancialsRepository(table: FinancialTable, logTable: LogTable) {
   return {
     async upsert(row: any) {
       const input = values(row);
@@ -54,20 +54,19 @@ export function createFinancialsRepository(table: FinancialTable, logTable: LogT
       await database().insert(logTable as any).values(row).onConflictDoUpdate({ target: (logTable as any).ticker, set: row });
     },
     async coverage() {
-      const tickerCondition = market === "HK" ? ilike(companies.ticker, "%.HK") : or(ilike(companies.ticker, "%.SS"), ilike(companies.ticker, "%.SZ"));
+      const tickerCondition = ilike(companies.ticker, "%.HK");
       const total = Number((await database().select({ value: count() }).from(companies).where(tickerCondition))[0]?.value || 0);
       const withFirstParty = Number((await database().select({ value: sql<number>`count(distinct ${(table as any).ticker})` }).from(table as any))[0]?.value || 0);
       const checked = Number((await database().select({ value: count() }).from(logTable as any))[0]?.value || 0);
       const failed = Array.from(await database().execute(sql.raw(`
         select l.ticker, c.name_zh as company_name, l.status, l.detail, l.knowledge_time as checked_at
-        from ${market === "HK" ? "hk_filing_ingest_log" : "cn_filing_ingest_log"} l
+        from hk_filing_ingest_log l
         left join companies c on c.ticker = l.ticker where l.status != 'ok'
         order by l.knowledge_time desc limit 50
       `)));
-      return { [market === "HK" ? "totalHk" : "totalCn"]: total, withFirstParty, checked, uncheckedCount: Math.max(0, total - checked), failed };
+      return { totalHk: total, withFirstParty, checked, uncheckedCount: Math.max(0, total - checked), failed };
     }
   };
 }
 
-export const hkRepository = createFinancialsRepository(hkFinancials, hkFilingIngestLog, "HK");
-export const cnRepository = createFinancialsRepository(cnFinancials, cnFilingIngestLog, "CN");
+export const hkRepository = createFinancialsRepository(hkFinancials, hkFilingIngestLog);
