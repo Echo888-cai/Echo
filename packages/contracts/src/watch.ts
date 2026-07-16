@@ -66,7 +66,9 @@ export const stockDetailFalsifierSchema = z.object({
   threshold: z.number().nullable(),
   triggered: z.boolean(),
   sane: z.boolean(),
-  distancePct: z.number().nullable()
+  distancePct: z.number().nullable(),
+  lastTriggeredAt: z.string().nullable().optional(),
+  asOf: z.string().nullable().optional()
 });
 
 export const stockDetailEventSchema = z.object({
@@ -101,6 +103,26 @@ export const stockDetailProfileSchema = z
   })
   .nullable();
 
+export const earningsDashboardSchema = z
+  .object({
+    nextDate: z.string().nullable(),
+    quarter: z.number().nullable(),
+    year: z.number().nullable(),
+    epsEstimate: z.number().nullable(),
+    revenueEstimate: z.number().nullable(),
+    lastDate: z.string().nullable(),
+    lastQuarter: z.number().nullable(),
+    lastYear: z.number().nullable(),
+    lastEpsEstimate: z.number().nullable(),
+    lastEpsActual: z.number().nullable(),
+    lastRevenueEstimate: z.number().nullable(),
+    lastRevenueActual: z.number().nullable(),
+    lastEpsSurprisePct: z.number().nullable(),
+    lastRevenueSurprisePct: z.number().nullable(),
+    providerStatus: z.string()
+  })
+  .nullable();
+
 export const stockDetailSchema = z.object({
   ticker: z.string(),
   companyName: z.string(),
@@ -119,7 +141,8 @@ export const stockDetailSchema = z.object({
   fundamentals: stockDetailFundamentalsSchema,
   events: z.array(stockDetailEventSchema),
   watchRules: z.array(stockDetailFalsifierSchema),
-  profile: stockDetailProfileSchema
+  profile: stockDetailProfileSchema,
+  earningsDashboard: earningsDashboardSchema.optional()
 });
 export const watchStockResponseSchema = okEnvelope(z.object({ stock: stockDetailSchema }));
 

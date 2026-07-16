@@ -168,6 +168,84 @@ export async function createPostgresBackup(label: string) {
   return { bucket, key, createdAt: new Date().toISOString() };
 }
 
+export async function checkPositionAlerts(userId: string) {
+  const positions = await listPositions(userId);
+  const alerts = [];
+  for (const pos of positions) {
+    if (pos.stopLoss == null && pos.takeProfit == null) continue;
+    const market = await ensureFreshMarketSnapshot(pos.ticker);
+    if (market?.price == null) continue;
+    const price = Number(market.price);
+    const stopLoss = pos.stopLoss ? Number(pos.stopLoss) : null;
+    const takeProfit = pos.takeProfit ? Number(pos.takeProfit) : null;
+
+    if (stopLoss != null && price <= stopLoss) {
+      await insertNotification({
+        kind: "position_alert",
+        title: `${pos.companyName || pos.ticker} 触及止损线`,
+        body: `现价 ${price.toFixed(2)}，止损线 ${stopLoss.toFixed(2)}`,
+        ticker: pos.ticker,
+        userId,
+        dedupeKey: `position:stop:${pos.ticker}`
+      });
+      alerts.push({ ticker: pos.ticker, type: "stop_loss", price, threshold: stopLoss });
+    }
+    if (takeProfit != null && price >= takeProfit) {
+      await insertNotification({
+        kind: "position_alert",
+        title: `${pos.companyName || pos.ticker} 触及止盈线`,
+        body: `现价 ${price.toFixed(2)}，止盈线 ${takeProfit.toFixed(2)}`,
+        ticker: pos.ticker,
+        userId,
+        dedupeKey: `position:profit:${pos.ticker}`
+      });
+      alerts.push({ ticker: pos.ticker, type: "take_profit", price, threshold: takeProfit });
+    }
+
+    if (pos.avgCost) {
+      const avgCost = Number(pos.avgCost);
+      const drawdownPct = ((price - avgCost) / avgCost) * 100;
+      if (drawdownPct <= -15) {
+        await insertNotification({
+          kind: "position_alert",
+          title: `${pos.companyName || pos.ticker} 大幅回撤`,
+          body: `现价 ${price.toFixed(2)}，成本 ${avgCost.toFixed(2)}，回撤 ${drawdownPct.toFixed(1)}%`,
+          ticker: pos.ticker,
+          userId,
+          dedupeKey: `position:drawdown:${pos.ticker}:${Math.floor(drawdownPct / 5) * 5}`
+        });
+        alerts.push({ ticker: pos.ticker, type: "drawdown", price, drawdownPct });
+      }
+    }
+  }
+  return { checked: positions.length, alerts };
+}
+
+export async function checkReviewReminders(userId: string) {
+  const profiles = await listCompanyProfiles(200, userId);
+  const reminders = [];
+  const now = Date.now();
+  const STALE_DAYS = 30;
+  for (const profile of profiles) {
+    if (!profile.thesis || !profile.updatedAt) continue;
+    const updatedAt = new Date(profile.updatedAt).getTime();
+    const daysSinceUpdate = Math.floor((now - updatedAt) / (1000 * 60 * 60 * 24));
+    if (daysSinceUpdate >= STALE_DAYS) {
+      await insertNotification({
+        kind: "review_reminder",
+        title: `${profile.companyName || profile.ticker} 研究已 ${daysSinceUpdate} 天未更新`,
+        body: `上次更新于 ${new Date(profile.updatedAt).toISOString().slice(0, 10)}，建议复盘当前判断是否仍然成立`,
+        ticker: profile.ticker,
+        userId,
+        dedupeKey: `review:${profile.ticker}:${new Date().toISOString().slice(0, 7)}`,
+        dedupeWindowHours: 168
+      });
+      reminders.push({ ticker: profile.ticker, daysSinceUpdate });
+    }
+  }
+  return { checked: profiles.length, reminders };
+}
+
 export async function recordWorkflowCompletion(_input: { workflow: string; userId?: string; referenceId?: string | null }) {
   return true;
 }

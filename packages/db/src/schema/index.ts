@@ -5,3 +5,8 @@ export * from "./portfolio.js";
 export * from "./financials.js";
 export * from "./notifications.js";
 export * from "./misc.js";
+export * from "./research_memory.js";
+export * from "./team.js";
+export * from "./audit.js";
+export * from "./billing.js";
+export * from "./data_sources.js";

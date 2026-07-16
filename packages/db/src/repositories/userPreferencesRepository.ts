@@ -8,7 +8,9 @@ const defaults = {
   notifyPositions: true,
   notifyFalsify: true,
   notifyReview: true,
-  notifyEarnings: true
+  notifyEarnings: true,
+  quietHoursStart: null as string | null,
+  quietHoursEnd: null as string | null
 };
 
 type Preferences = typeof defaults;
@@ -21,7 +23,9 @@ function hydrate(row: typeof userPreferences.$inferSelect | undefined): Preferen
     notifyPositions: row.notifyPositions,
     notifyFalsify: row.notifyFalsify,
     notifyReview: row.notifyReview,
-    notifyEarnings: row.notifyEarnings
+    notifyEarnings: row.notifyEarnings,
+    quietHoursStart: row.quietHoursStart || null,
+    quietHoursEnd: row.quietHoursEnd || null
   };
 }
 
@@ -34,7 +38,8 @@ export async function updateUserPreferences(userId = "local", patch: Partial<Pre
     const current = hydrate((await tx.select().from(userPreferences).where(eq(userPreferences.userId, userId)).limit(1))[0]);
     const next = { ...current };
     for (const key of Object.keys(defaults) as Array<keyof Preferences>) {
-      if (typeof patch[key] === "boolean") next[key] = patch[key];
+      if (typeof patch[key] === "boolean") (next as any)[key] = patch[key];
+      else if ((key === "quietHoursStart" || key === "quietHoursEnd") && patch[key] !== undefined) next[key] = patch[key]!;
     }
     const [saved] = await tx.insert(userPreferences).values({ userId, ...next, updatedAt: new Date() })
       .onConflictDoUpdate({ target: userPreferences.userId, set: { ...next, updatedAt: new Date() } }).returning();
@@ -67,4 +72,19 @@ const kindPreference: Record<string, keyof Preferences> = {
 export async function notificationEnabled(userId: string, kind: string) {
   const key = kindPreference[kind];
   return key ? (await getUserPreferences(userId))[key] : true;
+}
+
+/**
+ * 判定当前时刻是否落在用户设定的免打扰时段内。
+ * 支持跨午夜区间（如 22:00–08:00）。未设定则视为不在免打扰。
+ */
+export async function isInQuietHours(userId: string) {
+  const prefs = await getUserPreferences(userId);
+  if (!prefs.quietHoursStart || !prefs.quietHoursEnd) return false;
+  const now = new Date();
+  const hhmm = `${String(now.getUTCHours()).padStart(2, "0")}:${String(now.getUTCMinutes()).padStart(2, "0")}`;
+  const start = prefs.quietHoursStart;
+  const end = prefs.quietHoursEnd;
+  if (start <= end) return hhmm >= start && hhmm < end;
+  return hhmm >= start || hhmm < end;
 }

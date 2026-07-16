@@ -15,6 +15,8 @@ const schedules = [
   { id: "echo-portfolio-snapshot", cron: "0 22 * * 1-5", workflowType: "portfolioSnapshotWorkflow", args: [{}] },
   { id: "echo-falsifier-check", cron: "*/15 * * * 1-5", workflowType: "falsifierCheckWorkflow", args: [{}] },
   { id: "echo-earnings-review", cron: "30 11 * * 1-5", workflowType: "earningsReviewWorkflow", args: [{}] },
+  { id: "echo-position-alert", cron: "*/15 * * * 1-5", workflowType: "positionAlertWorkflow", args: [{}] },
+  { id: "echo-review-reminder", cron: "0 9 * * 1", workflowType: "reviewReminderWorkflow", args: [{}] },
   { id: "echo-postgres-backup", cron: "0 18 * * *", workflowType: "postgresBackupWorkflow", args: [{ label: "daily" }] }
 ];
 

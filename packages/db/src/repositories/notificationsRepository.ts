@@ -1,6 +1,6 @@
 import { and, count, desc, eq, gte, isNull } from "drizzle-orm";
 import { notifications } from "../schema/notifications.js";
-import { notificationEnabled } from "./userPreferencesRepository.js";
+import { notificationEnabled, isInQuietHours } from "./userPreferencesRepository.js";
 import { withTenant } from "./context.js";
 
 function hydrate(row: typeof notifications.$inferSelect) {
@@ -28,6 +28,8 @@ export async function insertNotification({ kind, title, body = "", ticker = null
   kind: string; title: string; body?: string; ticker?: string | null; payload?: unknown; dedupeKey?: string | null; dedupeWindowHours?: number; userId?: string;
 }) {
   if (!await notificationEnabled(userId, kind)) return null;
+  const URGENT_KINDS = ["falsify_alert", "position_alert"];
+  if (!URGENT_KINDS.includes(kind) && await isInQuietHours(userId)) return null;
   return withTenant(userId, async (tx) => {
     if (dedupeKey) {
       const cutoff = new Date(Date.now() - Math.max(1, Math.round(dedupeWindowHours)) * 3_600_000);

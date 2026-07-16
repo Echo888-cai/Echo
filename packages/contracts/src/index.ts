@@ -16,3 +16,4 @@ export * from "./chat.js";
 export * from "./ask.js";
 export * from "./discover.js";
 export * from "./reports.js";
+export * from "./exports.js";

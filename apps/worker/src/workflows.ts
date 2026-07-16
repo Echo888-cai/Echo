@@ -58,3 +58,17 @@ export async function portfolioSnapshotWorkflow() {
 export async function postgresBackupWorkflow(input: { label?: string } = {}) {
   return activity.createPostgresBackup(input.label || "scheduled");
 }
+
+export async function positionAlertWorkflow(input: { userId?: string } = {}) {
+  const userIds = input.userId ? [input.userId] : await activity.listTenantIds();
+  const results = [];
+  for (const userId of userIds) results.push(await activity.checkPositionAlerts(userId));
+  return results;
+}
+
+export async function reviewReminderWorkflow(input: { userId?: string } = {}) {
+  const userIds = input.userId ? [input.userId] : await activity.listTenantIds();
+  const results = [];
+  for (const userId of userIds) results.push(await activity.checkReviewReminders(userId));
+  return results;
+}

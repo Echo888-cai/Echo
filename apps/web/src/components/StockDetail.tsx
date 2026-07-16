@@ -1,4 +1,3 @@
-// Stock overview, price chart, portrait, research review and judgment timeline.
 import { useState, type ReactElement } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
@@ -8,7 +7,7 @@ import { buildChartPaths } from "../lib/chart";
 import { markdownToHtml } from "../lib/markdown";
 import { exportPortraitImage } from "../lib/portraitShareImage";
 import { detectMarket } from "../lib/market";
-import { fmtNum, fmtPct, pnlDir, wdChg, wdWhen } from "../lib/format";
+import { fmtNum, fmtPct, pnlDir, wdChg, wdWhen, notifWhen } from "../lib/format";
 import { showToast } from "../lib/toast";
 
 import "@echo/ui/styles/03-research.css";
@@ -152,6 +151,99 @@ function PriceChart({ series }: { series: any }) {
   );
 }
 
+function thermoColor(distancePct: number | null): string {
+  if (distancePct == null) return "var(--muted)";
+  if (distancePct <= 0) return "var(--danger-strong, #a1201b)";
+  if (distancePct < 10) return "var(--danger)";
+  if (distancePct < 20) return "var(--amber, #d99a2b)";
+  return "var(--success, #1c8c4a)";
+}
+
+function thermoFillPct(distancePct: number | null): number {
+  if (distancePct == null) return 0;
+  if (distancePct <= 0) return 100;
+  return Math.min(100, Math.max(4, 100 - distancePct));
+}
+
+function FalsifierThermo({ rule }: { rule: any }) {
+  if (rule.triggered || rule.distancePct == null) return null;
+  const color = thermoColor(rule.distancePct);
+  const fill = thermoFillPct(rule.distancePct);
+  return (
+    <div className="fw-thermo">
+      <div className="fw-thermo-fill" style={{ width: `${fill}%`, background: color } as React.CSSProperties} />
+      <span className="fw-thermo-label" style={{ color }}>
+        距触发 {rule.distancePct}%
+      </span>
+      {rule.lastTriggeredAt ? (
+        <span className="fw-trigger-history">上次触发：{wdWhen(rule.lastTriggeredAt)}</span>
+      ) : null}
+      {rule.asOf ? (
+        <span className="fw-trigger-history">行情 {notifWhen(rule.asOf)}</span>
+      ) : null}
+    </div>
+  );
+}
+
+function EarningsTab({ stock }: { stock: WatchStock }) {
+  const ed = (stock as any).earningsDashboard;
+  if (!ed || ed.providerStatus !== "ok") {
+    return (
+      <div className="earn-dash">
+        <p className="stock-card-body is-empty">业绩日历数据不可用——需要数据源返回该公司的业绩日程后才能展示。</p>
+      </div>
+    );
+  }
+
+  const hasSurprise = ed.lastEpsActual != null || ed.lastRevenueActual != null;
+  const epsDir = ed.lastEpsSurprisePct != null ? (ed.lastEpsSurprisePct >= 0 ? "earn-beat" : "earn-miss") : "";
+  const revDir = ed.lastRevenueSurprisePct != null ? (ed.lastRevenueSurprisePct >= 0 ? "earn-beat" : "earn-miss") : "";
+  const qLabel = ed.lastQuarter != null && ed.lastYear != null ? `${ed.lastYear} Q${ed.lastQuarter}` : "";
+
+  return (
+    <div className="earn-dash">
+      <div className="earn-next">
+        <span className="earn-next-label">下次业绩日</span>
+        <strong>{ed.nextDate || "待公布"}</strong>
+        {ed.quarter != null && ed.year != null ? (
+          <span className="earn-next-sub">{ed.year} Q{ed.quarter} · 预期 EPS {ed.epsEstimate != null ? fmtNum(ed.epsEstimate) : "—"}</span>
+        ) : null}
+      </div>
+      {hasSurprise ? (
+        <>
+          <h4 className="earn-section-head">上次报告{qLabel ? ` · ${qLabel}` : ""}{ed.lastDate ? ` · ${ed.lastDate}` : ""}</h4>
+          <div className="earn-compare">
+            <div className="earn-cell">
+              <span className="earn-cell-label">EPS 预期</span>
+              <strong>{ed.lastEpsEstimate != null ? fmtNum(ed.lastEpsEstimate) : "—"}</strong>
+            </div>
+            <div className={`earn-cell ${epsDir}`}>
+              <span className="earn-cell-label">EPS 实际</span>
+              <strong>{ed.lastEpsActual != null ? fmtNum(ed.lastEpsActual) : "—"}</strong>
+              {ed.lastEpsSurprisePct != null ? (
+                <em>{ed.lastEpsSurprisePct >= 0 ? "+" : ""}{ed.lastEpsSurprisePct.toFixed(1)}%</em>
+              ) : null}
+            </div>
+            <div className="earn-cell">
+              <span className="earn-cell-label">营收预期</span>
+              <strong>{ed.lastRevenueEstimate != null ? fmtNum(ed.lastRevenueEstimate / 1e8, 1) + " 亿" : "—"}</strong>
+            </div>
+            <div className={`earn-cell ${revDir}`}>
+              <span className="earn-cell-label">营收实际</span>
+              <strong>{ed.lastRevenueActual != null ? fmtNum(ed.lastRevenueActual / 1e8, 1) + " 亿" : "—"}</strong>
+              {ed.lastRevenueSurprisePct != null ? (
+                <em>{ed.lastRevenueSurprisePct >= 0 ? "+" : ""}{ed.lastRevenueSurprisePct.toFixed(1)}%</em>
+              ) : null}
+            </div>
+          </div>
+        </>
+      ) : (
+        <p className="stock-card-body is-empty">暂无历史业绩对比数据</p>
+      )}
+    </div>
+  );
+}
+
 function StockOverview({ stock }: { stock: WatchStock }) {
   const p = stock.profile;
   const cleanThesis = p?.thesis && !WL_BAD_THESIS.test(p.thesis) ? p.thesis : "";
@@ -213,14 +305,13 @@ function StockOverview({ stock }: { stock: WatchStock }) {
                 {falsifiers.map((f, i) => {
                   const r = ruleByLabel.get(f);
                   if (!r || r.sane === false) return <li key={i}>{f}</li>;
-                  const chip = r.triggered ? (
-                    <span className="fw-chip fw-hit">已命中</span>
-                  ) : (
-                    <span className="fw-chip fw-watch">监控中{r.distancePct != null && r.distancePct > 0 ? ` · 距触发 ${r.distancePct}%` : ""}</span>
-                  );
                   return (
                     <li className={r.triggered ? "fw-line-hit" : ""} key={i}>
-                      {f} {chip}
+                      <span>{f}</span>
+                      {r.triggered ? (
+                        <span className="fw-chip fw-hit">已命中</span>
+                      ) : null}
+                      <FalsifierThermo rule={r} />
                     </li>
                   );
                 })}
@@ -490,7 +581,7 @@ function PortraitTab({ stock }: { stock: WatchStock }) {
 
 export function StockDetail({ stock }: { stock: WatchStock }) {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<"overview" | "portrait">("overview");
+  const [tab, setTab] = useState<"overview" | "portrait" | "earnings">("overview");
   const st = WD_STATUS[stock.status] || WD_STATUS.intact;
   const chg = wdChg(stock.changePct);
 
@@ -540,8 +631,11 @@ export function StockDetail({ stock }: { stock: WatchStock }) {
         <button className={`stock-tab ${tab === "portrait" ? "is-active" : ""}`} type="button" onClick={() => setTab("portrait")}>
           画像
         </button>
+        <button className={`stock-tab ${tab === "earnings" ? "is-active" : ""}`} type="button" onClick={() => setTab("earnings")}>
+          业绩
+        </button>
       </div>
-      {tab === "portrait" ? <PortraitTab stock={stock} /> : <StockOverview stock={stock} />}
+      {tab === "portrait" ? <PortraitTab stock={stock} /> : tab === "earnings" ? <EarningsTab stock={stock} /> : <StockOverview stock={stock} />}
     </div>
   );
 }

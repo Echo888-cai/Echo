@@ -66,6 +66,39 @@ const ALLOWED = {
     "同上",
   "documentRepository.ts::deleteDocument":
     "文档删除闭环，等前端文档管理页（docs/PLAN.md P4）",
+  "researchMemoryRepository.ts::addFact":
+    "P4 研究记忆——等 research.ts 接入自动提取",
+  "researchMemoryRepository.ts::listFacts":
+    "P4 研究记忆——等前端 StockDetail 消费",
+  "researchMemoryRepository.ts::supersedeFact":
+    "P4 研究记忆——等事实更新逻辑",
+  "researchMemoryRepository.ts::addQuestion":
+    "P4 研究记忆——等 research.ts 接入自动提取",
+  "researchMemoryRepository.ts::listQuestions":
+    "P4 研究记忆——等前端 StockDetail 消费",
+  "researchMemoryRepository.ts::resolveQuestion":
+    "P4 研究记忆——等前端手动标记消费",
+  "researchMemoryRepository.ts::addReviewDate":
+    "P4 研究记忆——等 research.ts 或手动设置",
+  "researchMemoryRepository.ts::listUpcomingReviews":
+    "P4 研究记忆——等 reviewReminderWorkflow 消费",
+  "researchMemoryRepository.ts::completeReview":
+    "P4 研究记忆——等前端手动标记消费",
+  "teamRepository.ts::createTeam": "P5 团队功能——等前端团队管理页",
+  "teamRepository.ts::getTeam": "P5 团队功能——等前端团队管理页",
+  "teamRepository.ts::listTeamsForUser": "P5 团队功能——等前端团队管理页",
+  "teamRepository.ts::addMember": "P5 团队功能——等前端团队管理页",
+  "teamRepository.ts::removeMember": "P5 团队功能——等前端团队管理页",
+  "teamRepository.ts::listMembers": "P5 团队功能——等前端团队管理页",
+  "auditRepository.ts::logAction": "P5 审计——等 API 中间件接入",
+  "auditRepository.ts::listAuditLog": "P5 审计——等前端审计页",
+  "billingRepository.ts::listPlans": "P5 计费——等前端套餐选择页",
+  "billingRepository.ts::getSubscription": "P5 计费——等前端账户页",
+  "billingRepository.ts::createSubscription": "P5 计费——等支付回调",
+  "billingRepository.ts::cancelSubscription": "P5 计费——等前端取消订阅",
+  "dataSourceFieldsRepository.ts::upsertField": "P5 字段级来源——等数据管道接入时登记",
+  "dataSourceFieldsRepository.ts::listFieldsBySource": "P5 字段级来源——等状态页来源详情",
+  "dataSourceFieldsRepository.ts::getCommercialFields": "P5 字段级来源——等商用路由审计",
 };
 
 const WRITE_RE = /^(?:upsert|insert|save|replace|record|write|create|delete|update|add|mark|bump|destroy)/i;

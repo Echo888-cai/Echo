@@ -51,6 +51,8 @@ export const userPreferences = pgTable("user_preferences", {
   notifyFalsify: boolean("notify_falsify").notNull().default(true),
   notifyReview: boolean("notify_review").notNull().default(true),
   notifyEarnings: boolean("notify_earnings").notNull().default(true),
+  quietHoursStart: text("quiet_hours_start"),
+  quietHoursEnd: text("quiet_hours_end"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
 });
@@ -65,7 +67,11 @@ export const feedback = pgTable(
     message: text("message").notNull(),
     context: jsonb("context_json"),
     status: text("status").notNull().default("new"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+    category: text("category").default("general"),
+    ticker: text("ticker"),
+    sessionId: text("session_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true })
   },
   (t) => ({
     userIdx: index("idx_feedback_user_time").on(t.userId, t.createdAt)

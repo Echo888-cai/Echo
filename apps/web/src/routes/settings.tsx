@@ -95,9 +95,9 @@ function NotificationPreferencesCard() {
       <h2>通知偏好</h2>
       <p>每类提醒独立开关，关闭后不落应用内通知，也不会外推。</p>
       {row("notifyDigest", "盘前速报", "港股 / 美股关注公司的重要事件")}
-      {row("notifyPositions", "持仓纪律", "止损、止盈与大幅回撤", true)}
+      {row("notifyPositions", "持仓纪律", "止损、止盈与大幅回撤")}
       {row("notifyFalsify", "证伪命中", "研究时设置的价格 / 基本面条件")}
-      {row("notifyReview", "研究复盘", "判断长期未更新时提醒", true)}
+      {row("notifyReview", "研究复盘", "判断长期未更新时提醒")}
       {row("notifyEarnings", "业绩后复核", "实际值与预期到货后的核对")}
     </article>
   );

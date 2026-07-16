@@ -10,6 +10,7 @@ import {
   authRegisterRequestSchema,
   companySearchResultSchema,
   companySearchResponseSchema,
+  exportRequestSchema,
   feedbackCreateRequestSchema,
   notificationsReadRequestSchema,
   parseDocumentRequestSchema,
@@ -45,6 +46,7 @@ import { getEarningsCalendarRow } from "@echo/db/repositories/earningsCalendarRe
 import { addToWatch, getHiddenTickers, listWatchAdds, removeFromWatch } from "@echo/db/repositories/watchlistRepository.js";
 import { listCompanyProfiles } from "@echo/db/repositories/companyProfilesRepository.js";
 import { runAsk, runReport } from "@echo/application/research";
+import { exportResearchMarkdown } from "@echo/application/export";
 import { parseDocument } from "./documents.js";
 import { executeResearchWorkflow } from "./temporal.js";
 import { buildStatusSnapshot } from "./status.js";
@@ -277,9 +279,10 @@ async function watchDesk(userId: string) {
 
 async function stockDetail(ticker: string, userId: string) {
   const normalized = ticker.toUpperCase();
-  const [company, profile, market, rules, earnings, series, positions] = await Promise.all([
+  const [company, profile, market, rules, earnings, series, positions, earningsRow] = await Promise.all([
     getCompanyByTickerComplete(normalized), getCompanyProfile(normalized, userId), ensureFreshMarketSnapshot(normalized),
-    listRules(normalized, userId), nextEarningsFor(normalized), listRecentMarketSnapshots(normalized, 252), listPositions(userId)
+    listRules(normalized, userId), nextEarningsFor(normalized), listRecentMarketSnapshots(normalized, 252), listPositions(userId),
+    freshEarningsRow(normalized)
   ]);
   const price = market?.price ?? null;
   const evaluated = price == null ? [] : rules.map((rule) => ({ rule, result: evaluateRule(rule, price) }));
@@ -287,6 +290,7 @@ async function stockDetail(ticker: string, userId: string) {
   const atRisk = !falsified && evaluated.some(({ result }) => result.distancePct != null && Math.abs(result.distancePct) < 8);
   const position = positions.find((p) => p.ticker === normalized) || null;
   const returnPct = position?.avgCost && price != null ? (price - Number(position.avgCost)) / Number(position.avgCost) : null;
+  const marketAsOf = market?.as_of || null;
 
   let events: any[] = [];
   const market3 = detectMarket(normalized);
@@ -299,21 +303,46 @@ async function stockDetail(ticker: string, userId: string) {
     } catch { /* filings adapter unavailable — events stays empty, not fabricated */ }
   }
 
+  const earningsDashboard = earningsRow
+    ? {
+        nextDate: earningsRow.next_date ?? null,
+        quarter: earningsRow.quarter ?? null,
+        year: earningsRow.year ?? null,
+        epsEstimate: earningsRow.eps_estimate ?? null,
+        revenueEstimate: earningsRow.revenue_estimate ?? null,
+        lastDate: earningsRow.last_date ?? null,
+        lastQuarter: earningsRow.last_quarter ?? null,
+        lastYear: earningsRow.last_year ?? null,
+        lastEpsEstimate: earningsRow.last_eps_estimate ?? null,
+        lastEpsActual: earningsRow.last_eps_actual ?? null,
+        lastRevenueEstimate: earningsRow.last_revenue_estimate ?? null,
+        lastRevenueActual: earningsRow.last_revenue_actual ?? null,
+        lastEpsSurprisePct: earningsRow.last_eps_surprise_pct ?? null,
+        lastRevenueSurprisePct: earningsRow.last_revenue_surprise_pct ?? null,
+        providerStatus: earningsRow.provider_status || "missing"
+      }
+    : null;
+
   return {
     ticker: normalized, companyName: company?.nameZh || company?.nameEn || profile?.companyName || normalized,
     market: market3, status: (falsified ? "falsified" : atRisk ? "at_risk" : "intact") as "falsified" | "at_risk" | "intact",
     statusReason: falsified ? (evaluated.find(({ result }) => result.triggered)?.rule.label ?? null) : null,
     price, currency: company?.currency || tickerCurrency(normalized), changePct: market?.change_percent ?? null,
     priceStatus: (price == null ? "missing" : "ok") as "ok" | "missing", held: Boolean(position), returnPct,
-    asOf: market?.as_of || null, earnings,
+    asOf: marketAsOf, earnings,
     // 已停止覆盖的市场不出历史曲线——价格都不再更新了，挂一条永远冻结的旧曲线比空白更误导。
     series: market3 === "unsupported"
       ? { providerStatus: "unavailable" as const, points: [] }
       : { providerStatus: (series.length >= 2 ? "ok" : "unavailable") as "ok" | "unavailable", points: series },
     fundamentals: { status: "unavailable" as const, pe: null, revenueGrowth: null, grossMargin: null, freeCashFlow: null, currency: null },
     events,
-    watchRules: evaluated.map(({ rule, result }) => ({ id: rule.id, label: rule.label, kind: rule.kind, threshold: rule.threshold, triggered: result.triggered, sane: result.sane, distancePct: result.distancePct })),
-    profile: profile ? { thesis: profile.thesis || null, researchStatus: profile.researchStatus || null, confidence: profile.confidence || null, turnCount: profile.turnCount ?? null, falsifiers: profile.falsifiers || [] } : null
+    watchRules: evaluated.map(({ rule, result }) => ({
+      id: rule.id, label: rule.label, kind: rule.kind, threshold: rule.threshold,
+      triggered: result.triggered, sane: result.sane, distancePct: result.distancePct,
+      lastTriggeredAt: rule.lastTriggeredAt ?? null, asOf: marketAsOf
+    })),
+    profile: profile ? { thesis: profile.thesis || null, researchStatus: profile.researchStatus || null, confidence: profile.confidence || null, turnCount: profile.turnCount ?? null, falsifiers: profile.falsifiers || [] } : null,
+    earningsDashboard
   };
 }
 
@@ -510,6 +539,12 @@ export const appRouter = t.router({
   }),
   documents: t.router({
     parse: protectedProcedure.input(parseDocumentRequestSchema).mutation(async ({ ctx, input }) => ({ document: await parseDocument(input, ctx.user.id) }))
+  }),
+  exports: t.router({
+    research: protectedProcedure.input(exportRequestSchema).mutation(async ({ ctx, input }) => {
+      const markdown = await exportResearchMarkdown(input, ctx.user.id);
+      return { markdown };
+    })
   }),
   feedback: t.router({
     submit: protectedProcedure.input(feedbackCreateRequestSchema).mutation(async ({ ctx, input }) => ({
