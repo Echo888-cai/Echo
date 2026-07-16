@@ -65,7 +65,7 @@ export async function buildStatusSnapshot(userId = "local") {
   // ever ran — distinct from "probed and failed"). They never decide "ok".
   const hasFmp = Boolean(process.env.FMP_API_KEY);
   const hasFinnhub = Boolean(process.env.FINNHUB_API_KEY);
-  const hasWebSearch = Boolean(process.env.TAVILY_API_KEY || process.env.SERPAPI_API_KEY);
+  const hasWebSearch = Boolean(process.env.TAVILY_API_KEY);
   let canaryHealth: Record<string, unknown>[] = [];
   let canaryBatchId: string | number | null = null;
   let hkFilingCoverage: unknown = null;
@@ -86,14 +86,18 @@ export async function buildStatusSnapshot(userId = "local") {
   try { hkFilingCoverage = await getHkFilingCoverage(); } catch { /* same */ }
   try { llmAudit = await getProviderCallStats({ days: 7, userId }) as Record<string, unknown>[]; } catch { /* same */ }
   // Default "shadow": matches packages/application/src/research.ts's actual behavior
-  // when unset. "full" implies intercept+regenerate, which isn't built yet — don't
-  // claim it by default.
+  // when unset.
   try { factGuard = { mode: (process.env.FACT_GUARD_MODE || "shadow").toLowerCase(), ...await getFactGuardStats({ days: 14 }) }; } catch { /* same */ }
   try { usage = await usageStatus(userId); } catch { /* same */ }
-  const ai = {
-    configured: Boolean(process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.MODEL_API_KEY),
-    providers: ["deepseek", "openai", "anthropic", "generic"].filter((id) => Boolean(process.env[`${id.toUpperCase()}_API_KEY`]))
-  };
+  // Mirror the real gateway order in packages/application/src/research.ts
+  // (DeepSeek → OpenAI → generic); listing a provider the gateway can't use
+  // would be the same 配置剧场 the cards below are built to avoid.
+  const providers = [
+    ...(process.env.DEEPSEEK_API_KEY ? [{ id: "deepseek", label: "DeepSeek", model: process.env.DEEPSEEK_MODEL || "deepseek-chat" }] : []),
+    ...(process.env.OPENAI_API_KEY ? [{ id: "openai", label: "OpenAI", model: process.env.OPENAI_MODEL || "gpt-5-mini" }] : []),
+    ...(process.env.MODEL_API_KEY && process.env.MODEL_BASE_URL ? [{ id: "generic", label: "自定义网关", model: process.env.MODEL_NAME || "default" }] : [])
+  ];
+  const ai = { configured: providers.length > 0, providers };
   // Every card below is derived from real canary probes
   // (packages/data-plane/src/canary.ts calls each registered external adapter
   // against a real ticker), never from `Boolean(process.env.X_API_KEY)` —

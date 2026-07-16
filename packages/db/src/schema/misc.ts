@@ -2,14 +2,9 @@
  * misc.ts — scheduler_state / documents / user_preferences / feedback / llm_audit /
  * fact_guard_audit / canary_runs.
  *
- * None of these are in the "financial-facts warehouse" list from the task brief
- * (they're operational/audit/UI-preference tables), so none get the valid_time/
- * knowledge_time bitemporal pair — plain created_at/checked_at timestamps are kept.
- *
- * Source: 001_init.sql (scheduler_state, documents), 002_g1_health.sql (canary_runs),
- * 005_llm_audit.sql + 019_user_usage.sql (llm_audit), 007_fact_guard_audit.sql,
- * 018_multiuser.sql (documents.user_id), 020_beta_experience.sql (user_preferences,
- * feedback).
+ * Operational/audit/UI-preference tables, not financial facts, so none get the
+ * valid_time/knowledge_time bitemporal pair — plain created_at/checked_at
+ * timestamps are kept.
  */
 import { pgTable, text, integer, serial, bigserial, numeric, boolean, timestamp, jsonb, index } from "drizzle-orm/pg-core";
 import { users } from "./auth.js";

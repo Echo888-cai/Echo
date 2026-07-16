@@ -37,13 +37,13 @@ const SELF = "scripts/quality/check-frozen-tables.mjs";
  * 加条目前先问一句：这真的是"等外部依赖"，还是"我刚把它接漏了"？
  */
 const ALLOWED = {
-  // docs/PLAN.md P3：三张表都缺真实数据源，不是缺接线。硬接=编数据，撞红线。
+  // docs/PLAN.md RQ-5 / RQ-9：这两张表缺真实数据源，不是缺接线。硬接=编数据，撞红线。
   "historicalValuationRepository.ts::upsertHistoricalValuationSeries":
-    "等真实历史 PE 序列源（market_snapshots 自建只有 7 天深、每天 +1 行，等不出五年分位）",
+    "等真实历史 PE 序列源（market_snapshots 自建只有 7 天深、每天 +1 行，等不出五年分位；docs/PLAN.md RQ-5）",
   "historicalValuationRepository.ts::getHistoricalValuationRow":
     "同上——写入方到位后本函数会被 answerComposer 的历史分位块消费",
   "insiderActivityRepository.ts::upsertInsiderActivity":
-    "等内部人交易数据源（尚无任何已授权适配器）",
+    "等内部人交易数据源（尚无任何已授权适配器；docs/PLAN.md RQ-9 与第 6 节 ④）",
   "insiderActivityRepository.ts::getInsiderActivityRow":
     "同上",
   // 供未来消费方使用的读取接口，写入方已真实接通，非冻结。
@@ -51,54 +51,54 @@ const ALLOWED = {
     "回购新鲜度查询，留给 status 页真探测接入（#32 已接通写入与研究链路消费）",
 
   "factGuardRepository.ts::getRecentHardFails":
-    "等设置页 FactGuardCard 接入真实流量后消费（docs/PLAN.md P3）",
+    "等设置页 FactGuardCard 接入真实流量后消费（docs/PLAN.md RQ-4）",
   "llmAuditRepository.ts::getRecentLlmAudits":
-    "等设置页 LLM 用量/成本卡（docs/PLAN.md P5 商业化需要成本可见）",
+    "等设置页 LLM 用量/成本卡（docs/PLAN.md 第 5 节外部依赖，商业化需要成本可见）",
   "feedbackRepository.ts::listFeedback":
-    "等反馈队列管理界面（docs/PLAN.md P4 '反馈闭环进可追踪队列'）",
+    "等反馈队列管理界面（docs/PLAN.md IX-4 反馈闭环进可追踪队列）",
   "authRepository.ts::listInvites":
     "等 owner 的邀请码管理界面（当前只有生成，没有列表）",
   "authRepository.ts::deleteSessionsForUser":
-    "等'登出所有设备'功能（安全能力，P5 发布准备）",
+    "等'登出所有设备'功能（安全能力，docs/PLAN.md 第 5 节外部依赖）",
   "documentRepository.ts::getDocument":
-    "文档详情，等前端文档管理页（docs/PLAN.md P4）",
+    "文档详情，等前端文档管理页（尚未排期）",
   "documentRepository.ts::getDocumentsCount":
     "同上",
   "documentRepository.ts::deleteDocument":
-    "文档删除闭环，等前端文档管理页（docs/PLAN.md P4）",
+    "文档删除闭环，等前端文档管理页（尚未排期）",
   "researchMemoryRepository.ts::addFact":
-    "P4 研究记忆——等 research.ts 接入自动提取",
+    "研究记忆（docs/PLAN.md RQ-3）——等 research.ts 接入自动提取",
   "researchMemoryRepository.ts::listFacts":
-    "P4 研究记忆——等前端 StockDetail 消费",
+    "研究记忆（docs/PLAN.md RQ-3）——等前端 StockDetail 消费",
   "researchMemoryRepository.ts::supersedeFact":
-    "P4 研究记忆——等事实更新逻辑",
+    "研究记忆（docs/PLAN.md RQ-3）——等事实更新逻辑",
   "researchMemoryRepository.ts::addQuestion":
-    "P4 研究记忆——等 research.ts 接入自动提取",
+    "研究记忆（docs/PLAN.md RQ-3）——等 research.ts 接入自动提取",
   "researchMemoryRepository.ts::listQuestions":
-    "P4 研究记忆——等前端 StockDetail 消费",
+    "研究记忆（docs/PLAN.md RQ-3）——等前端 StockDetail 消费",
   "researchMemoryRepository.ts::resolveQuestion":
-    "P4 研究记忆——等前端手动标记消费",
+    "研究记忆（docs/PLAN.md RQ-3）——等前端手动标记消费",
   "researchMemoryRepository.ts::addReviewDate":
-    "P4 研究记忆——等 research.ts 或手动设置",
+    "研究记忆（docs/PLAN.md RQ-3）——等 research.ts 或手动设置",
   "researchMemoryRepository.ts::listUpcomingReviews":
-    "P4 研究记忆——等 reviewReminderWorkflow 消费",
+    "研究记忆（docs/PLAN.md RQ-3）——等 reviewReminderWorkflow 消费",
   "researchMemoryRepository.ts::completeReview":
-    "P4 研究记忆——等前端手动标记消费",
-  "teamRepository.ts::createTeam": "P5 团队功能——等前端团队管理页",
-  "teamRepository.ts::getTeam": "P5 团队功能——等前端团队管理页",
-  "teamRepository.ts::listTeamsForUser": "P5 团队功能——等前端团队管理页",
-  "teamRepository.ts::addMember": "P5 团队功能——等前端团队管理页",
-  "teamRepository.ts::removeMember": "P5 团队功能——等前端团队管理页",
-  "teamRepository.ts::listMembers": "P5 团队功能——等前端团队管理页",
-  "auditRepository.ts::logAction": "P5 审计——等 API 中间件接入",
-  "auditRepository.ts::listAuditLog": "P5 审计——等前端审计页",
-  "billingRepository.ts::listPlans": "P5 计费——等前端套餐选择页",
-  "billingRepository.ts::getSubscription": "P5 计费——等前端账户页",
-  "billingRepository.ts::createSubscription": "P5 计费——等支付回调",
-  "billingRepository.ts::cancelSubscription": "P5 计费——等前端取消订阅",
-  "dataSourceFieldsRepository.ts::upsertField": "P5 字段级来源——等数据管道接入时登记",
-  "dataSourceFieldsRepository.ts::listFieldsBySource": "P5 字段级来源——等状态页来源详情",
-  "dataSourceFieldsRepository.ts::getCommercialFields": "P5 字段级来源——等商用路由审计",
+    "研究记忆（docs/PLAN.md RQ-3）——等前端手动标记消费",
+  "teamRepository.ts::createTeam": "外部依赖（docs/PLAN.md 第 5 节）——等前端团队管理页",
+  "teamRepository.ts::getTeam": "外部依赖（docs/PLAN.md 第 5 节）——等前端团队管理页",
+  "teamRepository.ts::listTeamsForUser": "外部依赖（docs/PLAN.md 第 5 节）——等前端团队管理页",
+  "teamRepository.ts::addMember": "外部依赖（docs/PLAN.md 第 5 节）——等前端团队管理页",
+  "teamRepository.ts::removeMember": "外部依赖（docs/PLAN.md 第 5 节）——等前端团队管理页",
+  "teamRepository.ts::listMembers": "外部依赖（docs/PLAN.md 第 5 节）——等前端团队管理页",
+  "auditRepository.ts::logAction": "外部依赖（docs/PLAN.md 第 5 节）——等 API 中间件接入",
+  "auditRepository.ts::listAuditLog": "外部依赖（docs/PLAN.md 第 5 节）——等前端审计页",
+  "billingRepository.ts::listPlans": "外部依赖（docs/PLAN.md 第 5 节）——等前端套餐选择页",
+  "billingRepository.ts::getSubscription": "外部依赖（docs/PLAN.md 第 5 节）——等前端账户页",
+  "billingRepository.ts::createSubscription": "外部依赖（docs/PLAN.md 第 5 节）——等支付回调",
+  "billingRepository.ts::cancelSubscription": "外部依赖（docs/PLAN.md 第 5 节）——等前端取消订阅",
+  "dataSourceFieldsRepository.ts::upsertField": "外部依赖（docs/PLAN.md 第 5 节）——等数据管道接入时登记",
+  "dataSourceFieldsRepository.ts::listFieldsBySource": "外部依赖（docs/PLAN.md 第 5 节）——等状态页来源详情",
+  "dataSourceFieldsRepository.ts::getCommercialFields": "外部依赖（docs/PLAN.md 第 5 节）——等商用路由审计",
 };
 
 const WRITE_RE = /^(?:upsert|insert|save|replace|record|write|create|delete|update|add|mark|bump|destroy)/i;

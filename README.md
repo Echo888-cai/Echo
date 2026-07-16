@@ -1,6 +1,6 @@
 # Echo Research
 
-面向港股、美股与 A 股价值投资者的证据优先 AI 研究台。产品围绕连续研究对话、公司画像、判断快照和可自动核对的证伪条件展开，不提供买卖指令，也不会用未经核实的数字填补数据缺口。
+面向美股与港股价值投资者的证据优先 AI 研究台。产品围绕连续研究对话、公司画像、判断快照和可自动核对的证伪条件展开，不提供买卖指令，也不会用未经核实的数字填补数据缺口。
 
 ## 架构
 
@@ -65,12 +65,13 @@ npm run db:recovery-drill
 
 ```text
 DATABASE_URL=
-SESSION_SECRET=
 TEMPORAL_ADDRESS=127.0.0.1:7233
 TEMPORAL_NAMESPACE=default
 TEMPORAL_TASK_QUEUE=echo-research
 OTEL_EXPORTER_OTLP_ENDPOINT=
 ```
+
+全集见 [.env.example](.env.example)，其中每个变量都有真实代码消费方。
 
 模型和数据供应商密钥均只允许存在于服务端环境。缺少外部数据时，产品明确显示“未核到”，不生成替代数字。商用环境只允许选择授权元数据标记为可商用的适配器。
 

@@ -585,7 +585,7 @@ async function gatherResearchContext(input: ResearchInput, userId: string, onSta
   // lines to print and whether the 推断 section may draw firm conclusions. Passing
   // market alone made every answer claim 财报三表还没补齐 while quoting the filing
   // numbers three paragraphs above it. news/estimates are honestly missing — no
-  // adapter exists (docs/PLAN.md P3).
+  // adapter exists (docs/PLAN.md 第 3 节能力底账).
   const isFirstPartyFiling = company.ticker.endsWith(".HK");
   const composerSources = {
     market: { provider: market?.source, asOf: market?.as_of, status: market ? "ok" : "missing" },

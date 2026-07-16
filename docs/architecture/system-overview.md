@@ -93,4 +93,4 @@ npm run test:load -- --url https://<环境地址> --concurrency 20 --duration 30
 - 只读副本和 RDS Proxy 目前只在 Terraform 里声明，仅 `getLatestMarketSnapshot` 一个调用点接入 `databaseRead()`；其余读密集查询要不要搬，按真实流量分布决定。
 - 自动伸缩的目标值（请求数 500、CPU 60%）是保守起点，需要一次真实压测（`npm run test:load`）后按实际单请求耗时/资源占用调参。
 - WAF 速率阈值和应用层限流阈值都是起点数字，同样需要用真实流量校准，而不是想当然。
-- 真正的生产容量数字（多少并发用户、多少 QPS、扩容延迟多久生效）必须在预生产环境跑一次 `npm run test:load` + 手动流量爬坡才能拿到——这是本文写作时无法在本地沙箱里验证的部分，见 [../PLAN.md](../PLAN.md) 第 5 节 P0 的退出指标。
+- 真正的生产容量数字（多少并发用户、多少 QPS、扩容延迟多久生效）必须在预生产环境跑一次 `npm run test:load` + 手动流量爬坡才能拿到——这是本文写作时无法在本地沙箱里验证的部分，见 [../PLAN.md](../PLAN.md) 第 5 节外部依赖清单的退出指标。

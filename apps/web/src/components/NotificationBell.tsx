@@ -4,11 +4,15 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { notificationsApi, type NotificationItem } from "../lib/api";
 import { notifWhen } from "../lib/format";
 
+// Keys must match the kind strings insertNotification callers actually emit
+// (see kindPreference in packages/db/src/repositories/userPreferencesRepository.ts) —
+// an unknown kind silently falls back to the 系统 tag.
 const NOTIF_KIND_META: Record<string, { label: string; cls: string }> = {
-  digest: { label: "速报", cls: "nk-digest" },
+  event_digest: { label: "速报", cls: "nk-digest" },
   position_alert: { label: "触线", cls: "nk-alert" },
   falsify_alert: { label: "证伪", cls: "nk-falsify" },
   review_reminder: { label: "复盘", cls: "nk-falsify" },
+  earnings_review: { label: "业绩", cls: "nk-digest" },
   system: { label: "系统", cls: "nk-system" }
 };
 

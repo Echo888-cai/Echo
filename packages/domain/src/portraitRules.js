@@ -164,10 +164,3 @@ export function topPortraitEvidence(panel, limit = 3) {
     .slice(0, limit)
     .map((source) => ({ title: source.label || source.type || "来源", url: source.url }));
 }
-
-export function falsifierRuleSignature(rules) {
-  return (Array.isArray(rules) ? rules : [])
-    .map((rule) => `${rule.kind}:${rule.metric || ""}:${rule.threshold}`)
-    .sort()
-    .join("|");
-}

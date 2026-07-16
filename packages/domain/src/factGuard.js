@@ -17,7 +17,7 @@
  *     看空的数字被错标成看多，数值本身仍会 pass）——这是记录在案的已知边界。
  */
 
-// 与 dataSources.js / portfolioReview.js 同一套展示级近似汇率，不新造汇率。
+// 展示级近似汇率，只用于跨币种数量级核对，不参与任何金融计算。
 const FX_TO_HKD = { HKD: 1, CNY: 1.08, USD: 7.8 };
 const CN_UNIT = { "万亿": 1e12, "亿": 1e8, "万": 1e4 };
 const CURRENCY_ALIAS = {

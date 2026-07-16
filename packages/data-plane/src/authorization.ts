@@ -1,13 +1,13 @@
 /**
- * Authorization metadata — the piece docs/PLAN.md §2 数据平面 calls out as the
- * whole point of formalizing an adapter matrix: "路由器按'授权允许 → 数据质量 →
- * 延迟'三级排序选源，未授权源在商用环境自动不可选". Today every adapter in this
- * repo is `unlicensed_free_tier` (public/free APIs, no commercial agreement) —
- * that fact is now a typed, machine-checkable property instead of tribal
- * knowledge. When a commercial vendor is contracted (procurement order ratified
- * in docs/PLAN.md §3), it's registered
- * as a new adapter with `licenseTier: "licensed_commercial"`; the router then
- * prefers it automatically in commercial mode, no code path changes required.
+ * Authorization metadata — the router sorts sources by 授权允许 → 数据质量 →
+ * 延迟, and unauthorized sources are automatically unselectable in commercial
+ * mode (docs/PLAN.md 红线 5). Today every third-party adapter in this repo is
+ * `unlicensed_free_tier` (public/free APIs, no commercial agreement) — that
+ * fact is a typed, machine-checkable property instead of tribal knowledge.
+ * When a commercial vendor is contracted (procurement list in docs/PLAN.md
+ * 第 6 节), it's registered as a new adapter with
+ * `licenseTier: "licensed_commercial"`; the router then prefers it
+ * automatically in commercial mode, no code path changes required.
  */
 
 export type LicenseTier =

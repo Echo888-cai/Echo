@@ -24,7 +24,10 @@ export const statusResponseSchema = z.object({
       providers: z.array(z.string())
     })
   ),
-  ai: z.record(z.string(), z.unknown()),
+  ai: z.object({
+    configured: z.boolean(),
+    providers: z.array(z.object({ id: z.string(), label: z.string(), model: z.string() }))
+  }),
   db: z.object({ companies: z.string() }),
   canary: z.object({
     batchId: z.union([z.string(), z.number()]).nullable(),

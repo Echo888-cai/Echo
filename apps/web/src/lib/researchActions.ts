@@ -300,10 +300,10 @@ function applyChatResult(result: any, key: string, company: ResearchCompany | nu
     else if (result.portrait?.changed) showToast(`已更新 ${label} 的长期画像（判断有变化）。`);
     if (result.portrait) {
       void queryClient.invalidateQueries({ queryKey: ["company", "profile", result.portrait.ticker] });
-      // watchDesk is built from the company-profile union (see docs/PLAN.md P0 #1)
-      // so any create/update of a profile — not just the multi-holding
-      // newlyWatched case below — must invalidate it, or the freshly-researched
-      // company only shows up in 看盘 after some unrelated refetch.
+      // watchDesk is built from the company-profile union, so any create/update
+      // of a profile — not just the multi-holding newlyWatched case below —
+      // must invalidate it, or the freshly-researched company only shows up in
+      // 看盘 after some unrelated refetch.
       refreshWatchDesk();
     }
     if (Array.isArray(result.newlyWatched) && result.newlyWatched.length) {

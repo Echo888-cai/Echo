@@ -3,6 +3,8 @@
 // into the evidence-card/grounding-bar props AnswerCard renders. Split out
 // from AnswerCard.tsx because researchActions.ts (answerMetaFromResult) also
 // needs them, and that file has no JSX.
+import { hostFromUrl } from "./format";
+
 const TYPE_CRED_DEFAULT: Record<string, number> = {
   official: 0.9,
   industry_research: 0.82,
@@ -12,14 +14,6 @@ const TYPE_CRED_DEFAULT: Record<string, number> = {
   news: 0.55,
   web: 0.45
 };
-
-function hostFromUrl(url = ""): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return "";
-  }
-}
 
 export interface EvidenceItem {
   title: string;

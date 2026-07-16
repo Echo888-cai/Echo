@@ -27,10 +27,6 @@
     "test:load:scenarios": "node scripts/quality/load-test-scenarios.mjs",
     "canary": "npm run canary --workspace @echo/data-plane"
   },
-  "dependencies": {
-    "@echo/domain": "*",
-    "@echo/finance-native": "*"
-  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.1.0",

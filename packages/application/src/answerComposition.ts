@@ -93,10 +93,9 @@ function buybacksToPrompt(buybacks: any) {
 }
 
 /**
- * Web evidence (Tavily) is not connected — the key is over its plan quota, so no
- * adapter was written rather than one that couldn't be verified against a real
- * response (docs/PLAN.md P3). Tell the model plainly instead of leaving the
- * block blank, which reads as "nothing newsworthy happened".
+ * When web evidence is empty (key unset, quota exhausted, or zero hits), tell
+ * the model plainly instead of leaving the block blank, which reads as
+ * "nothing newsworthy happened".
  */
 function webEvidenceToPrompt(webEvidence: any) {
   const items = Array.isArray(webEvidence?.evidence) ? webEvidence.evidence : [];

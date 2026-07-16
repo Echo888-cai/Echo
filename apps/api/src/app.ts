@@ -449,7 +449,7 @@ export const appRouter = t.router({
     })
   }),
   scheduler: t.router({
-    status: protectedProcedure.query(() => ({ scheduler: { engine: "temporal", status: "configured", polling: false }, telegram: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) }))
+    status: protectedProcedure.query(() => ({ scheduler: { engine: "temporal", status: "configured", polling: false } }))
   }),
   research: t.router({
     scorecard: protectedProcedure.query(async ({ ctx }) => {
@@ -474,7 +474,7 @@ export const appRouter = t.router({
   }),
   notifications: t.router({
     list: protectedProcedure.input(z.object({ limit: z.number().int().min(1).max(100).default(20) })).query(async ({ ctx, input }) => ({
-      notifications: await listNotifications(input.limit, ctx.user.id), unread: await unreadCount(ctx.user.id), telegram: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID)
+      notifications: await listNotifications(input.limit, ctx.user.id), unread: await unreadCount(ctx.user.id)
     })),
     unread: protectedProcedure.query(async ({ ctx }) => ({ unread: await unreadCount(ctx.user.id) })),
     read: protectedProcedure.input(notificationsReadRequestSchema).mutation(async ({ ctx, input }) => {
@@ -483,7 +483,7 @@ export const appRouter = t.router({
     }),
     test: protectedProcedure.mutation(async ({ ctx }) => {
       await insertNotification({ kind: "system", title: "通知通道测试", body: "Echo Research 通知中心工作正常。", userId: ctx.user.id });
-      return { telegram: "skipped", telegramConfigured: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) };
+      return { inserted: true as const };
     })
   }),
   preferences: t.router({

@@ -69,17 +69,11 @@ function NotificationPreferencesCard() {
     queryClient.setQueryData(["preferences"], data);
   }
 
-  // `pending` = 这类提醒还没有任何代码会发出（docs/PLAN.md P3 未建功能）。开关照常可存，
-  // 功能落地即自动生效，但不能让它看起来"已经在替你盯着"——一个控制着不存在功能的
-  // 开关，比没有这个开关更伤信任。
-  const row = (key: keyof UserPreferences, label: string, detail: string, pending = false) => (
-    <label className={`pref-row${pending ? " pref-row-pending" : ""}`} key={key}>
+  const row = (key: keyof UserPreferences, label: string, detail: string) => (
+    <label className="pref-row" key={key}>
       <span>
-        <b>
-          {label}
-          {pending && <em className="pref-pending-tag">未接通</em>}
-        </b>
-        <small>{pending ? `${detail}——该提醒尚未接通，开关暂不产生通知` : detail}</small>
+        <b>{label}</b>
+        <small>{detail}</small>
       </span>
       <input
         className="pref-toggle"
@@ -372,13 +366,7 @@ export function SettingsPage() {
       // 任何东西让它重取），未读角标则挂在 60 秒的 refetchInterval 上。人点得慢所以
       // 多半赢了这个竞态，E2E 点得快就输——这正是它在 CI 上偶发失败的根因，不是 flaky。
       await queryClient.invalidateQueries({ queryKey: ["notifications"] });
-      showToast(
-        r.telegram === "sent"
-          ? "测试通知已发送（含 Telegram）"
-          : r.telegramConfigured
-            ? `已落通知中心；Telegram：${r.telegram}`
-            : "已落通知中心（Telegram 未配置）"
-      );
+      if (r.inserted) showToast("测试通知已落通知中心");
     } catch (err) {
       showToast(`发送失败：${err instanceof ApiError ? err.message : "未知错误"}`);
     }
@@ -451,18 +439,13 @@ export function SettingsPage() {
           <article className="settings-card">
             <h2>通知与推送</h2>
             <p>
-              Temporal 工作流自动执行盘前/盘后速报、证伪线巡检、业绩闭环和 PostgreSQL 备份；失败会从中断步骤继续。结果进入右上角通知中心
-              {schedStatus?.telegram ? "，并推送到 Telegram" : "；配置 TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID（见 .env.example）可推到手机"}。
+              Temporal 工作流自动执行盘前/盘后速报、证伪线巡检、业绩闭环和 PostgreSQL 备份；失败会从中断步骤继续。结果进入右上角通知中心。
             </p>
             {schedStatus ? (
               <>
                 <div className="setting-row">
                   <span>编排引擎</span>
                   <strong>{(schedStatus.scheduler as any)?.engine === "temporal" ? "Temporal" : "未连接"}</strong>
-                </div>
-                <div className="setting-row">
-                  <span>Telegram 推送</span>
-                  <strong>{schedStatus.telegram ? "已配置" : "未配置"}</strong>
                 </div>
                 {((schedStatus.scheduler as any)?.jobs || []).map((j: any, i: number) => (
                   <div className="setting-row" title={j.lastDetail || ""} key={j.label ?? i}>

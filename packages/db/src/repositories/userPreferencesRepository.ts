@@ -55,9 +55,6 @@ export async function updateUserPreferences(userId = "local", patch: Partial<Pre
  * ——字符串漂移了，两边都没报错（库里那 7 行 `digest` 是旧底盘留下的）。
  * 改 kind 时必须同步改这里；`insertNotification` 是唯一咽喉，加新 kind 请一并登记。
  *
- * `position_alert`/`review_reminder` 目前**没有任何代码发出**（持仓纪律、研究复盘提醒
- * 属 docs/PLAN.md P3 未建功能）。映射先留着，等功能落地即自动生效；设置页对应的两个
- * 开关已标注"未接通"，不冒充可用。
  */
 const kindPreference: Record<string, keyof Preferences> = {
   event_digest: "notifyDigest",
