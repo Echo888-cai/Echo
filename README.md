@@ -32,7 +32,7 @@ docs/          产品计划、发布门禁与架构说明
 
 ## 本地运行
 
-要求 Node.js、Rust、PostgreSQL 与可用的 Temporal 服务。
+要求 Node.js、Rust、PostgreSQL；Redis 用于短期意图/上下文缓存（不可用时自动回退到内存），Temporal 用于后台持久任务。
 
 ```bash
 npm install
@@ -41,6 +41,8 @@ npm run db:migrate
 npm run dev
 npm run worker
 ```
+
+私有部署可用 `npm run accounts:reset-owner` 重置租户账号。该命令要求显式提供 `ECHO_BOOTSTRAP_EMAIL` 与 `ECHO_BOOTSTRAP_PASSWORD`，并在单个事务中清空旧租户数据、创建唯一 owner 与 Pro 席位；密码只以 scrypt 哈希保存。
 
 Web 默认地址为 `http://localhost:5190`，API 默认地址为 `http://127.0.0.1:4180`。Temporal 地址可通过 `TEMPORAL_ADDRESS` 配置。
 
@@ -65,6 +67,7 @@ npm run db:recovery-drill
 
 ```text
 DATABASE_URL=
+REDIS_URL=redis://127.0.0.1:6379
 TEMPORAL_ADDRESS=127.0.0.1:7233
 TEMPORAL_NAMESPACE=default
 TEMPORAL_TASK_QUEUE=echo-research

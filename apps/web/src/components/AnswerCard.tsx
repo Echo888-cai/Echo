@@ -1,17 +1,17 @@
 // Structured research answer and evidence renderers.
-// (valuation bar, analyst consensus, grounding bar, evidence cards, comparison
-// table, focus strip, dual quote, comp anchor, screener/macro blocks, choice
-// cards, switch-divider) plus markdown.js's renderRichAnswer() for the answer
-// body. This is the single most-rendered component in the app — every message
-// in the conversation goes through here.
-import type { ReactNode } from "react";
+// (valuation bar, analyst consensus, evidence cards, comparison table, focus
+// strip, dual quote, comp anchor, screener/macro blocks, choice cards) plus
+// markdown.js's renderRichAnswer() for the answer body. This is the single
+// most-rendered component in the app — every message in the conversation goes
+// through here.
+import { memo, type ReactNode } from "react";
 import type { Message } from "../lib/researchStore";
 import { isNum, fmtMoney, fmtSigned, dirClass, numFrom, credLevel } from "../lib/format";
 import { markdownToHtml, renderRichAnswer } from "../lib/markdown";
 import { PositionCard, PortfolioReviewCard } from "./Portfolio";
 import { portfolioApi, type PortfolioPosition, type PortfolioReview as PortfolioReviewData } from "../lib/api";
 import { showToast } from "../lib/toast";
-import { researchSuggested, forceResearch, runComparison, switchAndResearch, returnToCompany, copyMessage } from "../lib/researchActions";
+import { researchSuggested, forceResearch, runComparison, switchAndResearch, copyMessage } from "../lib/researchActions";
 import { useNavigate } from "@tanstack/react-router";
 
 const SOURCE_TYPE_LABEL: Record<string, string> = {
@@ -433,27 +433,6 @@ function AnalystConsensus({ analyst }: { analyst: any }) {
   );
 }
 
-function GroundingBar({ meta }: { meta: any }) {
-  const slots: { label: string; ok: boolean }[] = Array.isArray(meta.grounding) ? meta.grounding : [];
-  if (!slots.length) return null;
-  const missing: string[] = Array.isArray(meta.missing) ? meta.missing.filter(Boolean) : [];
-  return (
-    <div className="grounding-bar">
-      {slots.map((s) => (
-        <span className={`ground-chip ${s.ok ? "ok" : "miss"}`} key={s.label}>
-          {s.label}
-          <i>{s.ok ? "✓" : "✗"}</i>
-        </span>
-      ))}
-      {typeof meta.completeness === "number" ? (
-        <span className="ground-complete" title={missing.length ? `还缺：${missing.join("、")}` : "关键数据槽已齐备"}>
-          完整度 {meta.completeness}%
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
 function EvidenceBlock({ evidence }: { evidence: any[] }) {
   if (!Array.isArray(evidence) || !evidence.length) return null;
   const withUrl = evidence.filter((item) => item.url);
@@ -551,6 +530,24 @@ function ScreenerBlock({ screener = {} }: { screener: any }) {
   const navigate = useNavigate();
   const rows: any[] = Array.isArray(screener.rows) ? screener.rows : [];
   const notes: string[] = Array.isArray(screener.notes) ? screener.notes.filter(Boolean) : [];
+  // 后端明确声明筛选未接通时，绝不能渲染成"筛选结果 · 0 家"——那等于告诉用户
+  // "筛过了，没有符合条件的公司"，而真相是一个条件都没筛过。这块 UI 以前还会顺手
+  // 显示一枚"美股"筛选条件 chip（filters.market 恒为 undefined，三元恒落到美股分支），
+  // 把"没筛"演成"按美股筛过了"。
+  if (screener.unavailable) {
+    return (
+      <div className="screener-block">
+        <div className="scr-head">
+          <span>按条件筛选 · 尚未接通</span>
+        </div>
+        <div className="scr-notes scr-unavailable">
+          {notes.map((n, i) => (
+            <span key={i}>· {n}</span>
+          ))}
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="screener-block">
       <div className="scr-head">
@@ -701,7 +698,7 @@ function PortfolioPanelMessage({ positions = [], review }: { positions: Portfoli
 }
 
 // ── top-level dispatcher ────────────────────────────────────────────────
-export function AnswerCard({ message }: { message: Message }) {
+function AnswerCardImpl({ message }: { message: Message }) {
   const navigate = useNavigate();
   if (message.role === "user") {
     return (
@@ -751,31 +748,21 @@ export function AnswerCard({ message }: { message: Message }) {
     );
   }
 
-  if (meta.type === "switch-divider" && meta.from && meta.to) {
-    return (
-      <div className="switch-divider">
-        <span className="switch-line" />
-        <span className="switch-text">
-          已从 <b>{meta.from.name}</b> 切到 <b>{meta.to.name}</b>
-        </span>
-        <button className="switch-back" type="button" onClick={() => void returnToCompany(meta.from.ticker, meta.from.name, () => navigate({ to: "/" }))}>
-          回到 {meta.from.name}
-        </button>
-        <span className="switch-line" />
-      </div>
-    );
+  if (meta.type === "switch-divider") {
+    return null;
   }
 
   if (meta.type === "choice" && meta.choice) {
     return <ChoiceCard choice={meta.choice} />;
   }
 
+  const isBrief = meta.intent?.depth === "brief";
   const title = meta.type === "deep_research" ? "DEEP RESEARCH" : meta.type === "portrait" ? "公司画像" : meta.type === "digest" ? "事件提醒" : meta.type === "portfolio" ? "我的持仓" : "ECHO";
   const isPortfolio = meta.type === "portfolio";
 
   return (
     <article className="message assistant">
-      <div className="bubble answer-card">
+      <div className={`bubble answer-card ${isBrief ? "is-brief" : ""}`}>
         <div className="answer-brand">
           <div className="answer-mark">
             <i />
@@ -787,25 +774,39 @@ export function AnswerCard({ message }: { message: Message }) {
             </button>
           )}
         </div>
-        {isPortfolio ? null : <GroundingBar meta={meta} />}
-        {isPortfolio ? null : <DataSourceLine dataSources={meta.dataSources} />}
-        {isPortfolio ? null : <ComparisonTable comparison={meta.comparison} />}
-        {isPortfolio ? null : <FocusStrip meta={meta} />}
-        {isPortfolio ? null : <DualQuote dq={meta.dualQuote} />}
+        {isPortfolio || isBrief ? null : <DataSourceLine dataSources={meta.dataSources} />}
+        {isPortfolio || isBrief ? null : <ComparisonTable comparison={meta.comparison} />}
+        {isPortfolio || isBrief ? null : <FocusStrip meta={meta} />}
+        {isPortfolio || isBrief ? null : <DualQuote dq={meta.dualQuote} />}
         {isPortfolio ? (
           <PortfolioPanelMessage positions={meta.positions} review={meta.review} />
         ) : (
           <div dangerouslySetInnerHTML={{ __html: renderRichAnswer(message.content) }} />
         )}
-        <Valuation valuation={meta.valuation} name={meta.otherHoldings && meta.otherHoldings.length ? meta.valuationName : null} />
-        {meta.valuation && !meta.valuation.cannotValueReason ? null : (
+        {isBrief ? null : <Valuation valuation={meta.valuation} name={meta.otherHoldings && meta.otherHoldings.length ? meta.valuationName : null} />}
+        {isBrief || (meta.valuation && !meta.valuation.cannotValueReason) ? null : (
           <ValuationNote note={meta.valuationNote || meta.valuation?.cannotValueReason || null} />
         )}
-        <CompAnchor compPeers={meta.valuation?.compPeers} />
-        <AnalystConsensus analyst={meta.analyst} />
-        <EvidenceBlock evidence={meta.evidence} />
-        {isPortfolio ? null : <AnswerMeta meta={meta} />}
+        {isBrief ? null : <CompAnchor compPeers={meta.valuation?.compPeers} />}
+        {isBrief ? null : <AnalystConsensus analyst={meta.analyst} />}
+        {isBrief ? null : <EvidenceBlock evidence={meta.evidence} />}
+        {isPortfolio || isBrief ? null : <AnswerMeta meta={meta} />}
       </div>
     </article>
   );
 }
+
+/**
+ * 每条消息一张卡，且**只在这条消息本身变了**时才重渲染。
+ *
+ * researchStore 的 emit() 会克隆整个 state 并通知所有 useSyncExternalStore 订阅者。
+ * 流式作答期间它每个 chunk 触发一次（实测一篇 2600 字回答 ≈ 108 次，深度报告 ≈ 380 次），
+ * 等待期间 busyTimer 还会每秒再触发一次——而这些 emit 里 thread 数组和每个 message 对象
+ * 都**没有变**，变的只有 streamingText 和秒数。没有 memo 时，会话里每一条历史回答
+ * 都要跟着重渲染一遍：20 条消息 × 380 个 chunk = 7600 次纯浪费的渲染，每次都重跑
+ * renderRichAnswer。
+ *
+ * memo 在这里是安全的：props 只有 message 一个，没有回调（导航用 useNavigate 在内部取），
+ * 而 message 对象只在 setThread 时才换新引用——也就是"这条消息真的变了"的时候。
+ */
+export const AnswerCard = memo(AnswerCardImpl);

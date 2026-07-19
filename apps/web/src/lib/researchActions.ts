@@ -6,7 +6,6 @@ import {
   setThread,
   getCompany,
   setCompany,
-  getPanel,
   setPanel,
   getDocuments,
   setDocuments,
@@ -30,7 +29,6 @@ import {
   isViewBusy,
   getRecentSessions,
   setRecentSessions,
-  setConversationGroups,
   setSessionsLoaded,
   type ResearchCompany,
   type Message
@@ -53,6 +51,22 @@ function uid(prefix = "id"): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/**
+ * 用户主动取消 vs 真的出错——两者的收尾文案完全不同，不能都写成"研究失败"。
+ *
+ * 两条路径抛的都是 DOMException("AbortError")：`chatStream` 走原生 fetch 直接抛；
+ * 深度报告走 tRPC，由 api.ts 的 rpc() 负责让 abort 原样穿过（它会把别的 tRPC 错误
+ * 转成 ApiError 并丢掉 cause 链，abort 必须在那之前放行）。所以这里只认这一种形状，
+ * 不去猜 message 文本——靠 message 匹配来识别控制流是会随依赖升级而无声失效的。
+ */
+function isAbort(error: unknown): boolean {
+  for (let e: any = error, depth = 0; e && depth < 5; e = e.cause, depth++) {
+    if (e instanceof DOMException && e.name === "AbortError") return true;
+    if (e?.name === "AbortError") return true;
+  }
+  return false;
+}
+
 function refreshWatchDesk() {
   void queryClient.invalidateQueries({ queryKey: ["watch", "desk"] });
 }
@@ -63,7 +77,6 @@ export async function refreshSessions() {
     const data = await researchSessionsApi.conversations(30);
     const groups = data.conversations || [];
     const server = groups.flatMap((g: any) => g.sessions.map((s: any) => ({ ...s, conversationId: g.conversationId })));
-    setConversationGroups(groups);
     const serverIds = new Set(server.map((s: any) => s.id));
     const pending = getRecentSessions().filter((s) => s.optimistic && running.has(s.id) && !serverIds.has(s.id));
     setRecentSessions([...pending, ...server]);
@@ -95,39 +108,6 @@ export async function copyMessage(id: string) {
     textarea.remove();
   }
   showToast("已复制回答。");
-}
-
-export function exportResearch() {
-  const thread = getThread();
-  if (!thread.length) {
-    showToast("还没有可导出的研究。");
-    return;
-  }
-  const company = getCompany();
-  const panel = getPanel();
-  const heading = company ? `${company.nameZh || ""} ${company.ticker || ""}`.trim() : panel?.companyName || "Echo 研究";
-  const lines = [`# ${heading} · 研究记录`, ""];
-  if (panel?.confidence) {
-    lines.push(`> 研究状态：${panel.researchStatus || "持续观察"} · 置信度：${panel.confidence}`, "");
-  }
-  for (const message of thread) {
-    lines.push(message.role === "user" ? `## 提问\n\n${message.content}` : `## Echo\n\n${message.content}`, "");
-  }
-  const sources = Array.isArray(panel?.sources) ? panel.sources.filter((s: any) => s.url) : [];
-  if (sources.length) {
-    lines.push("## 来源", "", ...sources.map((s: any) => `- ${s.label || s.type || "来源"}：${s.url}`), "");
-  }
-  lines.push("---", "> 由 Echo Research 生成 · Seek signal. Ignore noise. 仅供研究学习，不构成投资建议。");
-  const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `${(company?.ticker || panel?.ticker || "echo").replace(/[^\w.-]/g, "")}-research.md`;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
-  showToast("已导出 Markdown 研究记录。");
 }
 
 export function clearResearch(navigate: () => void) {
@@ -207,15 +187,11 @@ export async function loadSession(id: string, navigate: () => void) {
 }
 
 export async function deleteSession(id: string) {
-  if (!id) return;
+  if (!id) return false;
   if (running.has(id)) {
     showToast("这条研究正在生成，完成后再删。");
-    return;
+    return false;
   }
-  const item = getRecentSessions().find((session) => session.id === id);
-  const title = item?.title || item?.question || "这条研究";
-  const ok = window.confirm(`删除"${title}"？\n\n这会永久移除这条历史研究。`);
-  if (!ok) return;
   try {
     await researchSessionsApi.remove(id);
     if (getSessionId() === id) {
@@ -228,19 +204,19 @@ export async function deleteSession(id: string) {
     }
     await refreshSessions();
     showToast("已删除历史研究。");
+    return true;
   } catch (error) {
     showToast(error instanceof ApiError ? error.message : "删除失败。");
+    return false;
   }
 }
 
 export async function clearAllSessions() {
-  if (!getRecentSessions().length) return;
+  if (!getRecentSessions().length) return false;
   if (running.size) {
     showToast("有研究正在生成，完成后再清空。");
-    return;
+    return false;
   }
-  const ok = window.confirm("清空全部历史研究？\n\n这会永久删除你的所有历史记录。");
-  if (!ok) return;
   try {
     await researchSessionsApi.clearAll();
     setThread([]);
@@ -251,8 +227,10 @@ export async function clearAllSessions() {
     setConversationId(null);
     await refreshSessions();
     showToast("已清空全部历史研究。");
+    return true;
   } catch (error) {
     showToast(error instanceof ApiError ? error.message : "清空失败。");
+    return false;
   }
 }
 
@@ -261,6 +239,7 @@ export async function clearAllSessions() {
 function answerMetaFromResult(result: any) {
   return {
     mode: result.mode,
+    intent: result.intent || null,
     webCount: result.webEvidence?.evidence?.length ?? 0,
     sources: dataSourceLabels(result.dataSources),
     grounding: dataSourceGrounding(result.dataSources),
@@ -287,6 +266,8 @@ function answerMetaFromResult(result: any) {
 function applyChatResult(result: any, key: string, company: ResearchCompany | null): boolean {
   const label = company?.nameZh || company?.ticker || "研究";
   if (key === activeRunKey()) {
+    // 先移除临时流式卡，再落最终消息，避免一次外部 store 通知中同时出现两张答案卡。
+    setStreaming(null, "");
     if (result.sessionId) setSessionId(result.sessionId);
     if (result.decisionPanel) setPanel(result.decisionPanel);
     const enrichedName = result.decisionPanel?.companyName;
@@ -392,7 +373,9 @@ export async function runComparison(target: { ticker: string; name: string }) {
   const conversationId = ensureConversationId();
   optimisticSession(sessionId, { company: current, question, conversationId });
   const key = runKey(sessionId, current.ticker);
-  startRun(key, "正在对比两家公司");
+  const controller = new AbortController();
+  const stream = streamCallbacks(key);
+  startRun(key, "正在对比两家公司", controller);
   try {
     const result = await chatStream(
       {
@@ -406,13 +389,20 @@ export async function runComparison(target: { ticker: string; name: string }) {
         documents: getDocuments(),
         memory: {}
       },
-      streamCallbacks(key)
+      stream.callbacks,
+      controller.signal
     );
+    stream.stop();
     if (result) applyChatResult(result, key, current);
     else if (key === activeRunKey()) appendMessage("assistant", "本轮没有生成对比。");
   } catch (error) {
-    if (key === activeRunKey()) appendMessage("assistant", `这轮对比失败：${error instanceof Error ? error.message : "未知错误"}。`);
+    if (isAbort(error)) {
+      if (key === activeRunKey()) appendMessage("assistant", "已停止这轮对比。", { type: "aborted" });
+    } else if (key === activeRunKey()) {
+      appendMessage("assistant", `这轮对比失败：${error instanceof Error ? error.message : "未知错误"}。`);
+    }
   } finally {
+    stream.stop();
     endRun(key);
     await refreshSessions();
   }
@@ -478,13 +468,30 @@ async function runDiscovery(question: string, kind: "screener" | "macro") {
 // the (currently invisible) view on every token.
 function streamCallbacks(key: string) {
   let text = "";
+  let frame: number | null = null;
+  let active = true;
+
+  function paint() {
+    frame = null;
+    if (active && key === activeRunKey()) setStreaming(key, text);
+  }
+
   return {
-    onToken: (t: string) => {
-      text += t;
-      if (key === activeRunKey()) setStreaming(key, text);
+    callbacks: {
+      onToken: (t: string) => {
+        text += t;
+        // SSE 往往在一个网络包里连续给出多个 token。合并到浏览器下一帧再画，
+        // 把高频全局 store 通知限制到屏幕刷新率以内。
+        if (frame === null) frame = requestAnimationFrame(paint);
+      },
+      onReasoning: (n: number) => addReasoningChars(key, n),
+      onStage: (stage: string, plan?: string[]) => setStage(key, stage, plan)
     },
-    onReasoning: (n: number) => addReasoningChars(key, n),
-    onStage: (stage: string) => setStage(key, stage)
+    stop: () => {
+      active = false;
+      if (frame !== null) cancelAnimationFrame(frame);
+      frame = null;
+    }
   };
 }
 
@@ -545,22 +552,14 @@ export async function sendChat(question: string, preResolved: ResearchCompany | 
     return;
   }
 
-  // Company switch → start a fresh research session. Each company keeps its own
-  // clean history entry, context never bleeds from the previous company.
+  // Company change → start a fresh research session so context never bleeds.
   const switched = Boolean(prevCompany?.ticker && company.ticker && company.ticker !== prevCompany.ticker);
   if (switched) {
     const thread = getThread();
     const pending = thread[thread.length - 1];
     setSessionId(null);
     setPanel(null);
-    const divider: Message = {
-      id: uid("msg"),
-      role: "assistant",
-      content: "",
-      meta: { type: "switch-divider", from: { ticker: prevCompany!.ticker, name: prevCompany!.nameZh || prevCompany!.ticker }, to: { name: company.nameZh || company.ticker } },
-      createdAt: new Date().toISOString()
-    };
-    setThread(pending?.role === "user" ? [divider, pending] : [divider]);
+    setThread(pending?.role === "user" ? [pending] : []);
   }
   setCompany(company);
   if (company.dualListing && (switched || !prevCompany?.ticker)) {
@@ -570,7 +569,9 @@ export async function sendChat(question: string, preResolved: ResearchCompany | 
   const conversationId = ensureConversationId();
   optimisticSession(sessionId, { company, question, conversationId });
   const key = runKey(sessionId, company.ticker);
-  startRun(key, "正在检索和思考");
+  const controller = new AbortController();
+  const stream = streamCallbacks(key);
+  startRun(key, "正在检索和思考", controller);
   try {
     const result = await chatStream(
       {
@@ -583,11 +584,21 @@ export async function sendChat(question: string, preResolved: ResearchCompany | 
         documents: getDocuments(),
         memory: {}
       },
-      streamCallbacks(key)
+      stream.callbacks,
+      controller.signal
     );
+    stream.stop();
     if (result) applyChatResult(result, key, company);
     else if (key === activeRunKey()) appendMessage("assistant", "本轮没有生成有效回复。");
+  } catch (error) {
+    if (isAbort(error)) {
+      // 用户主动停的：不写错误气泡（那会读起来像"失败了"），只留一条中性痕迹说明这轮没有结论。
+      if (key === activeRunKey()) appendMessage("assistant", "已停止这轮研究。可以改问题重新开始。", { type: "aborted" });
+    } else if (key === activeRunKey()) {
+      appendMessage("assistant", `这轮研究失败：${error instanceof Error ? error.message : "未知错误"}。`);
+    }
   } finally {
+    stream.stop();
     endRun(key);
     await refreshSessions();
   }
@@ -606,7 +617,8 @@ export async function generateDeepResearch() {
   const conversationId = ensureConversationId();
   optimisticSession(sessionId, { company, question: lastQuestion, conversationId });
   const key = runKey(sessionId, company.ticker);
-  startRun(key, "正在生成深度研究");
+  const controller = new AbortController();
+  startRun(key, "正在生成深度研究", controller);
   try {
     const result = await reportsApi.generate({
       question: lastQuestion,
@@ -617,7 +629,7 @@ export async function generateDeepResearch() {
       documents: getDocuments(),
       history: thread.slice(-16).map((m) => ({ role: m.role, content: m.content })),
       memory: {}
-    });
+    }, controller.signal);
     if (key === activeRunKey()) {
       if (result.sessionId) setSessionId(result.sessionId);
       if (result.decisionPanel) setPanel(result.decisionPanel);
@@ -631,7 +643,11 @@ export async function generateDeepResearch() {
       showToast(`${company.nameZh || company.ticker} 的深度研究完成了，点左侧查看。`);
     }
   } catch (error) {
-    if (key === activeRunKey()) appendMessage("assistant", `深度研究失败：${error instanceof Error ? error.message : "未知错误"}。`);
+    if (isAbort(error)) {
+      if (key === activeRunKey()) appendMessage("assistant", "已停止这轮深度研究。", { type: "aborted" });
+    } else if (key === activeRunKey()) {
+      appendMessage("assistant", `深度研究失败：${error instanceof Error ? error.message : "未知错误"}。`);
+    }
   } finally {
     endRun(key);
     await refreshSessions();

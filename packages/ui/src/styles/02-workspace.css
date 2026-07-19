@@ -118,6 +118,95 @@ main {
   -webkit-backdrop-filter: blur(18px);
 }
 
+.conversation-sidebar {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 18px 14px 14px;
+}
+
+.new-research {
+  min-height: 44px;
+  flex: 0 0 auto;
+  border-radius: 13px;
+}
+
+.new-research > span {
+  margin-right: 2px;
+  font-size: 18px;
+  font-weight: 400;
+}
+
+.conversation-sidebar .history-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+.sidebar-account {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: 10px;
+  min-height: 58px;
+  margin-top: auto;
+  padding: 9px 10px;
+  flex: 0 0 auto;
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel) 86%, transparent);
+  box-shadow: var(--sh-1);
+  text-decoration: none;
+  transition: transform 180ms var(--ease), border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.sidebar-account:hover {
+  transform: translateY(-1px);
+  border-color: var(--line-strong);
+  box-shadow: var(--sh-2);
+}
+
+.account-avatar {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  color: #f8f6ef;
+  background: linear-gradient(145deg, #4d4b45, #111211 72%);
+  font-size: 11px;
+  font-weight: 720;
+  letter-spacing: .04em;
+}
+
+.account-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.account-copy strong {
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-copy small {
+  color: var(--muted-2);
+  font-size: 8px;
+  font-weight: 740;
+  letter-spacing: .12em;
+}
+
+.account-arrow {
+  color: var(--muted-2);
+  font-size: 14px;
+}
+
 .primary,
 .secondary,
 .tool-chip {
@@ -161,16 +250,6 @@ button:disabled {
   opacity: 0.4;
 }
 
-.research-snapshot {
-  margin-top: 18px;
-  padding: 22px 20px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  background: var(--panel-glass-strong);
-  box-shadow: var(--sh-1);
-}
-
-.research-snapshot p,
 .side-title h3,
 .eyebrow {
   margin: 0 0 8px;
@@ -181,75 +260,9 @@ button:disabled {
   text-transform: uppercase;
 }
 
-.research-snapshot h2 {
-  margin: 0 0 4px;
-  font-size: 21px;
-  font-weight: 650;
-  line-height: 1.18;
-  letter-spacing: -0.02em;
-}
-
-.research-snapshot .snapshot-id span,
 .muted {
   color: var(--muted);
   font-size: 13px;
-}
-
-/* Dual-listing note (港股 + 美股 ADR) */
-.snapshot-dual {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 10px 0 2px;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--blue-soft);
-  border: 1px solid rgba(191, 92, 62, 0.14);
-}
-.dual-badge {
-  flex: 0 0 auto;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--blue);
-  color: #fff;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
-.dual-text {
-  font-size: 11.5px;
-  line-height: 1.35;
-  color: var(--blue-ink);
-  font-weight: 550;
-}
-
-/* EA-5.4：上下文面板——当前研究公司的看盘状态 + 持仓盈亏（数据取自已全局加载的看盘台） */
-.context-card {
-  display: grid;
-  gap: 6px;
-  margin-top: 10px;
-  padding: 12px 14px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-sm);
-  background: var(--panel);
-}
-
-.context-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 12.5px;
-  color: var(--ink-2);
-}
-
-.context-row.is-muted {
-  color: var(--muted-2);
-}
-
-.context-row b {
-  font-weight: 650;
-  color: var(--ink);
 }
 
 /* History drawer */
@@ -258,49 +271,36 @@ button:disabled {
   padding: 6px 4px 4px;
 }
 
-.history-toggle {
+.history-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  width: 100%;
-  padding: 11px 12px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--ink-2);
+  min-height: 38px;
+  margin-bottom: 4px;
+}
+
+.history-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  color: var(--ink);
   font-size: 13px;
   font-weight: 650;
-  cursor: pointer;
-  transition: background 0.18s var(--ease-soft), border-color 0.18s var(--ease-soft);
+  letter-spacing: -0.01em;
 }
 
-.history-toggle:hover {
-  background: rgba(0, 0, 0, 0.04);
-}
-[data-theme="dark"] .history-toggle:hover {
-  background: rgba(255, 255, 255, 0.05);
-}
-
-.history-toggle.is-open {
-  color: var(--ink);
-}
-
-.history-toggle i {
+.history-count {
   color: var(--muted-2);
-  font-size: 12px;
-  font-style: normal;
-  font-weight: 600;
-  transition: color 0.18s var(--ease-soft);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 620;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
 }
 
-.history-actions {
-  display: flex;
-  justify-content: flex-end;
-  margin: 4px 6px 8px;
-}
-
-.history-actions button {
+.history-clear {
   padding: 4px 8px;
   border: 0;
   border-radius: 7px;
@@ -312,66 +312,15 @@ button:disabled {
   transition: color 0.16s var(--ease-soft), background 0.16s var(--ease-soft);
 }
 
-.history-actions button:hover {
+.history-clear:hover {
   color: var(--danger);
-  background: rgba(255, 59, 48, 0.08);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
 }
 
 .session-list {
   display: grid;
   gap: 4px;
   animation: fadeIn 0.26s var(--ease-out);
-}
-
-/* EA-5.1：会话分组——同一次对话里换过的多家公司归成一组 */
-.conv-group {
-  display: grid;
-  gap: 2px;
-  padding: 4px 0;
-  border-radius: 12px;
-}
-
-.conv-group.is-active-group {
-  background: rgba(191, 92, 62, 0.05);
-}
-
-.conv-group-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 12px 2px;
-}
-
-.conv-group-head strong {
-  overflow: hidden;
-  font-size: 12px;
-  font-weight: 650;
-  color: var(--muted);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.conv-count {
-  flex: none;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--muted-2);
-}
-
-.conv-companies {
-  display: grid;
-  gap: 2px;
-  padding-left: 8px;
-  border-left: 2px solid var(--hairline);
-}
-
-.session-item.is-nested {
-  padding: 8px 10px;
-}
-
-.session-item.is-nested .session-open strong {
-  font-size: 13px;
 }
 
 .session-item {

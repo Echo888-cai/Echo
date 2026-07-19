@@ -8,11 +8,14 @@ export const discoverRequestSchema = z.object({
   kind: z.enum(["screener", "macro"]).optional()
 });
 
-/** services/discovery.js runScreener() return value. */
+/** runAsk 的 screener 分支返回值。 */
 export const screenerResponseSchema = z.object({
   kind: z.literal("screener"),
   filters: z.record(z.string(), z.unknown()),
   rows: z.array(z.record(z.string(), z.unknown())),
+  /** 条件筛选尚未接通：空 rows **不代表**"没有符合条件的公司"，前端必须据此区分
+   *  "筛过了没结果" 与 "根本没筛"——两者对用户的含义完全相反。 */
+  unavailable: z.boolean().optional(),
   notes: z.array(z.string()).optional()
 });
 

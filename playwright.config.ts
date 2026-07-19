@@ -14,15 +14,18 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: "ECHO_AUTH_DISABLED=1 ECHO_AUTH_DISABLED_USER_ID=__e2e__ API_PORT=4180 npm run start --workspace @echo/api",
-      url: "http://127.0.0.1:4180/healthz",
-      reuseExistingServer: true,
+      // Keep E2E isolated from the developer's auth-enabled API on 4180.
+      // Reusing that server silently sent clean-room tests to /login and made
+      // the result depend on whichever local process happened to be running.
+      command: "ECHO_AUTH_DISABLED=1 ECHO_AUTH_DISABLED_USER_ID=__e2e__ API_PORT=4280 npm run start --workspace @echo/api",
+      url: "http://127.0.0.1:4280/healthz",
+      reuseExistingServer: false,
       timeout: 30_000
     },
     {
-      command: "npm run dev --workspace @echo/web -- --host 127.0.0.1 --port 4173",
+      command: "BACKEND_PORT=4280 npm run dev --workspace @echo/web -- --host 127.0.0.1 --port 4173",
       url: "http://127.0.0.1:4173",
-      reuseExistingServer: true,
+      reuseExistingServer: false,
       timeout: 30_000
     }
   ]

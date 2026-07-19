@@ -1,5 +1,5 @@
 // Theme persistence and system-preference resolution.
-// document.documentElement.dataset.theme contract, so 00-foundation.css's
+// document.documentElement.dataset.theme contract, so the shared tokens'
 // [data-theme="dark"] rules apply unmodified.
 const THEME_KEY = "echo.v3.theme";
 

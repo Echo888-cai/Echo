@@ -83,9 +83,7 @@ interface Snapshot {
   sessionId: string | null;
   conversationId: string | null;
   recentSessions: RecentSession[];
-  conversationGroups: any[];
   sessionsLoaded: boolean;
-  historyOpen: boolean;
   resolving: boolean;
   resolvingLabel: string;
   streamingKey: string | null;
@@ -100,9 +98,7 @@ let state: Snapshot = {
   sessionId: readStore(storeKeys.sessionId, null),
   conversationId: readStore(storeKeys.conversationId, null),
   recentSessions: [],
-  conversationGroups: [],
   sessionsLoaded: false,
-  historyOpen: true,
   resolving: false,
   resolvingLabel: "正在检索和思考",
   streamingKey: null,
@@ -205,16 +201,8 @@ export function setRecentSessions(sessions: RecentSession[]) {
 export function getRecentSessions() {
   return state.recentSessions;
 }
-export function setConversationGroups(groups: any[]) {
-  state.conversationGroups = groups;
-  emit();
-}
 export function setSessionsLoaded(loaded: boolean) {
   state.sessionsLoaded = loaded;
-  emit();
-}
-export function setHistoryOpen(open: boolean) {
-  state.historyOpen = open;
   emit();
 }
 export function setResolving(resolving: boolean, label = "正在检索和思考") {
@@ -249,6 +237,11 @@ interface Run {
   startedAt: number;
   reasoningChars: number;
   stage: string | null;
+  plan: string[];
+  /** 取消这一轮的把手。实测一轮研究 13–21s，深度报告 21s+，期间 isViewBusy() 会让追问/
+   *  切换/对比全部 early-return——没有这个把手，用户打错一个字母就只能干等 20 秒。
+   *  每个 run 各自持有，因为多轮研究是并行的（backgrounded run 也要能单独停）。 */
+  controller: AbortController | null;
   snapshot: { thread: Message[]; company: ResearchCompany | null; panel: any; sessionId: string | null; conversationId: string | null };
 }
 
@@ -274,11 +267,25 @@ function snapshotActive() {
   return { thread: getThread(), company: getCompany(), panel: getPanel(), sessionId: getSessionId(), conversationId: getConversationId() };
 }
 
-export function startRun(key: string, label = "正在检索和思考") {
-  running.set(key, { label, startedAt: Date.now(), reasoningChars: 0, stage: null, snapshot: snapshotActive() });
+export function startRun(key: string, label = "正在检索和思考", controller: AbortController | null = null) {
+  running.set(key, { label, startedAt: Date.now(), reasoningChars: 0, stage: null, plan: [], controller, snapshot: snapshotActive() });
   state.resolving = false;
   if (!busyTimer) busyTimer = setInterval(() => emit(), 1000);
   emit();
+}
+
+/** 用户点了停止。只负责 abort——收尾（endRun / 提示）由 run 自己的 finally 走，
+ *  这样"取消"和"正常结束"共用同一条收尾路径，不会漏掉 refreshSessions 之类的步骤。 */
+export function abortRun(key: string) {
+  running.get(key)?.controller?.abort();
+}
+export function abortActiveRun() {
+  abortRun(activeRunKey());
+}
+/** 当前前台这轮能不能停（没有 controller 的轮次——如深度报告的非流式调用——不显示停止按钮，
+ *  显示一个点不动的按钮比没有按钮更糟）。 */
+export function canAbortActive(): boolean {
+  return Boolean(activeRun()?.controller);
 }
 export function endRun(key: string) {
   running.delete(key);
@@ -304,17 +311,26 @@ export function busyElapsedSeconds(): number {
 // this is a copy of the pipeline's real steps, not a decorative clock-driven
 // carousel, so it stays honest about what the backend is actually doing.
 const STAGE_LABELS: Record<string, string> = {
+  routing: "正在识别问题意图与研究深度",
   resolving: "正在定位公司",
   market_financials: "正在读取行情与财务数据",
+  evidence: "正在交叉核验公开证据",
   valuation: "正在计算估值区间",
   generating: "模型正在生成回答",
   fact_check: "正在核对数字与来源"
 };
 
-export function setStage(key: string, stage: string) {
+export function setStage(key: string, stage: string, plan?: string[]) {
   const r = running.get(key);
-  if (r) r.stage = stage;
+  if (r) {
+    r.stage = stage;
+    if (plan?.length) r.plan = plan;
+  }
   if (key === activeRunKey()) emit();
+}
+
+export function stageLabel(stage: string): string {
+  return STAGE_LABELS[stage] || stage;
 }
 
 export function waitPhase(): string {

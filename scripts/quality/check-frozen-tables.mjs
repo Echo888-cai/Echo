@@ -22,7 +22,7 @@
  * 否则下次真的退化时它会替真问题挡枪。
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import process from "node:process";
 
 const REPO_DIR = "packages/db/src/repositories/";
@@ -66,16 +66,8 @@ const ALLOWED = {
     "同上",
   "documentRepository.ts::deleteDocument":
     "文档删除闭环，等前端文档管理页（尚未排期）",
-  "researchMemoryRepository.ts::addFact":
-    "研究记忆（docs/PLAN.md RQ-3）——等 research.ts 接入自动提取",
-  "researchMemoryRepository.ts::listFacts":
-    "研究记忆（docs/PLAN.md RQ-3）——等前端 StockDetail 消费",
-  "researchMemoryRepository.ts::supersedeFact":
-    "研究记忆（docs/PLAN.md RQ-3）——等事实更新逻辑",
   "researchMemoryRepository.ts::addQuestion":
     "研究记忆（docs/PLAN.md RQ-3）——等 research.ts 接入自动提取",
-  "researchMemoryRepository.ts::listQuestions":
-    "研究记忆（docs/PLAN.md RQ-3）——等前端 StockDetail 消费",
   "researchMemoryRepository.ts::resolveQuestion":
     "研究记忆（docs/PLAN.md RQ-3）——等前端手动标记消费",
   "researchMemoryRepository.ts::addReviewDate":
@@ -92,8 +84,6 @@ const ALLOWED = {
   "teamRepository.ts::listMembers": "外部依赖（docs/PLAN.md 第 5 节）——等前端团队管理页",
   "auditRepository.ts::logAction": "外部依赖（docs/PLAN.md 第 5 节）——等 API 中间件接入",
   "auditRepository.ts::listAuditLog": "外部依赖（docs/PLAN.md 第 5 节）——等前端审计页",
-  "billingRepository.ts::listPlans": "外部依赖（docs/PLAN.md 第 5 节）——等前端套餐选择页",
-  "billingRepository.ts::getSubscription": "外部依赖（docs/PLAN.md 第 5 节）——等前端账户页",
   "billingRepository.ts::createSubscription": "外部依赖（docs/PLAN.md 第 5 节）——等支付回调",
   "billingRepository.ts::cancelSubscription": "外部依赖（docs/PLAN.md 第 5 节）——等前端取消订阅",
   "dataSourceFieldsRepository.ts::upsertField": "外部依赖（docs/PLAN.md 第 5 节）——等数据管道接入时登记",
@@ -131,7 +121,10 @@ function stripNonCode(source) {
     .replace(/^\s*import\s*\(?\s*["'][^"']+["']\s*\)?;?\s*$/gm, "");
 }
 
-const files = trackedFiles();
+// `git ls-files` still lists files deleted in the working tree until they are
+// staged. Ignore those paths so this production-usage gate can run during a
+// legitimate cleanup instead of crashing before it checks any repository.
+const files = trackedFiles().filter((file) => existsSync(file));
 const repositoryFiles = files.filter((f) => f.startsWith(REPO_DIR) && f.endsWith("Repository.ts"));
 // 生产调用点：排除 repository 自身、测试、barrel re-export。
 // 测试必须排除——测试调用证明不了生产在用，而 #27 删掉写入方时把旧测试一起删了，

@@ -13,6 +13,43 @@
  */
 import { compactNumberServer, createAnswerComposer, createReportComposer, classifyResearchIntent, hkBuybackToPrompt, RESEARCH_INTENTS } from "@echo/domain";
 
+/**
+ * 用户上传资料 → 提示词事实块。
+ *
+ * 这些文件此前被完整解析、随每轮请求发到后端，然后**被丢弃**：`research.ts` 从不读
+ * `input.documents`，而 UI 还在提示"已上传 N 个资料"。实测拿一份只含"毛利率 42.7%"的
+ * 文档提问，回答里没有 42.7——用户的年报被解析、被发送、被无视。
+ *
+ * 两个诚实约束：
+ * 1. `parseDocument` 只对 text/* 真正抽出文本；PDF 走 "pdf-lite"、图片走 "image-metadata"，
+ *    两者的 `text` 都是空字符串。**空文本的文件必须明说读不到**，不能让模型看见一个文件名
+ *    就假装读过内容——那正好是红线 2 的编造。
+ * 2. 用户资料是**用户自己提供的材料**，不是我们核实过的事实源。它可以支撑定性判断、
+ *    可以被引用，但引用时必须标明出处是上传资料，不能和交易所/财报口径混为一谈。
+ */
+function documentsToPrompt(documents: unknown): string {
+  const list = Array.isArray(documents) ? documents.filter((d: any) => d && (d.name || d.text)) : [];
+  if (!list.length) return "";
+  const blocks = list.slice(0, 6).map((doc: any) => {
+    const name = String(doc.name || "未命名文件");
+    const text = String(doc.text || "").trim();
+    if (!text) {
+      return `- ${name}（${doc.type || "未知格式"}）：**本轮无法读取其正文**（当前只能解析纯文本类文件；PDF/图片尚未接入抽取）。不得据此文件名推测其内容。`;
+    }
+    // 单文件截断，避免一份长年报把整个提示词挤爆；截断要显式告诉模型，
+    // 否则它会把"文档到此为止"当成"文档里没有更多内容"。
+    const limit = 6000;
+    const body = text.length > limit ? `${text.slice(0, limit)}\n…（此处截断，原文更长）` : text;
+    return `- ${name}（${doc.type || "文本"}）正文：\n"""\n${body}\n"""`;
+  });
+  return `
+【用户上传的资料——这是用户自己提供的材料，不是我们核实过的数据源】
+${blocks.join("\n")}
+（引用其中内容时必须标明"据你上传的《文件名》"，不要和交易所行情/财报口径混为一谈；
+文件正文与已核到的财报口径冲突时，**以已核到的财报为准**并明确指出这一冲突，不要默默采信上传件。）
+`;
+}
+
 /** Panel research-status → display label, recovered from the retired stack
  *  (ce58d27:src/server/schemas/agentPanel.js). The composer renders this into
  *  the prompt's 研究状态 line. */
@@ -127,6 +164,7 @@ export function composerFor(company: any) {
     webEvidenceToPrompt,
     financialsToMarkdown,
     buybacksToPrompt,
+    documentsToPrompt,
     beijingMinute
   });
 }

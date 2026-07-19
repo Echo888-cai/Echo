@@ -29,6 +29,8 @@ import { multiplyDecimal, subtractDecimal, ratioDecimal } from "@echo/finance-na
 
 import { searchCompanies } from "@echo/db/repositories/companyRepository.js";
 import { createInvite } from "@echo/db/repositories/authRepository.js";
+import { getSubscription, listPlans } from "@echo/db/repositories/billingRepository.js";
+import { getUserDailyUsage } from "@echo/db/repositories/llmAuditRepository.js";
 import { insertFeedback } from "@echo/db/repositories/feedbackRepository.js";
 import { getUserPreferences, updateUserPreferences } from "@echo/db/repositories/userPreferencesRepository.js";
 import { listNotifications, markAllRead, markRead, unreadCount, insertNotification } from "@echo/db/repositories/notificationsRepository.js";
@@ -426,6 +428,24 @@ export const appRouter = t.router({
       return { code };
     })
   }),
+  membership: t.router({
+    overview: protectedProcedure.query(async ({ ctx }) => {
+      const [plans, subscription, usage] = await Promise.all([
+        listPlans(true),
+        getSubscription(ctx.user.id),
+        getUserDailyUsage(ctx.user.id)
+      ]);
+      const activePlan = plans.find((plan) => plan.id === subscription?.planId) || plans.find((plan) => plan.id === "free") || null;
+      return {
+        account: ctx.user,
+        plan: activePlan,
+        subscription,
+        plans,
+        usage,
+        billingReady: false
+      };
+    })
+  }),
   status: protectedProcedure.output(statusResponseSchema).query(async ({ ctx }) => statusResponseSchema.parse(await buildStatusSnapshot(ctx.user.id))),
   companies: t.router({
     search: protectedProcedure
@@ -488,18 +508,7 @@ export const appRouter = t.router({
   }),
   preferences: t.router({
     get: protectedProcedure.query(async ({ ctx }) => ({ preferences: await getUserPreferences(ctx.user.id) })),
-    update: protectedProcedure.input(preferencesUpdateRequestSchema).mutation(async ({ ctx, input }) => ({ preferences: await updateUserPreferences(ctx.user.id, input) })),
-    // Cheap DB-count-only progress check for the onboarding checklist — no market/LLM calls.
-    onboardingProgress: protectedProcedure
-      .output(z.object({ researched: z.boolean(), watched: z.boolean(), held: z.boolean() }))
-      .query(async ({ ctx }) => {
-        const [conversations, watched, positions] = await Promise.all([
-          listConversations({ limit: 1, userId: ctx.user.id }),
-          listWatchAdds(ctx.user.id),
-          listPositions(ctx.user.id)
-        ]);
-        return { researched: conversations.length > 0, watched: watched.length > 0, held: positions.length > 0 };
-      })
+    update: protectedProcedure.input(preferencesUpdateRequestSchema).mutation(async ({ ctx, input }) => ({ preferences: await updateUserPreferences(ctx.user.id, input) }))
   }),
   portfolio: t.router({
     list: protectedProcedure.query(async ({ ctx }) => ({ positions: await enrichedPositions(ctx.user.id) })),

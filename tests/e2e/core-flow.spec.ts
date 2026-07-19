@@ -2,27 +2,31 @@ import { expect, test } from "@playwright/test";
 
 test("research → follow → portfolio → notification works through the final stack", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: /喧声之外/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /让每一个判断/ })).toBeVisible();
 
   const composer = page.getByRole("textbox", { name: /输入公司名/ });
   await composer.fill("0700.HK 最近怎么样？");
   await expect(page.getByRole("button", { name: "发送" })).toBeEnabled({ timeout: 10_000 });
   await page.getByRole("button", { name: "发送" }).click();
-  // 结论 is the first section of the composer's fixed structure, produced by both
-  // the model prompt and the local no-model fallback (they now share one intent
-  // router). The old assertion looked for 核心判断, which only the retired
-  // deterministic fallback emitted — so it silently only ever covered CI's
-  // no-model path.
-  await expect(page.getByText("结论", { exact: true })).toBeVisible({ timeout: 20_000 });
+  // Direct questions intentionally render a concise answer without forcing a
+  // report-style "结论" heading. Assert the actual answer surface and subject,
+  // so E2E protects completion without undoing depth-aware intent routing.
+  await expect(page.locator(".answer-card")).toContainText("腾讯控股", { timeout: 20_000 });
 
-  await page.getByRole("link", { name: "看盘", exact: true }).click();
+  // Research uses a distraction-free sidebar on desktop (the global topbar is
+  // intentionally absent there), so cross-surface E2E enters the watch route
+  // directly. Watch/portfolio/settings retain the global navigation.
+  await page.goto("/watch");
   await expect(page).toHaveURL(/\/watch/);
-  await expect(page.getByRole("heading", { name: "腾讯控股", exact: true })).toBeVisible({ timeout: 10_000 });
-
-  await page.getByRole("button", { name: "＋ 添加" }).click();
+  const emptyAdd = page.getByRole("button", { name: /直接添加代码关注/ });
+  const headerAdd = page.getByRole("button", { name: "＋ 添加" });
+  await expect(emptyAdd.or(headerAdd)).toBeVisible({ timeout: 10_000 });
+  if (await emptyAdd.isVisible()) await emptyAdd.click();
+  else await headerAdd.click();
   await page.getByPlaceholder(/公司名或代码/).fill("0700.HK");
   await page.getByRole("button", { name: "添加", exact: true }).click();
   await expect(page.getByPlaceholder(/公司名或代码/)).toBeHidden();
+  await expect(page.locator(".wd-ticker", { hasText: "0700.HK" })).toBeVisible({ timeout: 10_000 });
 
   await page.getByRole("link", { name: "持仓", exact: true }).click();
   await page.getByRole("button", { name: "＋ 记一笔持仓" }).click();

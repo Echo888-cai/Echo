@@ -19,7 +19,8 @@
   "dependencies": {
     "@echo/data-plane": "*",
     "@echo/db": "*",
-    "@echo/domain": "*"
+    "@echo/domain": "*",
+    "ioredis": "^5.11.1"
   },
   "devDependencies": {
     "typescript": "^6.0.3"

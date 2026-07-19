@@ -1,299 +1,190 @@
-// Global research snapshot, watch context and grouped session history.
-import { useEffect } from "react";
-import { useNavigate } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
-import { watchApi } from "../lib/api";
-import {
-  useResearchStore,
-  setHistoryOpen,
-  running,
-  type RecentSession
-} from "../lib/researchStore";
+// Conversation-first sidebar: new research, history, and account membership.
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Link, useNavigate } from "@tanstack/react-router";
+import { useAuth } from "../lib/auth-context";
+import { useResearchStore, running, type RecentSession } from "../lib/researchStore";
 import { refreshSessions, deleteSession, clearAllSessions, loadSession, clearResearch } from "../lib/researchActions";
-import { marketLabelOf, isNum, fmtSigned, dirClass, fmtPct, pnlDir } from "../lib/format";
 
-function SnapshotCard({ company, panel, thread }: { company: any; panel: any; thread: any[] }) {
-  const name = panel?.companyName || company?.nameZh || "未选择公司";
-  const ticker = company?.ticker || panel?.ticker || "";
-  const marketLabel = marketLabelOf(ticker);
-  const confLevel = panel?.confidence === "高" ? "high" : panel?.confidence === "低" ? "low" : "mid";
-
-  const focusOthers = (() => {
-    if (!Array.isArray(thread)) return [];
-    for (let i = thread.length - 1; i >= 0; i--) {
-      const m = thread[i];
-      if (m?.role === "assistant" && Array.isArray(m.meta?.otherHoldings) && m.meta.otherHoldings.length) return m.meta.otherHoldings;
-    }
-    return [];
-  })();
-  const focusLabel = focusOthers.length ? "本轮聚焦" : "研究公司";
-
-  const priceRaw = panel?.price?.value && panel.price.value !== "暂不可用" ? String(panel.price.value) : "";
-  const [priceNum, ...ccyParts] = priceRaw.split(" ");
-  const ccy = ccyParts.join(" ");
-  const changeRaw = panel?.price?.change && panel.price.change !== "暂不可用" ? String(panel.price.change) : "";
-  const chgNum = parseFloat(changeRaw);
-  const chgDir = !changeRaw || Number.isNaN(chgNum) ? "is-flat" : chgNum > 0 ? "is-up" : chgNum < 0 ? "is-down" : "is-flat";
-  const chgText = changeRaw ? (chgNum > 0 && !changeRaw.startsWith("+") ? `+${changeRaw}` : changeRaw) : "";
-
-  const metricValue = (metricName: string) => {
-    const found = (panel?.metrics || []).find((item: any) => item.name === metricName);
-    const value = found?.value;
-    return value && value !== "暂不可用" ? String(value) : "";
-  };
-  const pe = metricValue("PE");
-  const cap = metricValue("市值");
-  const ranges = panel?.price?.ranges || null;
-  const pctChip = (label: string, pct: number | null | undefined) => {
-    if (pct === null || pct === undefined || Number.isNaN(Number(pct))) return null;
-    const n = Number(pct);
-    const dir = n > 0 ? "is-up" : n < 0 ? "is-down" : "is-flat";
-    return (
-      <div className="snapshot-metric" key={label}>
-        <span>{label}</span>
-        <strong className={`rng ${dir}`}>
-          {n > 0 ? "+" : ""}
-          {n}%
-        </strong>
-      </div>
-    );
-  };
-
-  const dual = company?.dualListing;
-  const askedHk = !!(dual && dual.asked && /\.HK$/i.test(dual.asked));
-
-  return (
-    <section className="research-snapshot">
-      <div className="snapshot-head">
-        <div className="snapshot-id">
-          <p>{focusLabel}</p>
-          <h2>{name}</h2>
-          <span>{ticker ? `${ticker}${marketLabel ? ` · ${marketLabel}` : ""}` : "输入公司名、港股或美股代码"}</span>
-        </div>
-        {panel?.confidence ? (
-          <span className={`conf conf-${confLevel}`} title={panel.confidenceNote || undefined}>
-            置信度 {panel.confidence}
-            {panel.confidenceNote ? " ⓘ" : ""}
-          </span>
-        ) : null}
-      </div>
-      {focusOthers.length ? (
-        <div className="focus-mini">
-          <span className="fm-chip fm-main">{ticker || name}</span>
-          {focusOthers.map((h: any, i: number) => (
-            <span className="fm-chip" key={i}>
-              {h.ticker || h.name}
-              {isNum(h.pnlPct) ? <em className={dirClass(h.pnlPct)}> {fmtSigned(h.pnlPct)}</em> : null}
-            </span>
-          ))}
-        </div>
-      ) : null}
-      {dual ? (
-        <div
-          className="snapshot-dual"
-          title={`同一家公司在港股和美股双重上市；FMP 免费档只覆盖美股 ADR，所以基本面与估值统一按美股口径。${askedHk ? "你问的是港股，盈亏请按港股价 + HKD 成本算。" : "行情两地可分别查。"}`}
-        >
-          <span className="dual-badge">双重上市</span>
-          <span className="dual-text">
-            港股 {dual.hk}｜美股 {dual.us} · 基本面按美股 ADR 口径{askedHk ? "；你问港股 → 盈亏按港股口径" : ""}
-          </span>
-        </div>
-      ) : null}
-      {priceNum ? (
-        <div className="snapshot-quote">
-          <span className="price">{priceNum}</span>
-          {ccy ? <span className="ccy">{ccy}</span> : null}
-          {chgText ? <span className={`chg ${chgDir}`}>{chgText}</span> : null}
-        </div>
-      ) : null}
-      {pe || cap || ranges ? (
-        <div className="snapshot-metrics">
-          {pe ? (
-            <div className="snapshot-metric">
-              <span>TTM PE</span>
-              <strong>{pe}</strong>
-            </div>
-          ) : null}
-          {cap ? (
-            <div className="snapshot-metric">
-              <span>市值</span>
-              <strong>{cap}</strong>
-            </div>
-          ) : null}
-          {ranges ? pctChip("近1月", ranges.oneMonthPct) : null}
-          {ranges ? pctChip("年初至今", ranges.ytdPct) : null}
-        </div>
-      ) : null}
-    </section>
-  );
+function sessionTime(value?: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const now = new Date();
+  const sameDay = date.toDateString() === now.toDateString();
+  if (sameDay) return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString()) return "昨天";
+  return date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
 }
 
-const CTX_STATUS: Record<string, { label: string; cls: string }> = {
-  falsified: { label: "已触发证伪", cls: "wd-falsified" },
-  at_risk: { label: "有风险", cls: "wd-risk" },
-  intact: { label: "逻辑还在", cls: "wd-intact" }
-};
-
-// EA-5.4: current company's watch-desk status + position P&L, read from the
-// already-shared ["watch","desk"] query cache (same key /watch uses) rather
-// than firing a dedicated request.
-function ContextCard({ company }: { company: any }) {
-  const deskQuery = useQuery({ queryKey: ["watch", "desk"], queryFn: () => watchApi.desk() });
-  if (!company?.ticker) return null;
-  const card = deskQuery.data?.desk?.cards?.find((c) => c.ticker === company.ticker);
-  if (!card) return null;
-  const st = CTX_STATUS[card.status] || CTX_STATUS.intact;
+function SessionItem({ session, active, onLoad, onDelete }: {
+  session: RecentSession;
+  active: boolean;
+  onLoad: () => void;
+  onDelete: () => void;
+}) {
+  const inFlight = running.has(session.id);
+  const title = session.title || session.question || session.companyName || session.ticker || "未命名对话";
   return (
-    <section className="context-card">
-      <div className="context-row">
-        <span>看盘状态</span>
-        <span className={`wd-status ${st.cls}`}>{st.label}</span>
-      </div>
-      {card.held && typeof card.returnPct === "number" ? (
-        <div className="context-row">
-          <span>持仓盈亏</span>
-          <b className={pnlDir(card.returnPct)}>{fmtPct(card.returnPct)}</b>
-        </div>
-      ) : (
-        <div className="context-row is-muted">
-          <span>持仓</span>
-          <b>未持有</b>
-        </div>
-      )}
-    </section>
-  );
-}
-
-// EA-5.1: sessions sharing a conversationId (companies switched to within one
-// continuous conversation) group under a shared header; single-session groups
-// render as a flat row.
-function groupSessionsForSidebar(sessions: RecentSession[]) {
-  const groups = new Map<string, RecentSession[]>();
-  for (const session of sessions) {
-    const gid = session.conversationId || session.id;
-    const list = groups.get(gid) || [];
-    list.push(session);
-    groups.set(gid, list);
-  }
-  return [...groups.values()];
-}
-
-function SessionItem({ session, activeSessionId, nested, isRunning, onLoad, onDelete }: { session: RecentSession; activeSessionId: string | null; nested: boolean; isRunning: boolean; onLoad: () => void; onDelete: () => void }) {
-  const active = session.id === activeSessionId;
-  const title = session.title || session.question || session.companyName || session.ticker || "未命名研究";
-  const company = session.companyName || session.ticker || "研究对象";
-  return (
-    <div className={`session-item ${nested ? "is-nested" : ""} ${active ? "is-active" : ""} ${isRunning ? "is-running" : ""}`}>
+    <div className={`session-item ${active ? "is-active" : ""} ${inFlight ? "is-running" : ""}`}>
       <button className="session-open" type="button" onClick={onLoad}>
-        <strong>{nested ? company : title}</strong>
-        <span>
-          {isRunning ? (
-            <>
-              <i className="session-spin" aria-hidden="true" />
-              正在生成…
-            </>
-          ) : nested ? (
-            session.ticker || ""
-          ) : (
-            company
-          )}
-        </span>
+        <strong>{title}<time>{sessionTime(session.updatedAt)}</time></strong>
+        <span>{inFlight ? <><i className="session-spin" aria-hidden="true" />研究中</> : session.companyName || session.ticker || "持续对话"}</span>
       </button>
-      {isRunning ? null : (
-        <button className="session-delete" type="button" aria-label="删除历史研究" onClick={onDelete}>
-          ×
-        </button>
-      )}
+      {!inFlight ? <button className="session-delete" type="button" aria-label="删除对话" onClick={onDelete}>×</button> : null}
     </div>
+  );
+}
+
+type DeleteIntent =
+  | { kind: "single"; id: string; title: string }
+  | { kind: "all"; count: number };
+
+function DeleteConfirm({ intent, busy, onCancel, onConfirm }: {
+  intent: DeleteIntent | null;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!intent) return;
+    cancelRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) onCancel();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [busy, intent, onCancel]);
+
+  if (!intent) return null;
+
+  const isAll = intent.kind === "all";
+  const title = isAll ? "清空全部研究对话？" : "删除这条研究对话？";
+  const detail = isAll ? `将永久删除 ${intent.count} 条历史研究及其上下文。` : `“${intent.title}”`;
+
+  return createPortal(
+    <div
+      className="echo-dialog-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !busy) onCancel();
+      }}
+    >
+      <section
+        className="echo-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="delete-dialog-title"
+        aria-describedby="delete-dialog-description"
+      >
+        <div className="echo-dialog-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32">
+            <path d="M8 10h16M13 10V7h6v3m-9 0 1 15h10l1-15M14 14v7m4-7v7" />
+          </svg>
+        </div>
+        <p className="echo-dialog-eyebrow">ECHO / RESEARCH HISTORY</p>
+        <h2 id="delete-dialog-title">{title}</h2>
+        <p id="delete-dialog-description" className="echo-dialog-detail">{detail}</p>
+        <p className="echo-dialog-warning">删除后无法恢复，相关追问也将一并移除。</p>
+        <div className="echo-dialog-actions">
+          <button ref={cancelRef} type="button" onClick={onCancel} disabled={busy}>保留对话</button>
+          <button className="is-danger" type="button" onClick={onConfirm} disabled={busy}>
+            {busy ? "正在删除…" : isAll ? "确认清空" : "确认删除"}
+          </button>
+        </div>
+      </section>
+    </div>,
+    document.body
   );
 }
 
 function SessionHistory() {
   const store = useResearchStore();
   const navigate = useNavigate();
-  const activeSessionId = store.sessionId;
-  const count = store.recentSessions.length;
+  const [deleteIntent, setDeleteIntent] = useState<DeleteIntent | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
-  useEffect(() => {
-    void refreshSessions();
-    // Runs once per Shell mount (route navigation), not once-per-app-boot like
-    // Keep sidebar history current after
-    // e.g. deleting/loading a session on another tab.
-  }, []);
+  useEffect(() => { void refreshSessions(); }, []);
 
-  const toggle = (
-    <button className={`history-toggle ${store.historyOpen ? "is-open" : ""}`} type="button" aria-expanded={store.historyOpen} onClick={() => setHistoryOpen(!store.historyOpen)}>
-      <span>历史研究{count ? ` · ${count}` : ""}</span>
-      <i>{store.historyOpen ? "收起" : "展开"}</i>
-    </button>
-  );
-
-  if (!store.historyOpen) {
-    return <section className="history-panel collapsed">{toggle}</section>;
+  async function confirmDelete() {
+    if (!deleteIntent || deleteBusy) return;
+    setDeleteBusy(true);
+    const deleted = deleteIntent.kind === "all"
+      ? await clearAllSessions()
+      : await deleteSession(deleteIntent.id);
+    setDeleteBusy(false);
+    if (deleted) setDeleteIntent(null);
   }
 
-  const groups = groupSessionsForSidebar(store.recentSessions);
+  const count = store.recentSessions.length;
   const goto = (id: string) => void loadSession(id, () => navigate({ to: "/" }));
 
   return (
-    <section className="history-panel">
-      {toggle}
-      {count ? (
-        <div className="history-actions">
-          <button type="button" onClick={() => void clearAllSessions()}>
-            清空全部
-          </button>
-        </div>
-      ) : null}
-      {!store.sessionsLoaded ? (
-        <div className="history-empty">正在读取历史...</div>
-      ) : count ? (
-        <div className="session-list">
-          {groups.map((sessions) => {
-            if (sessions.length <= 1) {
-              const s = sessions[0];
-              return <SessionItem key={s.id} session={s} activeSessionId={activeSessionId} nested={false} isRunning={running.has(s.id)} onLoad={() => goto(s.id)} onDelete={() => void deleteSession(s.id)} />;
-            }
-            const first = sessions[0];
-            const groupTitle = first.title || first.question || first.companyName || "新研究";
-            const activeInGroup = sessions.some((s) => s.id === activeSessionId);
-            return (
-              <div className={`conv-group ${activeInGroup ? "is-active-group" : ""}`} key={first.conversationId || first.id}>
-                <div className="conv-group-head">
-                  <strong>{groupTitle}</strong>
-                  <span className="conv-count">{sessions.length} 家公司</span>
-                </div>
-                <div className="conv-companies">
-                  {sessions.map((s) => (
-                    <SessionItem key={s.id} session={s} activeSessionId={activeSessionId} nested isRunning={running.has(s.id)} onLoad={() => goto(s.id)} onDelete={() => void deleteSession(s.id)} />
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="history-empty">还没有历史研究。完成第一轮回答后会自动保存。</div>
-      )}
-    </section>
+    <>
+      <section className="history-panel">
+        <header className="history-head">
+          <h2 className="history-title">
+            研究对话
+            {count > 0 ? <span className="history-count" aria-label={`${count} 条对话`}>{count}</span> : null}
+          </h2>
+          {count > 0 ? (
+            <button className="history-clear" type="button" onClick={() => setDeleteIntent({ kind: "all", count })}>
+              清空
+            </button>
+          ) : null}
+        </header>
+        {!store.sessionsLoaded ? <div className="history-empty">正在读取对话…</div> : count ? (
+          <div className="session-list">
+            {store.recentSessions.map((session) => (
+              <SessionItem
+                key={session.id}
+                session={session}
+                active={session.id === store.sessionId}
+                onLoad={() => goto(session.id)}
+                onDelete={() => setDeleteIntent({
+                  kind: "single",
+                  id: session.id,
+                  title: session.title || session.question || session.companyName || session.ticker || "未命名研究"
+                })}
+              />
+            ))}
+          </div>
+        ) : <div className="history-empty">完成第一轮研究后，可从这里继续追问。</div>}
+      </section>
+      <DeleteConfirm
+        intent={deleteIntent}
+        busy={deleteBusy}
+        onCancel={() => { if (!deleteBusy) setDeleteIntent(null); }}
+        onConfirm={() => void confirmDelete()}
+      />
+    </>
+  );
+}
+
+function AccountEntry() {
+  const auth = useAuth();
+  const label = auth.user?.displayName || auth.user?.username || "Echo Member";
+  const initials = label.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase() || "E";
+  return (
+    <Link className="sidebar-account" to="/membership" aria-label="打开会员与账号">
+      <span className="account-avatar">{initials}</span>
+      <span className="account-copy"><strong>{label}</strong><small>FOUNDER ACCESS</small></span>
+      <span className="account-arrow">↗</span>
+    </Link>
   );
 }
 
 export function Sidebar() {
-  const store = useResearchStore();
   const navigate = useNavigate();
   return (
-    <aside className="sidebar">
-      <button className="primary wide" type="button" onClick={() => clearResearch(() => navigate({ to: "/" }))}>
-        新建研究
+    <aside className="sidebar conversation-sidebar">
+      <button className="primary wide new-research" type="button" onClick={() => clearResearch(() => navigate({ to: "/" }))}>
+        <span>＋</span> 新建研究对话
       </button>
-      <SnapshotCard company={store.company} panel={store.panel} thread={store.thread} />
-      <ContextCard company={store.company} />
       <SessionHistory />
-      <div className="sidebar-tagline">
-        <b>Seek signal. Ignore noise.</b>
-        喧声之外，见真知。研究参考，非投资建议。
-      </div>
+      <AccountEntry />
     </aside>
   );
 }

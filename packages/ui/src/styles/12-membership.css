@@ -1,0 +1,63 @@
+.membership-page {
+  min-height: calc(100vh - 60px);
+  padding: 64px clamp(24px, 6vw, 96px) 80px;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 78% 6%, color-mix(in srgb, var(--blue) 8%, transparent), transparent 29%),
+    linear-gradient(180deg, color-mix(in srgb, var(--panel) 92%, transparent), var(--bg));
+}
+
+.membership-hero { max-width: 1120px; margin: 0 auto 46px; }
+.membership-back { margin: 0 0 56px; padding: 0; border: 0; color: var(--muted); background: transparent; font-size: 12px; cursor: pointer; }
+.membership-hero > p:first-of-type,
+.membership-section-head p,
+.member-overview article > span:first-child,
+.member-identity div > span,
+.account-actions span { margin: 0; color: var(--muted-2); font-size: 9px; font-weight: 760; letter-spacing: .18em; }
+.membership-hero h1 { margin: 14px 0 18px; font-size: clamp(48px, 6vw, 88px); font-weight: 520; line-height: 1.01; letter-spacing: -.06em; }
+.membership-hero h1 span { color: var(--muted-2); }
+.membership-lede { max-width: 600px; margin: 0; color: var(--muted); font-size: 15px; line-height: 1.75; }
+
+.membership-loading { max-width: 1120px; margin: 0 auto; padding: 32px; border: 1px solid var(--hairline); border-radius: 20px; background: var(--panel); color: var(--muted); }
+.membership-loading.is-error { color: var(--danger); }
+.member-overview { display: grid; grid-template-columns: 1.3fr .8fr 1fr; gap: 12px; max-width: 1120px; margin: 0 auto 54px; }
+.member-overview article { min-height: 166px; padding: 22px; border: 1px solid var(--hairline); border-radius: 20px; background: color-mix(in srgb, var(--panel) 92%, transparent); box-shadow: var(--sh-1); }
+.member-identity { display: grid; grid-template-columns: 58px minmax(0, 1fr) auto; align-items: center; gap: 16px; }
+.member-monogram { display: grid; place-items: center; width: 58px; height: 58px; border-radius: 50%; color: #f6f3eb; background: linear-gradient(145deg, #57554f, #111); font-size: 14px; font-weight: 700; }
+.member-identity h2 { margin: 6px 0 3px; overflow: hidden; font-size: 18px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.member-identity p, .member-plan-summary p, .member-usage p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.member-role { align-self: start; padding: 5px 8px; border: 1px solid var(--hairline); border-radius: 999px; font-size: 8px; font-style: normal; }
+.member-plan-summary { display: flex; flex-direction: column; justify-content: space-between; }
+.member-plan-summary strong { display: block; margin: 18px 0 4px; font-size: 25px; font-weight: 580; letter-spacing: -.03em; }
+.member-usage { display: flex; flex-direction: column; justify-content: center; }
+.member-usage > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.member-usage strong { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.member-usage small { color: var(--muted); font-size: 10px; font-weight: 500; }
+.usage-track { height: 5px; margin: 18px 0 12px; overflow: hidden; border-radius: 999px; background: var(--panel-soft); }
+.usage-track i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--blue), color-mix(in srgb, var(--blue) 45%, #fff)); }
+
+.membership-plans, .account-actions { max-width: 1120px; margin: 0 auto; }
+.membership-section-head { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 20px; }
+.membership-section-head h2, .account-actions h2 { margin: 7px 0 0; font-size: 26px; font-weight: 600; letter-spacing: -.035em; }
+.membership-section-head > span { color: var(--muted); font-size: 11px; }
+.plan-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.plan-card { position: relative; min-height: 390px; padding: 24px; border: 1px solid var(--hairline); border-radius: 22px; background: var(--panel); box-shadow: var(--sh-1); }
+.plan-card.is-current { color: #f4f2eb; border-color: #151515; background: linear-gradient(150deg, #292a28, #090a09 72%); box-shadow: 0 28px 60px rgba(0,0,0,.18); }
+.plan-card-head { display: flex; align-items: center; justify-content: space-between; color: var(--muted-2); font-size: 9px; font-weight: 760; letter-spacing: .16em; }
+.plan-card-head em { padding: 4px 8px; border: 1px solid rgba(255,255,255,.15); border-radius: 999px; color: inherit; font-size: 8px; font-style: normal; letter-spacing: .08em; }
+.plan-card h3 { margin: 28px 0 10px; font-size: 24px; font-weight: 600; }
+.plan-price { display: flex; align-items: baseline; gap: 5px; }
+.plan-price strong { font-size: 31px; font-weight: 540; letter-spacing: -.04em; }
+.plan-price span, .plan-card > p { color: var(--muted); font-size: 11px; }
+.plan-card > p { min-height: 40px; margin: 12px 0 18px; line-height: 1.6; }
+.plan-card ul { display: grid; gap: 9px; min-height: 118px; margin: 0 0 20px; padding: 0; list-style: none; color: inherit; font-size: 12px; }
+.plan-card li { opacity: .78; }
+.plan-card button { width: 100%; min-height: 42px; border: 1px solid var(--hairline); border-radius: 11px; color: inherit; background: transparent; font-size: 11px; font-weight: 650; }
+.plan-card.is-current button { border-color: rgba(255,255,255,.14); background: rgba(255,255,255,.07); }
+.billing-note { margin: 14px 2px 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.account-actions { display: flex; align-items: center; justify-content: space-between; gap: 28px; margin-top: 58px; padding: 26px 0 0; border-top: 1px solid var(--hairline); }
+.account-actions p { max-width: 620px; margin: 9px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.account-actions button { flex: none; min-width: 112px; min-height: 42px; border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line)); border-radius: 11px; color: var(--danger); background: transparent; font-size: 11px; font-weight: 650; cursor: pointer; }
+
+@media (max-width: 900px) { .member-overview, .plan-grid { grid-template-columns: 1fr; } .plan-card { min-height: auto; } .plan-card ul { min-height: auto; } }
+@media (max-width: 600px) { .membership-page { padding: 36px 18px 72px; } .membership-back { margin-bottom: 40px; } .membership-hero h1 { font-size: 45px; } .member-identity { grid-template-columns: 48px minmax(0, 1fr); } .member-monogram { width: 48px; height: 48px; } .member-role { display: none; } .membership-section-head, .account-actions { align-items: flex-start; flex-direction: column; } }

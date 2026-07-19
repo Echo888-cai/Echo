@@ -7,125 +7,86 @@
   padding: 0 28px;
 }
 
-.desk-head {
-  width: min(100%, 860px);
-  margin: 26px auto 2px;
-  padding: 8px 0 14px;
-  border-bottom: 1px solid var(--hairline);
-  animation: riseIn 0.4s var(--ease-out);
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 12px;
+.desk.has-thread {
+  height: calc(100dvh - 72px);
+  max-height: calc(100dvh - 72px);
+  overflow: hidden;
 }
 
-.desk-head p {
-  margin: 0 0 7px;
-  color: var(--blue-ink);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+/* Cursor-style pipeline status — real stage text + L→R shimmer */
+.working-status {
+  margin: 0 0 14px;
 }
 
-.desk-head h1 {
-  margin: 0 0 4px;
-  font-size: 27px;
-  font-weight: 680;
-  line-height: 1.14;
-  letter-spacing: -0.025em;
+.working-status-text {
+  display: inline-block;
+  max-width: 100%;
+  font-size: 13px;
+  font-weight: 520;
+  letter-spacing: -0.01em;
+  background: linear-gradient(
+    90deg,
+    var(--muted-2) 0%,
+    var(--muted-2) 36%,
+    var(--ink) 50%,
+    var(--muted-2) 64%,
+    var(--muted-2) 100%
+  );
+  background-size: 220% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: working-shimmer 1.7s linear infinite;
 }
 
-.desk-head span {
-  color: var(--muted);
-  font-size: 14px;
+.working-status-text em {
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.88;
 }
 
-.desk-export-btn {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  margin-bottom: 4px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--panel);
-  color: var(--ink-2);
-  cursor: pointer;
-  transition: transform 0.16s var(--ease), border-color 0.16s var(--ease-soft), background 0.16s var(--ease-soft);
-}
-.desk-export-btn:hover { border-color: var(--line-strong); background: var(--panel-soft); }
-.desk-export-btn svg { width: 17px; height: 17px; }
-
-/* EA-5.3：本次对话涉及的公司分节 Tab（只在同一对话里换过 ≥2 家公司时出现） */
-.company-tabs {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: min(100%, 860px);
-  margin: 12px auto 0;
-  padding-bottom: 10px;
-  overflow-x: auto;
-  border-bottom: 1px solid var(--hairline);
+@keyframes working-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
 }
 
-.company-tab {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  flex: none;
-  padding: 7px 14px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--ink-2);
-  cursor: pointer;
-  transition: background 0.16s var(--ease-soft), border-color 0.16s var(--ease-soft);
+@media (prefers-reduced-motion: reduce) {
+  .working-status-text {
+    animation: none;
+    color: var(--muted);
+    -webkit-text-fill-color: var(--muted);
+    background: none;
+  }
 }
 
-.company-tab:hover {
-  background: var(--panel-soft);
+.answer-card.stream-card.is-working {
+  padding-bottom: 18px;
 }
 
-.company-tab.is-active {
-  border-color: rgba(191, 92, 62, 0.24);
-  background: var(--blue-soft);
-  color: var(--ink);
-}
-
-.company-tab strong {
-  font-size: 12.5px;
-  font-weight: 650;
-  white-space: nowrap;
-}
-
-.company-tab span {
-  font-size: 10.5px;
-  color: var(--muted-2);
-  white-space: nowrap;
+.answer-card.stream-card .working-status {
+  margin-bottom: 12px;
 }
 
 .conversation {
   flex: 1;
+  min-height: 0;
   overflow: auto;
   width: min(100%, 860px);
   margin: 0 auto;
-  padding: 26px 0 200px;
+  padding: 20px 0 12px;
   scroll-behavior: smooth;
 }
 
 .conversation.is-empty {
   display: grid;
   align-items: center;
-  padding-top: 0;
-  padding-bottom: 220px;
+  padding: 0;
 }
 
 .message {
   display: flex;
-  margin-bottom: 24px;
+  margin-bottom: 18px;
   animation: riseIn 0.42s var(--ease-out) both;
 }
 
@@ -152,7 +113,7 @@
 .answer-card {
   width: 100%;
   max-width: 100%;
-  padding: 24px 28px 22px;
+  padding: 20px 24px 18px;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-lg);
   background: var(--panel);
@@ -163,6 +124,28 @@
 
 .answer-card:hover {
   box-shadow: var(--sh-3);
+}
+
+.answer-card.is-brief {
+  max-width: 720px;
+  padding: 20px 24px 18px;
+  border-radius: 18px;
+  box-shadow: var(--sh-1);
+}
+
+.answer-card.is-brief .answer-brand {
+  margin-bottom: 10px;
+}
+
+.answer-card.is-brief .answer-mark i {
+  background: var(--blue);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 13%, transparent);
+}
+
+.answer-card.is-brief p {
+  margin-bottom: 9px;
+  font-size: 15px;
+  line-height: 1.68;
 }
 
 .answer-brand {

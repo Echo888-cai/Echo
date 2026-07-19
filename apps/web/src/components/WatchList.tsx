@@ -29,6 +29,12 @@ const WD_REFRESH = (
     <path d="M21 3v6h-6" />
   </svg>
 );
+const WL_SEARCH = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" aria-hidden="true">
+    <circle cx="10.8" cy="10.8" r="6.5" />
+    <path d="m16 16 4 4" />
+  </svg>
+);
 
 function exBadge(marketOrTicker: string) {
   const mkt = marketOrTicker === "US" || marketOrTicker === "HK" || marketOrTicker === "unsupported" ? marketOrTicker : detectMarket(marketOrTicker);
@@ -162,22 +168,45 @@ const WATCH_FILTERS: [string, string][] = [
   ["hk", "港股"],
   ["us", "美股"],
   ["held", "持仓"],
-  ["risk", "预警"]
+  ["risk", "预警"],
+  ["earnings", "近期财报"]
 ];
 const WATCH_SORTS: [string, string][] = [
   ["urgency", "紧急度"],
   ["change", "涨跌"],
+  ["move", "波动"],
   ["name", "名称"]
 ];
 
-function applyWatchView(cards: WatchCard[], filter: string, sort: string): WatchCard[] {
+function daysUntil(date: string | null | undefined): number | null {
+  if (!date) return null;
+  const target = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(target.getTime())) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.ceil((target.getTime() - today.getTime()) / 86_400_000);
+}
+
+function hasUpcomingEarnings(card: WatchCard): boolean {
+  const days = daysUntil(card.earnings?.nextDate);
+  return days !== null && days >= 0 && days <= 45;
+}
+
+function applyWatchView(cards: WatchCard[], filter: string, sort: string, query: string): WatchCard[] {
   let out = cards;
   if (filter === "hk") out = out.filter((c) => c.market === "HK");
   else if (filter === "us") out = out.filter((c) => c.market === "US");
   else if (filter === "held") out = out.filter((c) => c.held);
   else if (filter === "risk") out = out.filter((c) => c.status === "falsified" || c.status === "at_risk");
+  else if (filter === "earnings") out = out.filter(hasUpcomingEarnings);
+  const needle = query.trim().toLocaleLowerCase();
+  if (needle) {
+    out = out.filter((c) => [c.companyName, c.ticker, c.thesis, c.topEvent?.title].some((value) => String(value || "").toLocaleLowerCase().includes(needle)));
+  }
   if (sort === "change") {
     out = [...out].sort((a, b) => (b.changePct ?? -Infinity) - (a.changePct ?? -Infinity));
+  } else if (sort === "move") {
+    out = [...out].sort((a, b) => Math.abs(b.changePct ?? 0) - Math.abs(a.changePct ?? 0));
   } else if (sort === "name") {
     out = [...out].sort((a, b) => String(a.companyName).localeCompare(String(b.companyName), "zh"));
   }
@@ -229,6 +258,7 @@ export function WatchListBody({ desk, loaded, onRefetch }: { desk: WatchDesk | n
   const navigate = useNavigate();
   const [filter, setFilter] = useState("all");
   const [sort, setSort] = useState("urgency");
+  const [query, setQuery] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [addBusy, setAddBusy] = useState(false);
   const [addError, setAddError] = useState("");
@@ -296,7 +326,7 @@ export function WatchListBody({ desk, loaded, onRefetch }: { desk: WatchDesk | n
     setTimeout(() => setRefreshing(false), 600);
   }
 
-  const visible = useMemo(() => applyWatchView(cards, filter, sort), [cards, filter, sort]);
+  const visible = useMemo(() => applyWatchView(cards, filter, sort, query), [cards, filter, sort, query]);
 
   if (!cards.length) {
     if (!loaded) return <div className="wd-loading">正在加载看盘…</div>;
@@ -336,6 +366,11 @@ export function WatchListBody({ desk, loaded, onRefetch }: { desk: WatchDesk | n
   const timeText = at && !Number.isNaN(at.getTime()) ? `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")} 更新` : "";
 
   const riskCount = cards.filter((c) => c.status !== "intact").length;
+  const earningsCount = cards.filter(hasUpcomingEarnings).length;
+  const heldCount = cards.filter((c) => c.held).length;
+  const quotedCount = cards.filter((c) => c.priceStatus === "ok").length;
+  const breadthTotal = ups + downs;
+  const upShare = breadthTotal ? Math.round((ups / breadthTotal) * 100) : 50;
 
   return (
     <div className="watchdesk">
@@ -343,10 +378,11 @@ export function WatchListBody({ desk, loaded, onRefetch }: { desk: WatchDesk | n
         <div>
           <p className="hero-eyebrow">
             <span className="hero-spark" />
-            看盘
+            MARKET MONITOR
             {desk?.partial ? <span className="wd-partial">事件补全中…</span> : null}
           </p>
-          <h2 className="wd-title">{counts.total || cards.length} 只关注中的股票</h2>
+          <h2 className="wd-title">关注与证据</h2>
+          <p className="wd-subtitle">行情只是表面。把价格、持仓、财报日与证伪信号放到同一个判断面板里。</p>
         </div>
         <div className="wd-summary">
           <Link className="wd-portfolio-link" to="/portfolio">
@@ -357,20 +393,44 @@ export function WatchListBody({ desk, loaded, onRefetch }: { desk: WatchDesk | n
           </button>
         </div>
       </div>
+      <div className="wd-kpis" aria-label="看盘概览">
+        <button type="button" className={filter === "all" ? "is-active" : ""} aria-pressed={filter === "all"} onClick={() => setFilter("all")}>
+          <span>关注标的</span>
+          <strong>{cards.length}</strong>
+          <small>{quotedCount}/{cards.length} 行情已更新</small>
+        </button>
+        <button type="button" className={`is-risk ${filter === "risk" ? "is-active" : ""}`} aria-pressed={filter === "risk"} onClick={() => setFilter("risk")}>
+          <span>需要复核</span>
+          <strong>{riskCount}</strong>
+          <small>{riskCount ? "证伪条件有变化" : "当前没有预警"}</small>
+        </button>
+        <button type="button" className={filter === "earnings" ? "is-active" : ""} aria-pressed={filter === "earnings"} onClick={() => setFilter("earnings")}>
+          <span>45 天内财报</span>
+          <strong>{earningsCount}</strong>
+          <small>点击查看财报窗口</small>
+        </button>
+        <button type="button" className={filter === "held" ? "is-active" : ""} aria-pressed={filter === "held"} onClick={() => setFilter("held")}>
+          <span>已有持仓</span>
+          <strong>{heldCount}</strong>
+          <small>联动成本与盈亏</small>
+        </button>
+      </div>
       <div className="wd-overview">
         {bits}
         <span className="wdo-sep" aria-hidden="true" />
-        <span className="wdo-updn">
+        <span className="wdo-updn" aria-label={`上涨 ${ups}，下跌 ${downs}`}>
           {ups || downs ? (
             <>
               <b className="is-up">↑ {ups}</b>
               <b className="is-down">↓ {downs}</b>
+              <span className="wdo-breadth" aria-hidden="true"><i style={{ width: `${upShare}%` }} /></span>
             </>
           ) : (
             <span className="wdo-quiet">今日行情加载中</span>
           )}
         </span>
         <span className="wdo-right">
+          <span className="wdo-session">{desk?.slot === "premarket" ? "盘前快照" : "盘后快照"}</span>
           {timeText ? <span className="wdo-time">{timeText}</span> : null}
           <button className={`wdo-refresh ${refreshing ? "is-busy" : ""}`} type="button" title="刷新看盘" aria-label="刷新看盘" onClick={handleRefresh}>
             {WD_REFRESH}
@@ -382,29 +442,36 @@ export function WatchListBody({ desk, loaded, onRefetch }: { desk: WatchDesk | n
           <WatchAddForm busy={addBusy} error={addError} onSubmit={handleAdd} onCancel={() => setAddOpen(false)} />
         </div>
       ) : null}
-      {cards.length > 1 ? (
-        <div className="wl-controls">
-          <div className="wl-seggroup" role="group" aria-label="筛选">
-            {WATCH_FILTERS.map(([v, label]) => {
-              const n = v === "risk" && riskCount ? ` ${riskCount}` : "";
-              return (
-                <button key={v} type="button" className={`wl-seg ${filter === v ? "is-on" : ""}`} onClick={() => setFilter(v)}>
+      <div className="wl-toolbar">
+        <label className="wl-search">
+          {WL_SEARCH}
+          <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索公司、代码、投资主线或事件" aria-label="搜索关注列表" />
+          {query ? <button type="button" aria-label="清除搜索" onClick={() => setQuery("")}>×</button> : <span>{visible.length}</span>}
+        </label>
+        {cards.length > 1 ? (
+          <div className="wl-controls">
+            <div className="wl-seggroup" role="group" aria-label="筛选">
+              {WATCH_FILTERS.map(([v, label]) => {
+                const n = v === "risk" && riskCount ? ` ${riskCount}` : v === "earnings" && earningsCount ? ` ${earningsCount}` : "";
+                return (
+                  <button key={v} type="button" className={`wl-seg ${filter === v ? "is-on" : ""}`} onClick={() => setFilter(v)}>
+                    {label}
+                    {n}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="wl-seggroup wl-sorts" role="group" aria-label="排序">
+              <span className="wl-seglabel">排序</span>
+              {WATCH_SORTS.map(([v, label]) => (
+                <button key={v} type="button" className={`wl-seg ${sort === v ? "is-on" : ""}`} onClick={() => setSort(v)}>
                   {label}
-                  {n}
                 </button>
-              );
-            })}
+              ))}
+            </div>
           </div>
-          <div className="wl-seggroup wl-sorts" role="group" aria-label="排序">
-            <span className="wl-seglabel">排序</span>
-            {WATCH_SORTS.map(([v, label]) => (
-              <button key={v} type="button" className={`wl-seg ${sort === v ? "is-on" : ""}`} onClick={() => setSort(v)}>
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
       <div className="wl-list">
         <WatchColumns />
         {visible.map((c) => (
@@ -412,9 +479,9 @@ export function WatchListBody({ desk, loaded, onRefetch }: { desk: WatchDesk | n
         ))}
         {cards.length && !visible.length ? (
           <div className="wl-filter-empty">
-            这个筛选下没有公司。
-            <button type="button" className="wl-linkbtn" onClick={() => setFilter("all")}>
-              看全部
+            没有符合当前条件的公司。
+            <button type="button" className="wl-linkbtn" onClick={() => { setFilter("all"); setQuery(""); }}>
+              清除筛选
             </button>
           </div>
         ) : null}

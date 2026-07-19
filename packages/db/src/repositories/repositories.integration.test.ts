@@ -10,6 +10,7 @@ import * as watchlistRepository from "./watchlistRepository.js";
 import * as companyRepository from "./companyRepository.js";
 import * as companyProfilesRepository from "./companyProfilesRepository.js";
 import * as researchSessionsRepository from "./researchSessionsRepository.js";
+import * as llmAuditRepository from "./llmAuditRepository.js";
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error("DATABASE_URL is required");
@@ -27,6 +28,7 @@ after(async () => {
   await sql`delete from profile_events where user_id = ${userId}`;
   await sql`delete from company_profiles where user_id = ${userId}`;
   await sql`delete from research_sessions where user_id = ${userId}`;
+  await sql`delete from llm_audit where user_id = ${userId}`;
   await sql`delete from watchlist_prefs where user_id = ${userId}`;
   await sql`delete from user_preferences where user_id = ${userId}`;
   await sql`delete from market_snapshots where ticker = 'PGTEST'`;
@@ -87,4 +89,20 @@ test("Drizzle repositories preserve private CRUD contracts", async () => {
   const conversations = await researchSessionsRepository.listConversations({ userId });
   assert.equal(conversations[0]?.sessions.length, 2);
   assert.equal(conversations[0]?.companies[0]?.ticker, "PGTEST");
+
+  await llmAuditRepository.insertLlmAudit({
+    userId,
+    provider: "integration",
+    model: "test-model",
+    kind: "chat",
+    status: "ok",
+    inputTokens: 12,
+    outputTokens: 8,
+    estimatedCostUsd: 0.0001
+  });
+  const dailyUsage = await llmAuditRepository.getUserDailyUsage(userId);
+  assert.equal(dailyUsage.attempts, 1);
+  assert.equal(dailyUsage.successfulCalls, 1);
+  assert.equal(dailyUsage.inputTokens, 12);
+  assert.equal(dailyUsage.outputTokens, 8);
 });
