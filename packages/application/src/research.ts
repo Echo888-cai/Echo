@@ -20,8 +20,8 @@ import { getCachedJson, setCachedJson } from "./cache.js";
 import {
   appendReportDisclaimer, buildFactsRegistry, buildSoftNote, classifyResearchIntent, deriveValuationPosition, displayValuation,
   extractFalsifiersFromAnswer, extractStructuredFalsifiers, extractThesisFromAnswer, isDataFragmentThesis,
-  parseFalsifierRules, planResearchStages, portraitJudgmentChanged, RESEARCH_DEPTHS, RESEARCH_INTENTS, renderHardFailIssues,
-  routeResearchIntent, summarizeVerdict, topPortraitEvidence, verifyAnswerNumbers
+  mergeFactsRegistry, parseFalsifierRules, planResearchStages, portraitJudgmentChanged, RESEARCH_DEPTHS, RESEARCH_INTENTS, renderHardFailIssues,
+  routeResearchIntent, streamSafeResearchText, summarizeVerdict, topPortraitEvidence, verifyAnswerNumbers
 } from "@echo/domain";
 
 type ResearchInput = {
@@ -77,13 +77,20 @@ async function readStreamedCompletion(response: Response, onToken?: TokenCallbac
   const decoder = new TextDecoder();
   let buf = "";
   let content = "";
-  let pending = "";
+  let pendingChars = 0;
+  let emitted = 0;
   let usage: { prompt_tokens?: number; completion_tokens?: number } | undefined;
+  // FALSIFIERS_JSON 是机器可读尾行，完整内容仍进 `content` 供 extractStructuredFalsifiers，
+  // 但绝不经 onToken 推到前端——否则流式气泡会先露出乱码，fact_check 阶段再卡几十秒，
+  // 用户看起来像死机（真实截图：光标停在 FALSIFIERS_JSON 行末）。
   const flush = async () => {
-    if (!pending) return;
-    const chunk = pending;
-    pending = "";
-    await onToken?.(chunk);
+    pendingChars = 0;
+    if (!onToken) return;
+    const visible = streamSafeResearchText(content);
+    if (visible.length <= emitted) return;
+    const chunk = visible.slice(emitted);
+    emitted = visible.length;
+    await onToken(chunk);
   };
   while (true) {
     const { done, value } = await reader.read();
@@ -101,8 +108,8 @@ async function readStreamedCompletion(response: Response, onToken?: TokenCallbac
       const delta = String(json.choices?.[0]?.delta?.content || "");
       if (delta) {
         content += delta;
-        pending += delta;
-        if (pending.length >= STREAM_CHUNK_SIZE) await flush();
+        pendingChars += delta.length;
+        if (pendingChars >= STREAM_CHUNK_SIZE) await flush();
       }
       if (json.usage) usage = json.usage;
     }
@@ -417,7 +424,10 @@ function toDomainSources(company: any, market: any, rows: any[]) {
     source: filingSource,
     revenue: row.revenue, grossProfit: row.gross_profit, operatingIncome: row.operating_income,
     netIncome: row.net_income, operatingCashFlow: row.operating_cash_flow, cashAndEquivalents: row.cash_and_equivalents,
-    netCash: row.net_cash, eps: annualEps, epsAnnualized, revenueGrowth: pctChange(row.revenue, row.revenue_prior),
+    // free_cash_flow 列在 0007 已加；此前 toDomainSources 漏映射，导致估值 FCF/DCF 分支
+    // 与 factGuard 登记表永远读不到已入库的 FCF（有数也像没数）。
+    freeCashFlow: row.free_cash_flow, netCash: row.net_cash, eps: annualEps, epsAnnualized,
+    revenueGrowth: pctChange(row.revenue, row.revenue_prior),
     grossMargin: pctOf(row.gross_profit, row.revenue), operatingMargin: pctOf(row.operating_income, row.revenue),
     netMargin: pctOf(row.net_income, row.revenue), profitGrowth: pctChange(row.net_income, row.net_income_prior),
     sharesOutstanding: market?.market_cap && market?.price ? market.market_cap / market.price : null,
@@ -469,7 +479,7 @@ function computeResearchValuation(company: any, marketSnapshot: any, financialsD
  * hard-fail answers and re-call the LLM with a targeted correction prompt; falls
  * back to soft behavior if the retry still fails or the LLM call errors).
  */
-async function applyFactGuard(content: string, company: any, marketSnapshot: any, financialsData: any, valuation: any, userId: string) {
+async function applyFactGuard(content: string, company: any, marketSnapshot: any, financialsData: any, valuation: any, userId: string, compare: any = null) {
   const mode = (process.env.FACT_GUARD_MODE || "shadow").toLowerCase();
   if (mode === "off") return { content, factGuard: null };
   // "Native currency" for amount-matching purposes is the filing's reporting currency
@@ -483,6 +493,26 @@ async function applyFactGuard(content: string, company: any, marketSnapshot: any
     nativeCurrency: financialsData?.currency || company.currency,
     marketSnapshot, financialsData, valuation
   });
+  // 对比任务会并排引用对比对象的现价/涨跌幅/财报数字；不登进登记表 → soft/hard 误报，
+  // full 模式还会为此再打一轮纠错模型，流式结束后界面像卡死。
+  if (compare?.ticker) {
+    const compareRegistry = buildFactsRegistry({
+      ticker: compare.ticker,
+      nativeCurrency: compare.financialsData?.currency || compare.marketSnapshot?.currency,
+      marketSnapshot: compare.marketSnapshot,
+      financialsData: compare.financialsData,
+      valuation: compare.valuation
+    });
+    const compareAsOf = isoDate(compare.marketSnapshot?.rawAsOf);
+    if (compareAsOf) {
+      const [y, m, d] = compareAsOf.split("-").map(Number);
+      compareRegistry.dates.push({
+        iso: compareAsOf, year: y, month: m, day: d, quarter: Math.ceil(m / 3),
+        label: `${compare.name || compare.ticker}行情快照时间`, source: "compare.marketSnapshot"
+      });
+    }
+    mergeFactsRegistry(registry, compareRegistry);
+  }
   // buildFactsRegistry only registers the filing period as a date fact — the quote's
   // as-of date is a separate, equally citable fact (models often restate "现价日期"),
   // so append it directly rather than mislabeling it as a filing period.
@@ -918,10 +948,18 @@ export async function runResearch(input: ResearchInput, userId: string, onToken?
   // 来源 at all despite the rules asking for one). Run it before the guard so
   // factGuard verifies the exact text the user ends up reading.
   const guarded = generated
-    ? await applyFactGuard(composer.normalizeResearchAnswer(structured.cleanContent, panel, composerSources, route), company, marketSnapshot, financialsData, valuation, userId)
+    ? await applyFactGuard(composer.normalizeResearchAnswer(structured.cleanContent, panel, composerSources, route), company, marketSnapshot, financialsData, valuation, userId, ctx.compare)
     : { content: fallback, factGuard: null };
   const content = guarded.content;
-  const saved = await persistResearch(ctx, input, userId, content, structured.rules);
+  // 落库失败不得吞掉已经生成（甚至已经 SSE 流出去）的正文——否则用户看到的是
+  // 「研究失败」，真相却是「答完了，只是 user_id 外键/RLS 写不进去」。
+  // 会话/画像丢失是可恢复的数据问题；把正确研究结果一起扔掉才是产品级断裂。
+  let saved: { sessionId: string | null; portrait: any } = { sessionId: null, portrait: null };
+  try {
+    saved = await persistResearch(ctx, input, userId, content, structured.rules);
+  } catch (error) {
+    console.error("[research] 研究结果落库失败（正文仍返回）：", error instanceof Error ? error.message : error);
+  }
   return {
     mode: generated ? "chat_model" : "chat_local",
     provider: generated?.provider || null,
@@ -1013,13 +1051,18 @@ export async function runReport(input: ResearchInput, userId: string) {
   // conversational lead-in, which belongs above a chat reply, not above a report's
   // "# 深度研究" title. buildReportPrompt already mandates its own header and 来源.
   const guarded = generated
-    ? await applyFactGuard(generated.content, company, marketSnapshot, financialsData, valuation, userId)
+    ? await applyFactGuard(generated.content, company, marketSnapshot, financialsData, valuation, userId, ctx.compare)
     : { content: fallback, factGuard: null };
   // buildReportPrompt 对模型说"结尾不需要再写免责声明（系统会附加）"——这里就是那个"系统"。
   // 之前只有 composeReport 的兜底路径带免责声明，模型路径直接返回正文，于是正常情况下的
   // 报告反而没有声明。fallback 已经过 composeReport 附加，appendReportDisclaimer 幂等，两条路都走它。
   const markdown = appendReportDisclaimer(guarded.content);
-  const saved = await persistResearch(ctx, input, userId, markdown);
+  let saved: { sessionId: string | null; portrait: any } = { sessionId: null, portrait: null };
+  try {
+    saved = await persistResearch(ctx, input, userId, markdown);
+  } catch (error) {
+    console.error("[research] 深度报告落库失败（正文仍返回）：", error instanceof Error ? error.message : error);
+  }
   return {
     mode: generated ? "report_model" : "report_local",
     provider: generated?.provider || null,

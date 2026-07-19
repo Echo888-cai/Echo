@@ -473,7 +473,10 @@ function streamCallbacks(key: string) {
 
   function paint() {
     frame = null;
-    if (active && key === activeRunKey()) setStreaming(key, text);
+    if (!active || key !== activeRunKey()) return;
+    // 服务端会截断 FALSIFIERS_JSON；这里再挡一层，避免旧 API / 半截包把机器行刷进气泡。
+    const cut = text.indexOf("FALSIFIERS_JSON:");
+    setStreaming(key, cut >= 0 ? text.slice(0, cut).replace(/\s+$/, "") : text);
   }
 
   return {

@@ -130,7 +130,23 @@ const PERCENT_METRICS = new Set(["revenueGrowth", "grossMargin", "operatingMargi
 // 只锚定前缀，不要求方括号闭合完整——模型偶尔会因为截断/token 限制吐出残缺 JSON，
 // 这时更要把这行剥离掉（这行本来就不是给用户看的），而不是因为"格式不完美"就放过它
 // 泄露到聊天气泡里。JSON.parse 失败自然会走 catch，rules 诚实为空，不影响主流程。
+const FALSIFIERS_MARKER = "FALSIFIERS_JSON:";
 const FALSIFIERS_LINE_RE = /^FALSIFIERS_JSON:(.*)$/m;
+
+/**
+ * 流式输出用的可见前缀：FALSIFIERS_JSON 行是给系统看的，绝不能进聊天气泡。
+ * 完整剥离在 extractStructuredFalsifiers；这里额外处理「标记还在半截」的情况——
+ * 否则最后一个 token 把 `FALSIFIERS_` 先刷出去，下一包才拼上 `JSON:`，用户已经看到乱码。
+ */
+export function streamSafeResearchText(content = "") {
+  const text = String(content || "");
+  const idx = text.indexOf(FALSIFIERS_MARKER);
+  if (idx >= 0) return text.slice(0, idx).replace(/\s+$/, "");
+  for (let n = Math.min(FALSIFIERS_MARKER.length - 1, text.length); n > 0; n -= 1) {
+    if (FALSIFIERS_MARKER.startsWith(text.slice(-n))) return text.slice(0, -n);
+  }
+  return text;
+}
 
 /** 校验单条模型输出的候选规则，任何一项不满足白名单就整条丢弃（不是报错，不是硬凑）。 */
 function validateStructuredFalsifier(item) {
