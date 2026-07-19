@@ -6,8 +6,37 @@
  * Keep these rules deterministic; provider-backed verification happens later.
  */
 
-const MONEY_OR_QUANTITY_SUFFIX = /^\s*(?:块钱?|元|美元|美金|港元|港币|人民币|股|手|万|亿|%|％|倍|年|个月|月|天|日)/i;
-const MONEY_OR_QUANTITY_PREFIX = /(?:成本价?|买入价?|购入价?|入仓价?|现价|价格|目标价|止损价?|止盈价?|市值|持有|买了|买的|买入|购入|入手)\s*$/i;
+const MONEY_OR_QUANTITY_SUFFIX = /^\s*(?:块钱?|元|美元|美金|港元|港币|人民币|股|手|万|亿|%|％|倍|年|个月|月|天|日|个基点|基点|个百分点|个点|bp)/i;
+// 价格类前缀与数字之间常常隔着一个动词（"止损价**设** 320"、"目标价**看到** 450"），
+// 之前要求前缀紧贴数字（`\s*$`），于是"止损价设 320 合适吗"里的 320 被当成 0320.HK。
+// 允许中间夹最多 4 个非数字字符，把动词放进来，但不至于跨过整个从句。
+const MONEY_OR_QUANTITY_PREFIX =
+  /(?:成本价?|买入价?|购入价?|入仓价?|现价|价格|目标价|止损价?|止盈价?|市值|持有|买了|买的|买入|购入|入手|跌到|涨到|回撤到)\s*[^\d]{0,4}$/i;
+
+/** 全角数字/字母/标点 → 半角。中文输入法下 "０７００.ＨＫ" 是很常见的输入，
+ *  没有这一步它连一个候选都匹配不到，用户只会觉得"这破东西连代码都认不出"。
+ *  全角区 U+FF01–U+FF5E 与半角区固定相差 0xFEE0；U+3000 是全角空格。 */
+function toHalfWidth(text) {
+  return String(text)
+    .replace(/[\uFF01-\uFF5E]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+    .replace(/\u3000/g, " ");
+}
+
+/** 零宽字符：从网页/IM 复制股票代码时经常被夹带进来，肉眼完全不可见，
+ *  但会让 "腾<ZWSP>讯" 匹配不上 /腾讯/。清掉它们不改变任何用户可见的语义。
+ *  用转义而不是字面量：这些字符在源码里同样不可见，谁也 review 不出来改动对不对。
+ *  U+200B–U+200F 零宽/方向标记，U+2060 word joiner，U+FEFF BOM。 */
+function stripInvisible(text) {
+  return String(text).replace(/[\u200B-\u200F\u2060\uFEFF]/g, "");
+}
+
+/**
+ * 实体抽取前的输入归一化。**所有**实体抽取入口都必须先过这里，否则同一个问题
+ * 在不同层会得到不同结论（前端认出来了、后端没认出来，或者反过来）。
+ */
+export function normalizeQuestionText(text = "") {
+  return toHalfWidth(stripInvisible(String(text)));
+}
 
 function normalizeHkDigits(digits) {
   return `${digits.padStart(4, "0")}.HK`;
@@ -19,7 +48,7 @@ function normalizeHkDigits(digits) {
  * and is rejected beside money, quantity, ratio or time language.
  */
 export function extractHkTicker(text = "") {
-  const raw = String(text);
+  const raw = normalizeQuestionText(text);
 
   const explicitSuffix = raw.match(/(?:^|[^\dA-Za-z])(\d{1,5})\s*(?:\.\s*)?HK(?![A-Za-z])/i);
   if (explicitSuffix) return normalizeHkDigits(explicitSuffix[1]);
@@ -41,14 +70,28 @@ export function extractHkTicker(text = "") {
   return "";
 }
 
+/**
+ * 不能当美股代码看的常见缩写。**这是唯一一份**——前端 `apps/web/src/lib/resolve.ts`
+ * 曾经手抄了一份副本，两份必然漂移：实测 SPY 在两边都有、QQQ 两边都没有，于是
+ * "SPY 和 QQQ 有什么区别" 会把 QQQ 抽成研究标的。副本已删，前端改为 import 这里。
+ *
+ * 宽基 ETF 单列一组：它们是"市场"不是"公司"，问它们不是公司研究（宏观路由另有处理）。
+ */
 const COMMON_NON_TICKERS = new Set([
   "PE", "PB", "PS", "ROE", "ROI", "ROA", "ROC", "AI", "IPO", "GDP", "CEO",
   "CFO", "COO", "CTO", "CMO", "US", "HK", "EPS", "FCF", "DCF", "ETF",
   "Q1", "Q2", "Q3", "Q4", "YOY", "QOQ", "MOM", "TTM", "LTM", "MRQ",
   "CPI", "PPI", "PMI", "GNP", "EV", "NAV", "AUM", "BPS", "DPS", "NIM",
-  "NYSE", "SEC", "SFC", "MSCI", "FTSE", "SPX", "SPY", "ESG", "SPAC",
+  "NYSE", "SEC", "SFC", "MSCI", "FTSE", "ESG", "SPAC",
+  // 宽基指数与 ETF（"大盘"的同义词，不是研究标的）
+  "SPX", "SPY", "QQQ", "DIA", "IWM", "VOO", "VTI", "VT", "IVV", "ARKK", "HSI", "EEM", "FXI", "KWEB",
   "WHAT", "ABOUT", "HOW", "THE", "FOR", "AND", "BUY", "SELL", "PRICE", "STOCK"
 ]);
+
+/** 前端的解析层需要同一份停用词。导出的是拷贝，避免调用方改到领域包内部状态。 */
+export function commonNonTickers() {
+  return new Set(COMMON_NON_TICKERS);
+}
 
 /**
  * Extract a US ticker token. Lowercase tokens are accepted only in CJK text,
@@ -57,7 +100,7 @@ const COMMON_NON_TICKERS = new Set([
  * provider-backed listing verification before research starts.
  */
 export function extractUsTickerToken(text = "", additionalStopwords = []) {
-  const raw = String(text).trim();
+  const raw = normalizeQuestionText(text).trim();
   const stopwords = new Set([...COMMON_NON_TICKERS, ...additionalStopwords].map((word) => String(word).toUpperCase()));
 
   const explicit = raw.match(/\$([A-Za-z][A-Za-z.-]{0,6})\b/) || raw.match(/\b([A-Za-z][A-Za-z.-]{0,6})\.US\b/i);

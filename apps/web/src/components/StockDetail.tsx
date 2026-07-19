@@ -624,18 +624,20 @@ export function StockDetail({ stock }: { stock: WatchStock }) {
         </button>
       </div>
       {stock.status === "falsified" && stock.statusReason ? <div className="wd-note stock-note">{stock.statusReason}</div> : null}
-      <div className="stock-tabs" role="tablist">
-        <button className={`stock-tab ${tab === "overview" ? "is-active" : ""}`} type="button" onClick={() => setTab("overview")}>
+      <div className="stock-tabs" role="tablist" aria-label="公司详情">
+        <button id="stock-tab-overview" role="tab" aria-selected={tab === "overview"} aria-controls="stock-panel" tabIndex={tab === "overview" ? 0 : -1} className={`stock-tab ${tab === "overview" ? "is-active" : ""}`} type="button" onClick={() => setTab("overview")}>
           总览
         </button>
-        <button className={`stock-tab ${tab === "portrait" ? "is-active" : ""}`} type="button" onClick={() => setTab("portrait")}>
+        <button id="stock-tab-portrait" role="tab" aria-selected={tab === "portrait"} aria-controls="stock-panel" tabIndex={tab === "portrait" ? 0 : -1} className={`stock-tab ${tab === "portrait" ? "is-active" : ""}`} type="button" onClick={() => setTab("portrait")}>
           画像
         </button>
-        <button className={`stock-tab ${tab === "earnings" ? "is-active" : ""}`} type="button" onClick={() => setTab("earnings")}>
+        <button id="stock-tab-earnings" role="tab" aria-selected={tab === "earnings"} aria-controls="stock-panel" tabIndex={tab === "earnings" ? 0 : -1} className={`stock-tab ${tab === "earnings" ? "is-active" : ""}`} type="button" onClick={() => setTab("earnings")}>
           业绩
         </button>
       </div>
-      {tab === "portrait" ? <PortraitTab stock={stock} /> : tab === "earnings" ? <EarningsTab stock={stock} /> : <StockOverview stock={stock} />}
+      <div id="stock-panel" role="tabpanel" aria-labelledby={`stock-tab-${tab}`}>
+        {tab === "portrait" ? <PortraitTab stock={stock} /> : tab === "earnings" ? <EarningsTab stock={stock} /> : <StockOverview stock={stock} />}
+      </div>
     </div>
   );
 }

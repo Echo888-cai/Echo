@@ -10,6 +10,7 @@
  */
 import { z } from "zod";
 import { flatErrorSchema } from "./envelope.js";
+import { parsedDocumentSchema } from "./documents.js";
 
 export const askRequestSchema = z
   .object({
@@ -18,6 +19,15 @@ export const askRequestSchema = z
     kind: z.enum(["company", "screener", "macro"]).optional(),
     compareWith: z.object({ ticker: z.string() }).catchall(z.unknown()).optional(),
     history: z.array(z.unknown()).optional(),
+    /**
+     * 用户上传并解析过的资料（parsedDocumentSchema 的形状）。
+     *
+     * 前端一直在发，但此前**没有出现在这份契约里**——它是靠下面的 `.catchall`
+     * 混进来的，等于绕开了红线 9「端到端契约唯一」。既然它承载用户意图（用户上传了
+     * 就期待它影响回答），就必须显式声明，并接受 check:dead-fields 门禁的检查：
+     * 契约里有、消费方零读取的字段会直接失败。
+     */
+    documents: z.array(parsedDocumentSchema.partial().catchall(z.unknown())).optional(),
     sessionId: z.string().optional(),
     conversationId: z.string().optional()
   })

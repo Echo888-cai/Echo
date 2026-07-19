@@ -85,10 +85,31 @@ export function setUnauthorizedHandler(handler: (() => void) | null) {
   onUnauthorized = handler;
 }
 
+/**
+ * 用户主动取消**不是** API 错误，必须原样穿过去。
+ *
+ * tRPC 把底层 abort 包成 TRPCClientError（message "signal is aborted without reason"，
+ * cause 才是真正的 DOMException("AbortError")）。下面的 `new ApiError(error.message, ...)`
+ * 会把整条 cause 链丢掉，于是调用方再也认不出"这是用户点了停止"，只能把它当故障渲染成
+ * "深度研究失败：signal is aborted without reason"——把一个正常操作报成报错。
+ * （这是实测出来的：只读代码会以为 isAbort 能顺着 cause 扒到，实际 cause 早在这里没了。）
+ *
+ * 判定放在这里而不是各调用方：rpc() 是所有 tRPC 调用的唯一收口，
+ * 在这里放行一次，全部调用方都不必各自去猜错误形状。
+ */
+function isAbortError(error: unknown): boolean {
+  for (let e: any = error, depth = 0; e && depth < 5; e = e.cause, depth++) {
+    if (e instanceof DOMException && e.name === "AbortError") return true;
+    if (e?.name === "AbortError") return true;
+  }
+  return false;
+}
+
 async function rpc<T>(operation: Promise<T>): Promise<T> {
   try {
     return await operation;
   } catch (error) {
+    if (isAbortError(error)) throw error;
     if (isUnauthorizedTrpc(error)) {
       onUnauthorized?.();
       throw new ApiError("请先登录", 401);
@@ -130,6 +151,12 @@ export const authApi = {
   },
   async me() {
     return rpc(trpc.auth.me.query());
+  }
+};
+
+export const membershipApi = {
+  async overview() {
+    return rpc(trpc.membership.overview.query());
   }
 };
 
@@ -178,9 +205,6 @@ export const preferencesApi = {
   },
   async update(patch: PreferencesUpdateRequest) {
     return rpc(trpc.preferences.update.mutate(patch));
-  },
-  async onboardingProgress() {
-    return rpc(trpc.preferences.onboardingProgress.query());
   }
 };
 
@@ -267,8 +291,10 @@ export const askApi = {
 
 /** Temporal-backed deep research. */
 export const reportsApi = {
-  async generate(body: Record<string, unknown>) {
-    return rpc(trpc.reports.generate.mutate(body as any)) as Promise<ReportResult>;
+  // signal：深度报告是全站最长的操作（实测 21–25s，比对话回答还久），没有中止把手时
+  // 用户只能干等。tRPC 的 mutate 支持第二参数传 AbortSignal，透到 fetch 上。
+  async generate(body: Record<string, unknown>, signal?: AbortSignal) {
+    return rpc(trpc.reports.generate.mutate(body as any, { signal })) as Promise<ReportResult>;
   }
 };
 
@@ -289,14 +315,16 @@ export const documentsApi = {
  */
 export async function chatStream(
   body: Record<string, unknown>,
-  callbacks: { onToken?: (text: string) => void; onReasoning?: (chars: number) => void; onStage?: (stage: string) => void } = {}
+  callbacks: { onToken?: (text: string) => void; onReasoning?: (chars: number) => void; onStage?: (stage: string, plan?: string[]) => void } = {},
+  signal?: AbortSignal
 ): Promise<ChatResult> {
   let finalResult: ChatResult | null = null;
   try {
     const resp = await fetch("/api/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Echo-Auth": "1" },
-      body: JSON.stringify({ ...body, stream: true })
+      body: JSON.stringify({ ...body, stream: true }),
+      signal
     });
     if (resp.status === 401) {
       onUnauthorized?.();
@@ -339,7 +367,7 @@ export async function chatStream(
         } else if (evt === "reasoning") {
           callbacks.onReasoning?.(json.n || 0);
         } else if (evt === "status") {
-          if (json.stage) callbacks.onStage?.(json.stage);
+          if (json.stage) callbacks.onStage?.(json.stage, Array.isArray(json.plan) ? json.plan : undefined);
         } else if (evt === "final") {
           finalResult = json;
         } else if (evt === "error") {
@@ -347,7 +375,14 @@ export async function chatStream(
         }
       }
     }
-  } catch {
+  } catch (error) {
+    // 用户主动取消**不是**故障，绝不能走下面的兜底重跑——那会让"停止"变成"再跑一遍"
+    // （非流式的 askApi.ask 还会完整跑完取数+模型+落库，用户点了停止反而更贵）。
+    // 原样抛出，由调用方识别 AbortError 并静默收尾。
+    if (signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
+    // 认证失败绝不能再走非流式兜底：那会把同一个未授权请求重放一次，
+    // 既掩盖真正原因，也让研究页停留在一个看似可用、实际永远失败的状态。
+    if (error instanceof ApiError && error.status === 401) throw error;
     if (!finalResult) finalResult = await askApi.ask(body);
   }
   return finalResult!;

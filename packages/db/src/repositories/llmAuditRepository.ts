@@ -13,7 +13,7 @@ export async function insertLlmAudit(input: any) {
 }
 
 export async function getProviderCallStats({ days = 7, userId = "local" }: any = {}) {
-  const cutoff = new Date(Date.now() - Math.max(1, Math.round(days)) * 86_400_000);
+  const cutoff = new Date(Date.now() - Math.max(1, Math.round(days)) * 86_400_000).toISOString();
   return withTenant(userId, async (tx) => Array.from(await tx.execute(sql`
     select provider, count(*)::int as attempts,
       count(*) filter (where status = 'ok')::int as successes,
@@ -24,7 +24,7 @@ export async function getProviderCallStats({ days = 7, userId = "local" }: any =
       round(sum(coalesce(estimated_cost_usd, 0)), 6) as "estimatedCostUsd",
       (array_agg(error_detail order by created_at desc) filter (where status != 'ok'))[1] as "lastFailureDetail",
       max(created_at) filter (where status != 'ok') as "lastFailureAt"
-    from llm_audit where user_id = ${userId} and created_at >= ${cutoff} group by provider order by attempts desc
+    from llm_audit where user_id = ${userId} and created_at >= ${cutoff}::timestamptz group by provider order by attempts desc
   `)));
 }
 
@@ -32,13 +32,13 @@ export async function getUserDailyUsage(userId = "local") {
   const now = new Date();
   const beijing = new Date(now.getTime() + 8 * 3_600_000);
   beijing.setUTCHours(0, 0, 0, 0);
-  const cutoff = new Date(beijing.getTime() - 8 * 3_600_000);
+  const cutoff = new Date(beijing.getTime() - 8 * 3_600_000).toISOString();
   return withTenant(userId, async (tx) => {
     const rows = Array.from(await tx.execute(sql`
       select count(*)::int as attempts, count(*) filter (where status = 'ok')::int as "successfulCalls",
         sum(coalesce(input_tokens, 0))::int as "inputTokens", sum(coalesce(output_tokens, 0))::int as "outputTokens",
         round(sum(coalesce(estimated_cost_usd, 0)), 6) as "estimatedCostUsd"
-      from llm_audit where user_id = ${userId} and created_at >= ${cutoff}
+      from llm_audit where user_id = ${userId} and created_at >= ${cutoff}::timestamptz
     `));
     const row: any = rows[0] || {};
     return { attempts: Number(row.attempts || 0), successfulCalls: Number(row.successfulCalls || 0), inputTokens: Number(row.inputTokens || 0),

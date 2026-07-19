@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { getCompanyByTickerComplete, searchCompanies } from "@echo/db/repositories/companyRepository.js";
 import { ensureFreshMarketSnapshot } from "./marketData.js";
 import { getCompanyProfile, upsertCompanyProfile } from "@echo/db/repositories/companyProfilesRepository.js";
@@ -14,10 +14,14 @@ import { insertLlmAudit } from "@echo/db/repositories/llmAuditRepository.js";
 import { insertFactGuardAudit } from "@echo/db/repositories/factGuardRepository.js";
 import { upsertResearchSnapshot } from "@echo/db/repositories/researchSnapshotsRepository.js";
 import { replaceFalsifierRules } from "@echo/db/repositories/watchRulesRepository.js";
+import { addFact, listFacts, listQuestions, supersedeFact } from "@echo/db/repositories/researchMemoryRepository.js";
+import { compactConversationHistory } from "./conversationContext.js";
+import { getCachedJson, setCachedJson } from "./cache.js";
 import {
-  buildFactsRegistry, buildSoftNote, deriveValuationPosition, displayValuation,
+  appendReportDisclaimer, buildFactsRegistry, buildSoftNote, classifyResearchIntent, deriveValuationPosition, displayValuation,
   extractFalsifiersFromAnswer, extractStructuredFalsifiers, extractThesisFromAnswer, isDataFragmentThesis,
-  parseFalsifierRules, portraitJudgmentChanged, renderHardFailIssues, summarizeVerdict, topPortraitEvidence, verifyAnswerNumbers
+  parseFalsifierRules, planResearchStages, portraitJudgmentChanged, RESEARCH_DEPTHS, RESEARCH_INTENTS, renderHardFailIssues,
+  routeResearchIntent, summarizeVerdict, topPortraitEvidence, verifyAnswerNumbers
 } from "@echo/domain";
 
 type ResearchInput = {
@@ -25,13 +29,18 @@ type ResearchInput = {
   company?: { ticker: string; nameZh?: string };
   kind?: "company" | "screener" | "macro";
   history?: unknown[];
+  /** 对比对象。契约里一直有、前端一直在发，2026-07 前后端零读取（死链路）——现由
+   *  gatherCompareTarget 兑现。显式列进类型，让"契约里有但没人读"这件事在类型上就可见。 */
+  compareWith?: { ticker: string; nameZh?: string };
+  /** 用户上传并解析过的资料，同样曾是死链路。 */
+  documents?: unknown[];
   sessionId?: string;
   conversationId?: string;
   [key: string]: unknown;
 };
 
 function providerConfig() {
-  if (process.env.DEEPSEEK_API_KEY) return { id: "deepseek", key: process.env.DEEPSEEK_API_KEY, base: "https://api.deepseek.com", model: process.env.DEEPSEEK_MODEL || "deepseek-chat" };
+  if (process.env.DEEPSEEK_API_KEY) return { id: "deepseek", key: process.env.DEEPSEEK_API_KEY, base: process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com", model: process.env.DEEPSEEK_MODEL || "deepseek-v4-flash" };
   if (process.env.OPENAI_API_KEY) return { id: "openai", key: process.env.OPENAI_API_KEY, base: "https://api.openai.com/v1", model: process.env.OPENAI_MODEL || "gpt-5-mini" };
   if (process.env.MODEL_API_KEY && process.env.MODEL_BASE_URL) return { id: "generic", key: process.env.MODEL_API_KEY, base: process.env.MODEL_BASE_URL, model: process.env.MODEL_NAME || "default" };
   return null;
@@ -41,7 +50,8 @@ type TokenCallback = (delta: string) => void | Promise<void>;
 // Stage names are a stable contract with the frontend (apps/web/src/lib/researchStore.ts
 // maps each to display copy) — renaming one without updating that map silently breaks
 // the wait-phase indicator again.
-type StageCallback = (stage: string) => void | Promise<void>;
+type ResearchRoute = ReturnType<typeof routeResearchIntent>;
+type StageCallback = (stage: string, plan?: string[]) => void | Promise<void>;
 
 // Provider deltas often arrive sub-word (DeepSeek/OpenAI can emit hundreds of
 // tiny deltas for a page of Markdown). Forwarding every single one as its own
@@ -101,7 +111,14 @@ async function readStreamedCompletion(response: Response, onToken?: TokenCallbac
   return { content: content.trim(), usage };
 }
 
-async function modelAnswer(system: string, user: string, userId: string, onToken?: TokenCallback) {
+type ModelAnswerOptions = {
+  kind?: "chat" | "router" | "report";
+  thinking?: boolean;
+  maxTokens?: number;
+  json?: boolean;
+};
+
+async function modelAnswer(system: string, user: string, userId: string, onToken?: TokenCallback, options: ModelAnswerOptions = {}) {
   const provider = providerConfig();
   if (!provider) return null;
   const started = Date.now();
@@ -112,9 +129,12 @@ async function modelAnswer(system: string, user: string, userId: string, onToken
       headers: { authorization: `Bearer ${provider.key}`, "content-type": "application/json" },
       body: JSON.stringify({
         model: provider.model, temperature: 0.2, messages: [{ role: "system", content: system }, { role: "user", content: user }],
+        ...(provider.id === "deepseek" && options.thinking !== undefined ? { thinking: { type: options.thinking ? "enabled" : "disabled" } } : {}),
+        ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
+        ...(options.json ? { response_format: { type: "json_object" } } : {}),
         ...(streaming ? { stream: true, stream_options: { include_usage: true } } : {})
       }),
-      signal: AbortSignal.timeout(60_000)
+      signal: AbortSignal.timeout(options.kind === "report" ? 120_000 : 60_000)
     });
     if (!response.ok) throw new Error(`model ${response.status}`);
     let content: string;
@@ -126,14 +146,58 @@ async function modelAnswer(system: string, user: string, userId: string, onToken
       content = String(body.choices?.[0]?.message?.content || "").trim();
       usage = body.usage;
     }
-    await insertLlmAudit({ provider: provider.id, model: provider.model, kind: "chat", status: "ok", latencyMs: Date.now() - started,
+    await insertLlmAudit({ provider: provider.id, model: provider.model, kind: options.kind || "chat", status: "ok", latencyMs: Date.now() - started,
       inputTokens: usage?.prompt_tokens, outputTokens: usage?.completion_tokens, userId });
     return content ? { content, provider: provider.id, model: provider.model } : null;
   } catch (error) {
-    await insertLlmAudit({ provider: provider.id, model: provider.model, kind: "chat", status: "error", latencyMs: Date.now() - started,
+    await insertLlmAudit({ provider: provider.id, model: provider.model, kind: options.kind || "chat", status: "error", latencyMs: Date.now() - started,
       errorDetail: error instanceof Error ? error.message : String(error), userId });
     return null;
   }
+}
+
+const ROUTER_SYSTEM_PROMPT = `你是金融研究产品的请求路由器。只输出 JSON，不回答用户问题。
+intent 只能是：company_status, business_model, competitors, moat, financial_quality, valuation, risk_event, falsify, deep_research。
+depth 只能是：brief, standard, deep。
+单点、口语、可在几段内回答的问题用 brief；多维分析用 standard；明确要求完整/全面/报告才用 deep。
+输出格式：{"intent":"...","depth":"...","confidence":0.0-1.0}`;
+
+const VALID_INTENTS = new Set(Object.values(RESEARCH_INTENTS));
+const VALID_DEPTHS = new Set(Object.values(RESEARCH_DEPTHS));
+
+function parseJsonObject(content: string) {
+  const text = String(content || "").replace(/^```(?:json)?\s*/i, "").replace(/```$/i, "").trim();
+  try { return JSON.parse(text); } catch { return null; }
+}
+
+async function resolveResearchRoute(question: string, userId: string): Promise<ResearchRoute> {
+  const deterministic = routeResearchIntent(question);
+  if (deterministic.confidence >= 0.7 || !providerConfig()) return deterministic;
+  const normalized = question.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 500);
+  const cacheId = createHash("sha256").update(normalized).digest("hex").slice(0, 24);
+  const cached = await getCachedJson<any>("intent", cacheId);
+  if (cached && VALID_INTENTS.has(cached.intent) && VALID_DEPTHS.has(cached.depth)) {
+    return { ...deterministic, ...cached, source: "model_cache", plan: planResearchStages(cached.intent, cached.depth) };
+  }
+  const result = await modelAnswer(ROUTER_SYSTEM_PROMPT, `用户问题：${question}`, userId, undefined, {
+    kind: "router",
+    thinking: false,
+    maxTokens: 180,
+    json: true
+  });
+  const parsed = result ? parseJsonObject(result.content) : null;
+  if (!parsed || !VALID_INTENTS.has(parsed.intent) || !VALID_DEPTHS.has(parsed.depth)) return deterministic;
+  const routed = {
+    ...deterministic,
+    intent: parsed.intent,
+    depth: parsed.depth,
+    confidence: Math.max(0, Math.min(1, Number(parsed.confidence) || 0.7)),
+    source: "model",
+    answerStyle: parsed.depth === "brief" ? "direct" : parsed.depth === "deep" ? "report" : "research",
+    plan: planResearchStages(parsed.intent, parsed.depth)
+  } as ResearchRoute;
+  await setCachedJson("intent", cacheId, routed, 86_400);
+  return routed;
 }
 
 /**
@@ -476,10 +540,13 @@ async function applyFactGuard(content: string, company: any, marketSnapshot: any
  *  product invariant, not a per-artifact style choice. The paragraph structure
  *  itself comes from the composer's own prompt (the user message). */
 const RESEARCH_SYSTEM_PROMPT =
-  "你是审慎的买方研究员。只使用给出的事实，不编数字；取不到就写未核到。估值区间必须使用给定的估值数据，不得自行编造倍数或目标价。" +
-  "红线：只给判断，不给指令——禁止任何形式的买入/卖出/持有/加仓/减仓/追高/抄底建议，包括正向表述（“建议买入”）和反向劝阻（“不建议追高”“不建议此时买入”），这类劝阻性措辞本质上仍是买卖指令，同样禁止。" +
-  "改用研究语言描述赔率与状态，例如“当前价位对应的赔率偏低/偏高”“性价比一般，等待更好的验证点或更低的安全边际”“逻辑需要重估”，只呈现判断依据，买卖时机与仓位决策留给用户自己判断。" +
-  "严格遵守用户消息里给出的段落结构与作答规则。";
+  "你是 Echo Research 的资深买方金融分析师，目标是形成可审计、可证伪、能持续更新的研究判断，而不是迎合用户。" +
+  "证据纪律：只使用本轮材料；一手披露与带日期的结构化数据优先于网页摘要，网页摘要优先于旧对话记忆。事实、推断、情景必须分清；取不到就写未核到，绝不补造数字、日期、倍数、目标价或来源。" +
+  "分析纪律：先回答用户真正问的点，再解释赚钱机制、利润质量、现金流、资本强度、竞争壁垒、估值赔率和证伪条件中与问题相关的部分。估值只能使用给定区间和可比锚，不得自行创造精确值。" +
+  "上下文纪律：对话历史和长期记忆只用于承接代词、偏好与既有判断；若与本轮新证据冲突，以新证据为准并明确指出判断发生变化。" +
+  "表达纪律：单点问题短答，复杂问题才展开；只输出给用户看的结论与依据，不输出内部思维链、规划草稿或工具过程。" +
+  "合规红线：只给研究判断，不给买入、卖出、持有、加仓、减仓、追高或抄底指令，也不使用反向劝阻式交易指令。改用赔率、安全边际、验证点和逻辑重估等研究语言。" +
+  "严格遵守用户消息中给出的结构、长度与数据边界。";
 
 /**
  * Resolves the company and every source the composer needs, and builds the
@@ -513,29 +580,91 @@ export async function financialsDataFor(ticker: string) {
   return toDomainSources(company, market, rows).financialsData;
 }
 
-async function gatherResearchContext(input: ResearchInput, userId: string, onStage?: StageCallback) {
+/**
+ * 对比对象的一份真实数据——`compareWith` 的兑现点。
+ *
+ * `compareWith` 一直在契约里（contracts/src/ask.ts）、前端一直在发，而 composerContext 里
+ * `compare` 写死 null，于是 answerComposer 的 buildCompareBlock() 和整段对比作答规则
+ * 全是死代码。用户点的是"在本对话里对比：腾讯 vs 阿里（**拉两家真实数据并排比**）"，
+ * 拿到的却是模型凭记忆写的定性段落——实测回答自己承认"阿里巴巴本轮未核到实时财报"。
+ * UI 的承诺是假的，这正是 PLAN §7「冻结表模式」在请求字段上的翻版。
+ *
+ * 只取对比真正要用的那几样（行情/财报/估值），不取网页证据与同业——对比段落用不到，
+ * 多取一轮只会把已经 13–21s 的时延推得更长。取不到就返回带 missing 状态的壳，
+ * 让 buildCompareBlock 如实写"未核到"，而不是让整轮研究失败。
+ */
+async function gatherCompareTarget(compareWith: any): Promise<any | null> {
+  const ticker = String(compareWith?.ticker || "").trim();
+  if (!ticker) return null;
+  if (detectMarket(ticker) === "unsupported") return null;
+  const company = await getCompanyByTickerComplete(ticker).catch(() => null);
+  if (!company) return null;
+  const [market, rows] = await Promise.all([
+    ensureFreshMarketSnapshot(ticker).catch(() => null),
+    fetchFinancialsRows(ticker).catch(() => [])
+  ]);
+  const { marketSnapshot, financialsData } = toDomainSources(company, market, rows);
+  const compPeers = await getComparablePeers(ticker, financialsData).catch(() => null);
+  return {
+    name: compareWith.nameZh || company.nameZh || company.nameEn || ticker,
+    ticker,
+    marketSnapshot,
+    financialsData,
+    valuation: computeResearchValuation(company, marketSnapshot, financialsData, compPeers),
+    // 一致预期与新闻都没有接通的源（PLAN 第 3 节能力底账），诚实留空而不是塞占位数据。
+    analyst: null,
+    newsSnapshot: null
+  };
+}
+
+async function gatherResearchContext(input: ResearchInput, userId: string, route: ResearchRoute, onStage?: StageCallback) {
   const company = await resolveInputCompany(input);
   if (!company) return null;
   // A 股退场（PLAN v3 市场聚焦）：companies 表里的存量 A 股仍能被搜索命中，
   // 但研究链路对它诚实拒答，而不是跑出一篇行情/财务/估值全部"未核到"的空壳报告。
   if (detectMarket(company.ticker) === "unsupported") return { delisted: company.ticker as string };
   await onStage?.("market_financials");
-  const [profile, market, financials, earnings, buybacks] = await Promise.all([
+  const wantsEvidence = route.plan.includes("evidence");
+  const wantsValuation = route.plan.includes("valuation");
+  const wantsPeers = wantsValuation || route.intent === RESEARCH_INTENTS.competitors;
+  const wantsEarnings = route.depth !== RESEARCH_DEPTHS.brief && [RESEARCH_INTENTS.companyStatus, RESEARCH_INTENTS.riskEvent, RESEARCH_INTENTS.deepResearch].includes(route.intent as any);
+  const wantsBuybacks = company.ticker.endsWith(".HK") && (route.depth !== RESEARCH_DEPTHS.brief || route.intent === RESEARCH_INTENTS.financialQuality);
+  const [profile, market, financials, earnings, buybacks, memoryFacts, openQuestions] = await Promise.all([
     getCompanyProfile(company.ticker, userId),
     ensureFreshMarketSnapshot(company.ticker),
     fetchFinancialsRows(company.ticker),
-    getEarnings(company.ticker),
+    wantsEarnings ? getEarnings(company.ticker) : Promise.resolve({ providerStatus: "missing", detail: "本轮意图不需要日历" }),
     // hk_buybacks 只有港股有（HKEX 翌日披露报表），hkFilingsPipeline 一直在采集但此前
     // 没有任何读取方——数据白采了，composer 还在同时对模型说"回购口径还没核到"。
-    company.ticker.endsWith(".HK") ? listRecentHkBuybacks(company.ticker, 180).catch(() => []) : Promise.resolve([])
+    wantsBuybacks ? listRecentHkBuybacks(company.ticker, 180).catch(() => []) : Promise.resolve([]),
+    listFacts(company.ticker, userId).catch(() => []),
+    listQuestions(company.ticker, userId, "open").catch(() => [])
   ]);
-  const { marketSnapshot, financialsData } = toDomainSources(company, market, financials);
+  const { marketSnapshot, financialsData: baseFinancials } = toDomainSources(company, market, financials);
+  // factGuard 的 buildFactsRegistry 有一条 hkBuybacks 分支（登记回购总代价与最近购回交易日），
+  // 但它读的是 `financialsData.hkBuybacks`——而回购一直是单独取到 `buybacks` 变量里，
+  // 从没挂到 financialsData 上。于是那条分支从未被触发过：**登记表里没有回购事实，
+  // 提示词里却给了模型真实的回购数字**，模型如实引用后反被数字护栏标成"未能核对"。
+  // 实测一条回答尾部写着「9 处数字未能与已核实数据直接核对」，其中就有回购总代价与股本——
+  // 全是真实的一手数据。护栏读的口径必须和喂给模型的口径是同一份，否则它只会惩罚诚实。
+  const financialsData: any = buybacks.length ? { ...baseFinancials, hkBuybacks: buybacks } : baseFinancials;
 
   // Web evidence: check DB cache first (same ticker + intent within 48h),
   // only hit the search API when no fresh results exist.
+  //
+  // 缓存键是**研究意图类别**，不是问句原文。这一行以前传的是 `input.question.slice(0, 200)`，
+  // 而 listWebEvidence 对 intent 做的是**精确相等**匹配——也就是说只有"48 小时内对同一只票
+  // 问了一字不差的同一句话"才会命中。实际命中率约等于零：注释写着"same ticker + intent"，
+  // 字段也叫 intent，传进去的却是问句全文。
+  // 后果是每一轮研究都要付一次 Tavily 往返（首 token 延迟的一部分，实测 p50 已经 2983ms、
+  // 4/10 超过 3s 红线），还白烧免费档 1000 次/月的配额（PLAN 第 6 节 ⑤）。
+  // 用意图类别做键，"腾讯的护城河是什么"和"腾讯有什么壁垒"就能共用同一批证据——
+  // 这正是这个字段本来的语义。
+  const evidenceIntent = classifyResearchIntent(input.question);
   const webEvidenceQuery = `${company.nameZh || company.nameEn || ""} ${company.ticker} ${input.question}`.trim();
-  const webEvidencePromise = (async () => {
-    const cached = await listWebEvidence({ ticker: company.ticker, intent: input.question.slice(0, 200), maxAgeHours: 48 }).catch(() => []);
+  if (wantsEvidence) await onStage?.("evidence");
+  const webEvidencePromise = wantsEvidence ? (async () => {
+    const cached = await listWebEvidence({ ticker: company.ticker, intent: evidenceIntent, maxAgeHours: 48 }).catch(() => []);
     if (cached.length) {
       return {
         evidence: cached.map((row: any) => ({ title: row.title, url: row.url, snippet: row.snippet, source: row.source, date: row.publishedAt || null, relevanceScore: row.relevanceScore })),
@@ -543,22 +672,30 @@ async function gatherResearchContext(input: ResearchInput, userId: string, onSta
       };
     }
     return searchWebEvidence(webEvidenceQuery);
-  })().catch(() => ({ evidence: [] as any[], query: webEvidenceQuery, provider: "tavily", searchedAt: new Date().toISOString() }));
+  })().catch(() => ({ evidence: [] as any[], query: webEvidenceQuery, provider: "tavily", searchedAt: new Date().toISOString() }))
+    : Promise.resolve({ evidence: [] as any[], query: webEvidenceQuery, provider: "skipped", searchedAt: new Date().toISOString() });
 
-  await onStage?.("valuation");
+  if (wantsValuation) await onStage?.("valuation");
   // Peers need the subject's own financials to classify its stage, so this can't
   // join the Promise.all above — it runs before valuation because the anchor is
   // an input to the band, not a decoration on it.
-  const compPeers = await getComparablePeers(company.ticker, financialsData);
-  const valuation = computeResearchValuation(company, marketSnapshot, financialsData, compPeers);
+  // 对比对象与同业/估值互不依赖，并行取——它是 compareWith 的兑现点（见 gatherCompareTarget）。
+  const [compPeers, compare] = await Promise.all([
+    wantsPeers ? getComparablePeers(company.ticker, financialsData) : Promise.resolve(null),
+    input.compareWith ? gatherCompareTarget(input.compareWith).catch(() => null) : Promise.resolve(null)
+  ]);
+  const valuation = wantsValuation ? computeResearchValuation(company, marketSnapshot, financialsData, compPeers) : null;
 
   // Await web evidence (was kicked off in parallel before valuation).
   const webEvidenceResult = await webEvidencePromise;
   const webEvidence = webEvidenceResult.evidence.length ? webEvidenceResult : null;
 
   // Persist evidence items to DB for future retrieval/auditing.
-  if (webEvidence?.evidence.length) {
-    const intent = input.question.slice(0, 200);
+  // 只在真的走了搜索时才写：命中缓存时再写一遍等于把同一批证据按当前时间复制一份，
+  // 缓存行会自己把 TTL 无限续期，永远不再刷新（又一个"看起来在更新、其实冻住了"）。
+  if (webEvidence?.evidence.length && webEvidenceResult.provider !== "tavily-cache") {
+    // 写入键必须与上面的查询键同一口径，否则写进去的行永远查不出来。
+    const intent = evidenceIntent;
     const dbItems = webEvidence.evidence.map((item: any) => ({
       id: `${company.ticker}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
       ticker: company.ticker, intent, query: webEvidence.query,
@@ -601,8 +738,15 @@ async function gatherResearchContext(input: ResearchInput, userId: string, onSta
   const composerContext = {
     marketSnapshot, financialsData, valuation, earnings, buybacks,
     portraitContext: profile?.thesis ? `既有研究主线：${profile.thesis}` : "",
-    history: input.history,
-    webEvidence, newsSnapshot: null, compare: null, dualListing: null, dualQuote: null, otherHoldings: null
+    history: compactConversationHistory(input.history),
+    longTermMemory: { facts: memoryFacts, openQuestions },
+    route,
+    // compare / documents 此前恒为 null，导致前端发了、契约收了、composer 也写好了渲染逻辑，
+    // 但功能永远不存在（见 gatherCompareTarget 与 answerComposition.documentsToPrompt 的注释）。
+    // newsSnapshot / dualListing / dualQuote / otherHoldings 仍为 null——它们是**真的**没有
+    // 数据源（PLAN 第 3 节），保持诚实的 null，不要拿占位数据把它们"点亮"。
+    documents: input.documents,
+    webEvidence, newsSnapshot: null, compare, dualListing: null, dualQuote: null, otherHoldings: null
   };
   const dataSources = {
     market: market ? {
@@ -620,7 +764,7 @@ async function gatherResearchContext(input: ResearchInput, userId: string, onSta
     } : { status: "missing" },
     buybacks: buybacks.length ? { status: "ok", source: "HKEX 翌日披露报表", rows: buybacks.length } : { status: "missing" }
   };
-  return { company, profile, market, financials, earnings, marketSnapshot, financialsData, valuation, panel, composer, composerSources, composerContext, dataSources };
+  return { company, profile, market, financials, earnings, marketSnapshot, financialsData, valuation, panel, composer, composerSources, composerContext, dataSources, route, memoryFacts };
 }
 
 type ResearchContext = Exclude<NonNullable<Awaited<ReturnType<typeof gatherResearchContext>>>, { delisted: string }>;
@@ -629,7 +773,7 @@ type ResearchContext = Exclude<NonNullable<Awaited<ReturnType<typeof gatherResea
  *  report back. Shared so a report and a chat answer can never drift on what
  *  they claim was saved or which sources they stood on. */
 async function persistResearch(ctx: ResearchContext, input: ResearchInput, userId: string, content: string, structuredRules: any[] = []) {
-  const { company, profile, panel, valuation, marketSnapshot, dataSources } = ctx;
+  const { company, profile, panel, valuation, marketSnapshot, dataSources, route } = ctx;
   const id = input.sessionId || `s_${randomUUID()}`;
   await saveResearchSession({ id, ticker: company.ticker, companyName: company.nameZh, title: input.question, question: input.question,
     conversationId: input.conversationId || id, status: "completed", decisionPanel: panel, fullResearch: content,
@@ -648,8 +792,12 @@ async function persistResearch(ctx: ResearchContext, input: ResearchInput, userI
     ? { method: valuation.method, bear: valuation.bear, base: valuation.base, bull: valuation.bull, currentPrice: valuation.currentPrice }
     : null;
 
-  const isNew = !profile;
-  const changed = portraitJudgmentChanged(profile, { thesis });
+  // Brief answers are conversation artifacts, not automatic investment-thesis
+  // revisions. Only standard/deep research is allowed to mutate long-term memory,
+  // snapshots and monitoring rules.
+  const shouldUpdateMemory = route.depth !== RESEARCH_DEPTHS.brief;
+  const isNew = shouldUpdateMemory && !profile;
+  const changed = shouldUpdateMemory && portraitJudgmentChanged(profile, { thesis });
   const date = new Date().toISOString().slice(0, 10);
   const evidence = topPortraitEvidence(panel);
 
@@ -661,22 +809,30 @@ async function persistResearch(ctx: ResearchContext, input: ResearchInput, userI
           rationale: `触发问题：「${input.question}」`.slice(0, 600), evidence, sessionId: id }]
       : [];
 
-  const savedProfile = await upsertCompanyProfile(company.ticker, {
+  const savedProfile = shouldUpdateMemory ? await upsertCompanyProfile(company.ticker, {
     companyName: company.nameZh, thesis, researchStatus: panel.researchStatus, confidence: panel.confidence,
     bull: panel.bullCase, bear: panel.bearCase, monitors: panel.monitors, events,
-    // falsifiers/valuation 一直是 upsertCompanyProfile 支持但没人传的字段，于是画像
-    // markdown 的「估值带」和「证伪条件」两节从来渲染不出来。
     ...(falsifiers.length ? { falsifiers } : {}),
     ...(valuationBand ? { valuation: valuationBand } : {}),
     bumpTurn: true
-  }, userId);
+  }, userId) : profile;
+
+  if (shouldUpdateMemory && (isNew || changed)) {
+    try {
+      const prior = ctx.memoryFacts?.find((item: any) => String(item.fact || "").startsWith("核心判断："));
+      const remembered = await addFact(userId, company.ticker, `核心判断：${thesis}`, "Echo Research", id);
+      if (prior?.id && remembered?.id) await supersedeFact(prior.id, remembered.id, userId);
+    } catch {
+      // Long-term memory enriches context; a missing company FK must not fail chat.
+    }
+  }
 
   // R7 记分卡的唯一数据来源。没有这一步，research_snapshots 永远是空表，
   // research.scorecard 端点只能对着零条快照算命中率。
   // 只在建档/判断变化时落一行，跟上面 profile_events 的沉淀节奏一致：每轮都落会让
   // 同一个judgement被复制成几十条，全部一起成熟并挤进命中率的分母（等于让聊得最多
   // 的那只票说了算）。
-  if (isNew || changed) {
+  if (shouldUpdateMemory && (isNew || changed)) {
     await upsertResearchSnapshot({
       userId, ticker: company.ticker, snapshotDate: date,
       thesis, falsifiers, sessionId: id,
@@ -698,10 +854,10 @@ async function persistResearch(ctx: ResearchContext, input: ResearchInput, userI
   // 解析不出规则只说明这轮没给出可执行的价格线，不等于用户撤掉了监控。
   // 价格线与基本面线是两条互不相干的产出路径（前者文本解析、后者 F-3 模型结构化输出），
   // 各自只替换自己 kind 范围内的规则——否则只掌握一条路径的调用方会连带清掉另一条。
-  const ruleSets: Array<[string, any[], string[]]> = [
+  const ruleSets: Array<[string, any[], string[]]> = shouldUpdateMemory ? [
     ["价格线", parseFalsifierRules(falsifiers), ["price_below", "price_above"]],
     ["基本面线", structuredRules, ["fundamental_below", "fundamental_above"]]
-  ];
+  ] : [];
   for (const [label, rules, kinds] of ruleSets) {
     if (!rules.length) continue;
     try {
@@ -713,21 +869,25 @@ async function persistResearch(ctx: ResearchContext, input: ResearchInput, userI
 
   return {
     sessionId: id,
-    portrait: { ticker: company.ticker, created: isNew, changed: isNew || changed, turnCount: savedProfile?.turnCount || 0 }
+    portrait: shouldUpdateMemory
+      ? { ticker: company.ticker, created: isNew, changed: isNew || changed, turnCount: savedProfile?.turnCount || 0 }
+      : null
   };
 }
 
 export async function runResearch(input: ResearchInput, userId: string, onToken?: TokenCallback, onStage?: StageCallback) {
-  await onStage?.("resolving");
-  const ctx = await gatherResearchContext(input, userId, onStage);
+  await onStage?.("routing", ["routing"]);
+  const route = await resolveResearchRoute(input.question, userId);
+  await onStage?.("resolving", route.plan);
+  const ctx = await gatherResearchContext(input, userId, route, onStage);
   if (!ctx) return {
     mode: "chat_local", provider: null, model: null, sessionId: null, content: "我还没识别出要研究的公司。请补充股票代码或完整公司名称。",
-    decisionPanel: null, dataSources: {}, marketSnapshot: null, newsSnapshot: null, valuation: null, portrait: null
+    intent: route, decisionPanel: null, dataSources: {}, marketSnapshot: null, newsSnapshot: null, valuation: null, portrait: null
   };
   if ("delisted" in ctx) return {
     mode: "chat_local", provider: null, model: null, sessionId: null,
     content: `${ctx.delisted} 属于 A 股。Echo 已停止覆盖 A 股市场，现只覆盖美股与港股，不再提供该市场的行情与研究。`,
-    decisionPanel: null, dataSources: {}, marketSnapshot: null, newsSnapshot: null, valuation: null, portrait: null
+    intent: route, decisionPanel: null, dataSources: {}, marketSnapshot: null, newsSnapshot: null, valuation: null, portrait: null
   };
   const { company, market, marketSnapshot, financialsData, valuation, panel, composer, composerSources, composerContext } = ctx;
   const prompt = composer.buildChatPrompt(input.question, panel, composerSources, composerContext);
@@ -739,7 +899,11 @@ export async function runResearch(input: ResearchInput, userId: string, onToken?
   // fallback's headings because CI has no model key.
   const fallback = composer.researchReplyFromPanel(panel, input.question, composerSources, composerContext);
   await onStage?.("generating");
-  const generated = await modelAnswer(RESEARCH_SYSTEM_PROMPT, prompt, userId, onToken);
+  const generated = await modelAnswer(RESEARCH_SYSTEM_PROMPT, prompt, userId, onToken, {
+    kind: "chat",
+    thinking: route.depth !== RESEARCH_DEPTHS.brief,
+    maxTokens: route.depth === RESEARCH_DEPTHS.brief ? 900 : route.depth === RESEARCH_DEPTHS.deep ? 8_000 : 3_600
+  });
   await onStage?.("fact_check");
   // F-3：先把机器可读的 FALSIFIERS_JSON 行从正文里剥掉，再做其它一切。
   // 顺序是硬要求，不是风格问题：那行是给系统看的（不剥就漏进聊天气泡），而且它带着
@@ -754,7 +918,7 @@ export async function runResearch(input: ResearchInput, userId: string, onToken?
   // 来源 at all despite the rules asking for one). Run it before the guard so
   // factGuard verifies the exact text the user ends up reading.
   const guarded = generated
-    ? await applyFactGuard(composer.normalizeResearchAnswer(structured.cleanContent, panel, composerSources), company, marketSnapshot, financialsData, valuation, userId)
+    ? await applyFactGuard(composer.normalizeResearchAnswer(structured.cleanContent, panel, composerSources, route), company, marketSnapshot, financialsData, valuation, userId)
     : { content: fallback, factGuard: null };
   const content = guarded.content;
   const saved = await persistResearch(ctx, input, userId, content, structured.rules);
@@ -762,6 +926,7 @@ export async function runResearch(input: ResearchInput, userId: string, onToken?
     mode: generated ? "chat_model" : "chat_local",
     provider: generated?.provider || null,
     model: generated?.model || null,
+    intent: route,
     sessionId: saved.sessionId,
     content,
     decisionPanel: panel,
@@ -777,8 +942,24 @@ export async function runResearch(input: ResearchInput, userId: string, onToken?
 export async function runAsk(input: ResearchInput, userId: string, onToken?: TokenCallback, onStage?: StageCallback) {
   if (!input.company?.ticker && (input.kind === "macro" || input.kind === "screener")) {
     if (input.kind === "screener") {
-      const rows = await searchCompanies(input.question, { limit: 30 });
-      return { kind: "screener", filters: { query: input.question }, rows, notes: rows.length ? [] : ["当前筛选条件未匹配到公司。"] };
+      // 这里曾经是 `searchCompanies(input.question, { limit: 30 })`——把整句
+      // 「帮我筛几只 PE 小于 20 的港股科技股」丢进**公司名**搜索。PE / 市值 / 股息率 / 增速
+      // 这些条件从来没有被解析过，一个字符都没有。实测返回 rows: [] 并附一句
+      // 「当前筛选条件未匹配到公司」——用户会把它读成"筛过了，没有符合条件的股票"，
+      // 而真相是"这个功能不存在"。**假筛选比没有筛选更糟**：它让用户以为自己排除了一批标的。
+      //
+      // 条件解析要落到 companies 表 + 行情快照上真做（免费档字段覆盖有限，很多条件仍会
+      // 查不到），工作量远大于本轮其它修复之和，因此先诚实下线，接通前不假装筛过。
+      return {
+        kind: "screener",
+        filters: { query: input.question },
+        rows: [],
+        unavailable: true,
+        notes: [
+          "按条件筛选（PE / 市值 / 股息率 / 增速等）还没有接通，本轮没有对任何条件做过筛选——所以这里的空结果**不代表**没有符合条件的公司。",
+          "现在可以做的：直接给出公司名或代码（如 0700.HK、AAPL），我对单家公司做完整研究。"
+        ]
+      };
     }
     return { kind: "macro", content: "宏观研究需要可核验的当期数据。本轮没有绑定授权宏观数据源，因此不编造指数和结论。", mode: "local_fallback", indices: [], evidence: [], gaps: ["当期宏观数据"] };
   }
@@ -798,7 +979,16 @@ export async function runAsk(input: ResearchInput, userId: string, onToken?: Tok
  * no model is configured or the call fails.
  */
 export async function runReport(input: ResearchInput, userId: string) {
-  const ctx = await gatherResearchContext(input, userId);
+  const baseRoute = routeResearchIntent(input.question);
+  const route = {
+    ...baseRoute,
+    intent: RESEARCH_INTENTS.deepResearch,
+    depth: RESEARCH_DEPTHS.deep,
+    source: "explicit_report",
+    answerStyle: "report",
+    plan: planResearchStages(RESEARCH_INTENTS.deepResearch, RESEARCH_DEPTHS.deep)
+  } as ResearchRoute;
+  const ctx = await gatherResearchContext(input, userId, route);
   if (!ctx) return {
     mode: "report_local", provider: null, model: null, sessionId: null, decisionPanel: null,
     markdown: "我还没识别出要研究的公司。请补充股票代码或完整公司名称。",
@@ -811,7 +1001,11 @@ export async function runReport(input: ResearchInput, userId: string) {
   };
   const { company, market, marketSnapshot, financialsData, valuation, panel, composer, composerSources, composerContext } = ctx;
   const prompt = composer.buildReportPrompt(input.question, panel, composerSources, composerContext);
-  const generated = await modelAnswer(RESEARCH_SYSTEM_PROMPT, prompt, userId);
+  const generated = await modelAnswer(RESEARCH_SYSTEM_PROMPT, prompt, userId, undefined, {
+    kind: "report",
+    thinking: true,
+    maxTokens: 8_000
+  });
   // composeReport reads panel.keyDrivers/sources/oneLineView — the same panel the
   // model was given — so the fallback stands on identical numbers.
   const fallback: string = reportComposerFor(company).composeReport(panel).markdown;
@@ -821,12 +1015,16 @@ export async function runReport(input: ResearchInput, userId: string) {
   const guarded = generated
     ? await applyFactGuard(generated.content, company, marketSnapshot, financialsData, valuation, userId)
     : { content: fallback, factGuard: null };
-  const markdown = guarded.content;
+  // buildReportPrompt 对模型说"结尾不需要再写免责声明（系统会附加）"——这里就是那个"系统"。
+  // 之前只有 composeReport 的兜底路径带免责声明，模型路径直接返回正文，于是正常情况下的
+  // 报告反而没有声明。fallback 已经过 composeReport 附加，appendReportDisclaimer 幂等，两条路都走它。
+  const markdown = appendReportDisclaimer(guarded.content);
   const saved = await persistResearch(ctx, input, userId, markdown);
   return {
     mode: generated ? "report_model" : "report_local",
     provider: generated?.provider || null,
     model: generated?.model || null,
+    intent: route,
     sessionId: saved.sessionId,
     decisionPanel: panel,
     markdown,

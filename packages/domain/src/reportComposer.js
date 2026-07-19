@@ -10,6 +10,24 @@
 const DISCLAIMER =
   "\n\n---\n> 本报告仅供研究学习，不构成投资建议。请用公司原始公告核验关键数据，独立做出决定。";
 
+/**
+ * 给报告正文附加免责声明。**两条报告路径都必须经过这里**。
+ *
+ * 之前只有本文件的兜底路径（composeReport）附加，而 buildReportPrompt 却对模型说
+ * "结尾不需要再写免责声明（系统会附加）"——`runReport` 在模型成功时直接返回模型正文，
+ * 不附加任何东西。净效果完全反了：**模型可用时（正常情况）报告没有免责声明，模型挂了才有**。
+ * 把它导出成一个函数而不是让调用方各自拼字符串，就是为了让"系统会附加"这句承诺
+ * 只有一个兑现点。
+ *
+ * 幂等：模型偶尔仍会自己写一句免责声明（提示词只是要求它不写，不是保证），
+ * 这时不重复追加。
+ */
+export function appendReportDisclaimer(markdown) {
+  const text = String(markdown || "");
+  if (/不构成投资建议/.test(text)) return text;
+  return text + DISCLAIMER;
+}
+
 function clean(value) {
   return String(value || "").replace(/[。；;,\s]+$/g, "").trim();
 }

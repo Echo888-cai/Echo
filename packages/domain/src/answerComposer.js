@@ -32,6 +32,7 @@ export function createAnswerComposer({
   webEvidenceToPrompt,
   financialsToMarkdown,
   buybacksToPrompt,
+  documentsToPrompt,
   beijingMinute
 }) {
 const RESEARCH_STATUS_LABELS = researchStatusLabels;
@@ -523,8 +524,49 @@ function falsifyReplyFromPanel(panel, _question = "", dataSources = {}, context 
   return lines.filter((line) => line !== null && line !== undefined).join("\n");
 }
 
+function briefReplyFromPanel(panel, question = "", dataSources = {}, context = {}) {
+  const profile = companyByTicker(panel?.ticker) || {};
+  const name = panel?.companyName || profile.nameZh || panel?.ticker || "这家公司";
+  const intent = context.route?.intent || classifyResearchIntent(question);
+  let answer;
+  let evidence;
+
+  if (intent === RESEARCH_INTENTS.financialQuality) {
+    const quality = computeFinancialQuality(context.financialsData || null, {
+      marketCap: context.marketSnapshot?.marketCap,
+      pe: context.marketSnapshot?.pe
+    });
+    const metrics = Array.isArray(quality.metrics) ? quality.metrics.slice(0, 4).map((item) => `${item.name} ${item.display}`) : [];
+    const business = (profile.businessModel || []).filter((item) => !/回购|分红|股东回报/.test(String(item))).slice(0, 2).map(cleanSentence);
+    answer = `${name}${metrics.length ? "是赚钱的，但要看利润质量而不只是净利润" : "有明确的赚钱机制，但本轮缺少足够财务口径确认利润质量"}。`;
+    evidence = `${business.length ? `主要靠${business.join("；")}。` : "主要收入结构需要继续核最新财报。"}${metrics.length ? ` 已核到的关键指标是：${metrics.join("、")}。` : ""}`;
+  } else if (intent === RESEARCH_INTENTS.businessModel) {
+    const business = (profile.businessModel || []).slice(0, 3).map(cleanSentence);
+    answer = `${name}的赚钱逻辑${business.length ? "很清楚" : "需要用最新分部数据补齐"}：${business.join("；") || "先看核心客户是谁、谁付钱，以及收入能否稳定转成现金流"}。`;
+    evidence = "关键不是收入规模本身，而是高毛利、复购与自由现金流能否持续。";
+  } else if (intent === RESEARCH_INTENTS.moat) {
+    const moat = (profile.moat || []).slice(0, 3);
+    answer = `${name}的核心壁垒是${moat.length ? moat.join("、") : "规模、客户关系和产品粘性"}。`;
+    evidence = "真正有效的护城河最终应体现为定价权、留存、利润率和现金流；如果这些指标持续走弱，壁垒就需要重估。";
+  } else if (intent === RESEARCH_INTENTS.valuation) {
+    const valuation = context.valuation;
+    answer = valuation && !valuation.cannotValueReason
+      ? `${name}当前估值的看空 / 中性 / 看多区间是 ${valuation.bear} / ${valuation.base} / ${valuation.bull}，现价 ${valuation.currentPrice}。`
+      : `${name}本轮还不能给出自洽估值区间。`;
+    evidence = valuation && !valuation.cannotValueReason
+      ? `口径采用${valuation.method}；重点看现价相对中性情景的安全边际，以及盈利兑现是否支撑该区间。`
+      : "缺少可核验的盈利或现金流锚，硬给目标价会制造虚假精确。";
+  } else {
+    answer = `${name}当前最重要的判断是：${String(panel.oneLineView || "核心逻辑仍需继续验证").replace(/。+$/, "")}。`;
+    evidence = "先看已核到的财务、现金流和关键风险是否同向，短期股价本身不能替代基本面判断。";
+  }
+
+  return [answer, evidence, "", "来源：", ...sourceLines(panel, dataSources, context.webEvidence).slice(0, 3)].join("\n");
+}
+
 function researchReplyFromPanel(panel, question = "", dataSources = {}, context = {}) {
   if (!panel) return "我还没有拿到足够上下文。先告诉我公司名称或港股代码，我会先做阶段判断。";
+  if (context.route?.depth === "brief") return briefReplyFromPanel(panel, question, dataSources, context);
   if (isBusinessModelQuestion(question)) return businessModelReplyFromPanel(panel, question, dataSources);
   if (isCompetitorQuestion(question)) return competitorReplyFromPanel(panel, question, dataSources, context);
   if (isMoatQuestion(question)) return moatReplyFromPanel(panel, question, dataSources);
@@ -618,14 +660,14 @@ function researchReplyFromPanel(panel, question = "", dataSources = {}, context 
   return lines.filter((line) => line !== null && line !== undefined).join("\n");
 }
 
-function normalizeResearchAnswer(content, panel, dataSources = {}) {
+function normalizeResearchAnswer(content, panel, dataSources = {}, route = /** @type {any} */ (null)) {
   if (!panel) return content;
   let text = String(content || "").trim();
   // 模型有时把开头写成"北京时间2026…"（漏空格），先补空格，避免下面的去重判断误判。
   text = text.replace(/^北京时间(\d{4})/, "北京时间 $1");
   // 仅当模型自己没带时间前缀时才补一句；正则放宽到"北京时间 + 日期"，不强求时分，
   // 防止重复塞前缀。oneLineView 已自带句号，先去掉避免出现"。。"。
-  if (!/^北京时间\s*\d{4}-\d{2}-\d{2}/.test(text)) {
+  if (route?.depth !== "brief" && !/^北京时间\s*\d{4}-\d{2}-\d{2}/.test(text)) {
     const view = String(panel.oneLineView || panel.dataReadiness || "需要继续验证").replace(/。+$/, "");
     text = `北京时间 ${beijingMinute()}，${panel.companyName || panel.ticker} 最近的状态是：${view}。\n\n${text}`;
   }
@@ -660,6 +702,17 @@ function conversationHistoryBlock(history) {
   if (!turns.length) return "";
   return `对话上文（最近几轮，供承接追问用；当前研究主体仍以"用户问题"和下面已接入数据为准，不要从这里翻出旧公司当成本轮新主题）：
 ${turns.join("\n")}
+`;
+}
+
+function longTermMemoryBlock(memory) {
+  const facts = Array.isArray(memory?.facts) ? memory.facts : [];
+  const questions = Array.isArray(memory?.openQuestions) ? memory.openQuestions : [];
+  if (!facts.length && !questions.length) return "";
+  const factLines = facts.slice(0, 8).map((item) => `- 已沉淀判断：${String(item.fact || item).slice(0, 360)}`);
+  const questionLines = questions.slice(0, 5).map((item) => `- 待验证问题：${String(item.question || item).slice(0, 240)}`);
+  return `长期研究记忆（只用于承接，不得覆盖本轮更新的事实；发生冲突时以本轮带日期的证据为准）：
+${[...factLines, ...questionLines].join("\n")}
 `;
 }
 
@@ -739,11 +792,13 @@ function buildChatPrompt(question, panel, dataSources = {}, context = {}) {
   const bull = profile?.bull?.join("；") || "本地档案暂缺";
   const bear = profile?.bear?.join("；") || "本地档案暂缺";
   const monitors = profile?.monitors?.join("、") || "收入增速、利润率、自由现金流、回购/分红";
-  const moatMode = isMoatQuestion(question);
-  const businessMode = isBusinessModelQuestion(question);
-  const competitorMode = isCompetitorQuestion(question);
-  const financialMode = isFinancialQualityQuestion(question);
-  const falsifyMode = isFalsifyQuestion(question);
+  const routedIntent = context.route?.intent || classifyResearchIntent(question);
+  const briefMode = context.route?.depth === "brief";
+  const moatMode = routedIntent === RESEARCH_INTENTS.moat;
+  const businessMode = routedIntent === RESEARCH_INTENTS.businessModel;
+  const competitorMode = routedIntent === RESEARCH_INTENTS.competitors;
+  const financialMode = routedIntent === RESEARCH_INTENTS.financialQuality;
+  const falsifyMode = routedIntent === RESEARCH_INTENTS.falsify;
   const hasLiveFin = context.financialsData?.providerStatus === "ok";
   // Real three-statement data (US via FMP) is the single source of truth for any
   // financial number — foreground it so the model stops reasoning from the seed archive.
@@ -766,18 +821,38 @@ function buildChatPrompt(question, panel, dataSources = {}, context = {}) {
   const buybackPrompt = buybacksToPrompt(context.buybacks);
   const portraitBlock = context.portraitContext ? `\n${context.portraitContext}\n` : "";
   const historyBlock = conversationHistoryBlock(context.history);
+  const memoryBlock = longTermMemoryBlock(context.longTermMemory);
   const ranges = context.marketSnapshot?.ranges;
   const rangeLine = ranges?.providerStatus === "ok" && (ranges.oneMonthPct !== null || ranges.ytdPct !== null)
     ? `区间回报：近1月 ${fmtPct(ranges.oneMonthPct)}、年初至今 ${fmtPct(ranges.ytdPct)}（截至 ${ranges.asOf}）`
     : "";
   const compareBlock = buildCompareBlock(context.compare);
+  const documentsBlock = documentsToPrompt(context.documents);
   const dual = context.dualListing;
   const dualQuote = context.dualQuote;
   const dualAskedHk = !!(dual && dual.asked && /\.HK$/i.test(dual.asked));
   const holdingsBlock = buildHoldingsBlock(context.otherHoldings);
   const hasHoldings = !context.compare && Boolean(context.otherHoldings?.length);
+  const answerShape = briefMode
+    ? "这是单点问题：直接用 2-4 个短段落回答，第一句就给结论；正文控制在 180-420 个汉字。不要列完整研究框架，不要输出‘动作/证伪条件/还缺什么’等固定栏目；最多补一句数据缺口，最后保留 1-3 条来源。"
+    : context.compare
+      ? `本轮是【对比任务】：把当前研究对象 ${panel.companyName} 与上面"对比对象 ${context.compare.name}"并排比较。段落固定用：简单结论、现价与估值、利润质量、护城河与商业模式、区间回报与动量、分析师预期、风险与赔率、我的判断。每个维度都要两家都讲、点明谁更优及原因；"我的判断"明确给出谁的赔率/质量更好以及成立前提。只用两家已核到的真实数据，缺的维度说一句即可。禁止买卖建议。不要输出单公司的完整研究模板。`
+      : hasHoldings
+        ? "本轮是多标的/组合任务：逐只基于真实数据给判断，并补组合集中度与风险结构；禁止买卖建议。"
+        : businessMode
+          ? "用户问的是靠什么赚钱/商业模式。只回答这个问题，段落用：简单说、拆开看、关键判断、主要风险、来源。"
+          : competitorMode
+            ? "用户问的是竞争格局。只回答主要对手、利润池如何被争夺、关键监控和来源，不写完整估值模板。"
+            : moatMode
+              ? "用户问的是护城河。只回答壁垒、壁垒如何转成利润、证伪点和来源。"
+              : financialMode
+                ? "用户问的是盈利质量。先回答赚不赚钱，再讲赚钱机制、利润质量、现金流、风险和来源。"
+                : falsifyMode
+                  ? "用户问的是证伪。先讲当前逻辑成立的前提，再列会推翻逻辑的可观察事实和来源。"
+                  : "使用：结论、事实、推断、估值 / 风险、证伪条件、我的判断、还缺什么、来源。";
+
   return `用户问题：${question}
-${historyBlock}${portraitBlock}
+${historyBlock}${memoryBlock}${portraitBlock}
 当前研究对象：${panel.companyName}（${panel.ticker}）
 研究状态：${RESEARCH_STATUS_LABELS[panel.researchStatus] || panel.researchStatus}
 数据完整度：${panel.dataCompleteness}%
@@ -791,7 +866,7 @@ ${drivers}
 已接入数据：${connected}
 缺失数据：${missing}
 行情：${dataSources.market?.provider || panel.price?.source || "缺失"}，${panel.price?.value || "缺失"}${panel.price?.change && panel.price.change !== "暂不可用" ? `（${panel.price.change}）` : ""}${panel.price?.timestamp ? `，截至 ${panel.price.timestamp}` : ""}
-${rangeLine ? `${rangeLine}\n` : ""}${compareBlock}${holdingsBlock}来源候选：
+${rangeLine ? `${rangeLine}\n` : ""}${compareBlock}${holdingsBlock}${documentsBlock}来源候选：
 ${sources}
 ${hasLiveFin
     ? `已核到的实时财报（来源 ${context.financialsData.source}${context.financialsData.period ? ` · 截至 ${context.financialsData.period}` : ""}）——本轮所有财务数字的唯一事实源：\n${liveFinancialsBlock}`
@@ -815,22 +890,22 @@ ${webEvidencePrompt}
 
 回答规则：
 - 输出中文纯文本，可以用短标题，但不要 Markdown 表格。
-- 第一行必须以“北京时间 ${beijingMinute()}，”开头。若是泛研究问题，用“${panel.companyName} 最近的状态是：……”；若是单点追问，直接回答用户问的那个点。
+- ${briefMode ? "第一句直接回答问题，不加时间、免责声明或铺垫。" : `第一行必须以“北京时间 ${beijingMinute()}，”开头。若是泛研究问题，用“${panel.companyName} 最近的状态是：……”；若是单点追问，直接回答用户问的那个点。`}
 - 保持像真实投研对话，不要写成产品说明，不要说“我将/我会获取”。
-- ${context.compare ? `本轮是【对比任务】：把当前研究对象 ${panel.companyName} 与上面"对比对象 ${context.compare.name}"并排比较。段落固定用：简单结论、现价与估值、利润质量、护城河与商业模式、区间回报与动量、分析师预期、风险与赔率、我的判断。每个维度都要两家都讲、点明谁更优及原因；"我的判断"明确给出谁的赔率/质量更好以及成立前提。只用两家已核到的真实数据，缺的维度说一句即可。禁止买卖建议。不要输出单公司的完整研究模板。` : hasHoldings ? `本轮用户同时问了多只持仓/标的，这是【多标的/组合任务】。必须**逐只**基于上面"本轮已核到的其他标的"的真实行情/估值给判断，并给出**组合合计**视角。段落固定用：结论（点明组合整体盈亏方向 + 各标的浮动）、分标的看（每只一段：性质/估值/赔率/各自浮动盈亏）、组合视角（集中度与风险结构、谁稳谁弹）、动作（研究语言、禁买卖建议）、证伪条件、来源。合计盈亏要把当前研究对象的成本/持股 + 上面其他标的的成本/持股一起算。严禁因旧知识否定任何已核到的标的（例如说某股"还没上市"）。不要输出单公司的完整研究模板。` : businessMode ? "用户问的是靠什么赚钱/商业模式/收入来源。只回答这个问题，段落用：简单说、拆开看、关键判断、主要风险、来源。不要输出完整研究模板。" : competitorMode ? "用户问的是竞争对手/竞品/竞争格局。只回答竞争格局，段落用：简单结论、主要竞争对手、怎么理解竞争格局、我的判断、接下来重点看、来源。不要输出完整研究模板，不要写估值/动作大模板。" : moatMode ? "用户问的是护城河/竞争优势。只围绕护城河回答，段落用：结论、护城河拆解、商业模式、我的判断、风险 / 证伪、下一步看什么、来源。不要输出完整行情模板。" : financialMode ? "用户问的是赚不赚钱/盈利质量/利润/现金流。只回答财务质量，段落用：我的判断、靠什么赚钱、利润质量、现金流、主要风险、下一步看什么、来源。先给判断再讲依据，优先使用上面‘已核到的实时财务口径’，缺数据只说一句、放到末尾，不要输出完整研究模板。" : falsifyMode ? "用户问的是什么情况会证伪/会推翻逻辑。只回答证伪，段落用：我的判断、会推翻逻辑的关键事实、怎么提前观察、来源。先点明当前多头逻辑成立的前提，再列出哪些事实出现就要重估，使用 Bull/Bear/监控项档案，不要输出完整研究模板。" : "必须包含这些段落，顺序固定：结论、事实、推断、估值 / 风险、动作、证伪条件、我的判断、还缺什么（折叠在末尾、只影响置信度）、来源。"}
+- ${answerShape}
 - “事实”尽量编号，引用当前可用数据；不能编造具体数值。若某项缺失，写“当前未核到/来源缺失”，但继续给推断。
 - 凡涉及收入/利润/利润率/现金流/EPS/回购分红的具体数字，只能引用上面“已核到的实时财报”块；本地档案只提供定性判断（护城河/商业模式/多空逻辑），不得作为财务数字来源。${hasLiveFin ? "本轮已有实时财报，必须用真实数字支撑财务判断，不要再写“未核到完整三表/仅本地档案口径”。" : "本轮无实时财报：严禁给出任何具体财务数字或其估算值（包括收入/利润/EPS/利润率/现金流的绝对值，以及“约”“大约”“行业常见范围”这类措辞），只能定性描述赚钱机制与风险并说明置信度下降；要数字就明说“需核最新财报”。"}
 - 讨论同业/竞对的估值倍数（PE/EV-Sales 等具体数字）时，只能引用上面"同业对照"里列出的公司和倍数；讨论下一次财报/业绩日时，只能引用上面"下一业绩日"给的日期；两者都没核到时只能说"未核到"，不能凭自己的知识编造其它公司、倍数或日期。**"按行业常识/框架推演/仅供参考"这类免责措辞不能当成编数字的许可证**——给同业公司点名却配一个编出来的倍数，本质还是编数字，标不标"框架"都不行；没有真实数据就只做定性描述，不点具体公司名+具体数字的组合。
 - 不要使用“暂不评分”“完整度xx%”“需要补充材料”“未接入”这种产品状态词，改成研究语言：当前未核到、置信度下降。
 - 用户提到的任何股票代码/公司，即使你印象里它“没上市/不是标准代码/是私人公司”，也**绝不**断言它不存在、拒绝评估、或建议换成别的代码——它很可能是你知识截止后才上市的新票（如刚 IPO 的标的）。本轮没核到它的实时数据时，只说“本轮未能核到 X 的实时数据、置信度下降”，照常基于其余已核到的标的给判断。${dual ? `\n- 本标的港美双重上市（港股 ${dual.hk}｜美股 ${dual.us}）。基本面/估值本轮一律按**美股 ADR ${dual.us}** 口径（数据更全）。${dualQuote ? `用户问的是港股，已核到**港股 ${dualQuote.ticker} 实时价 ${dualQuote.price} ${dualQuote.currency}${dualQuote.changePct != null ? `（${dualQuote.changePct >= 0 ? "+" : ""}${dualQuote.changePct}%）` : ""}**：盈亏**必须**用这个港股价 + 用户 HKD 成本算${dualQuote.cost != null ? `（成本 ${dualQuote.cost}${dualQuote.shares != null ? `、持股 ${dualQuote.shares}` : ""}${dualQuote.pnlPct != null ? ` → 浮动 ${dualQuote.pnlPct >= 0 ? "+" : ""}${dualQuote.pnlPct}%` : ""}）` : ""}，**绝不**用 ADR 美元价算港股盈亏；估值/基本面继续用 ADR ${dual.us} 口径。` : dualAskedHk ? `用户问的是**港股 ${dual.hk}**：本轮未取到港股实时价，盈亏只说明口径（按港股价 + HKD 成本），**不要**用 ADR 美元价硬算港股盈亏，提示用户可按港股实时价换算。` : `若用户持有的是港股 ${dual.hk}，提示其盈亏需按港股价 + HKD 成本另算，不要用 ADR 美元价硬套。`}` : ""}
-- “还缺什么”只在末尾出现一段，且只说还缺哪些事实会提高置信度（如完整三表、最新公告、一致预期），不要写产品后台/数据源厂商名字，不要让缺口抢正文。
-- “推断”必须是全回答的信息密度最高部分，不能少于 4 个自然段；必须依次讲：赚钱机制、护城河是否能转成利润、财务兑现路径、估值重估变量。必须使用上面的本地公司档案，不能只写“第一层/第二层”的空框架。
+- ${briefMode ? "数据缺口最多一句，不能让它抢走直接结论。" : "“还缺什么”只在末尾出现一段，且只说还缺哪些事实会提高置信度，不写后台或厂商词。"}
+- ${briefMode ? "只展开与用户问题直接相关的 1-2 个依据。" : "“推断”必须是信息密度最高的部分，覆盖赚钱机制、壁垒到利润、财务兑现与重估变量。"}
 - 对“赚不赚钱”，必须先回答赚钱机制和盈利质量：是否有收入来源、利润是否稳定、现金流是否支撑。
 - 不允许只说数据不足；数据不足只能作为置信度和证伪条件的一部分。
 - 禁止买入/卖出/持有建议，使用“观察、补充验证、赔率改善、逻辑重估”等研究语言。
-- 长度控制在 900-1800 字，信息密度优先。
+- ${briefMode ? "长度控制在 180-420 个汉字（来源不计），信息密度优先。" : "长度控制在 900-1800 字，信息密度优先。"}
 - 证伪条件尽量锚到可量化阈值（“毛利率跌破 29%”“Q2 收入增速低于 -2%”），不要只写“竞争加剧”“宏观承压”这种没法核对的泛条件。若估值判断有明确价格锚，可另给一条价格线证伪（如“股价跌破 85 美元触发逻辑复核”）——系统会自动盯这条线并在命中时提醒；没有估值依据就不要硬编价格线。
-${STRUCTURED_FALSIFIER_INSTRUCTION}`;
+${briefMode ? "" : STRUCTURED_FALSIFIER_INSTRUCTION}`;
 }
 
 /**
@@ -866,13 +941,56 @@ function compPeersPromptLine(compPeers) {
     const reason = compPeers?.detail || "同业数据未核到";
     return `；${reason}——讨论同业时只能定性描述（如"该行业倍数通常偏高/偏低"），绝对不能给任何具体公司的具体倍数数字，哪怕标注"仅供参考"或"行业常识估算"也不行；只要点了公司名就必须配一个真实数字，宁可不点名。反面例子（禁止这样写）："苹果PE约30倍""腾讯约20倍PE""国内厂商8-15x"——这些都是编数字，就算加"约""常识估算"也不行；正确写法只能是"苹果等同业公司的估值暂未核到，无法直接对标"，不点出任何具体倍数`;
   }
-  const peerList = compPeers.peers
-    .map((p) => `${p.ticker}${p.multiple != null ? ` ${p.multipleType} ${Number(p.multiple).toFixed(1)}x` : "（数据不可用）"}`)
+  // 只渲染真正计入锚点的 peer。这一行曾经 map 整个 compPeers.peers——包括被
+  // compPeerRules 明确判为 matched:false 的离群 peer（PE > 100x：盈利趋零导致倍数失真），
+  // 而且把它们的 reason 整个丢掉，只留下 "BIDU PE 647.5x" 这样一个赤裸数字。紧接着下面
+  // 那句话又告诉模型"只能引用这里列出的公司和倍数"——等于**授权**模型把 647.5x 当事实引用，
+  // 实测回答里就出现了「同业对照中，百度PE 647.5x」。
+  //
+  // 也就是说：compPeerRules 的离群防线在锚点上生效了，在用户真正读到的那段散文里没有——
+  // 数字换了条路照样到达用户。防线必须在它离开领域层的每一个出口上都成立，
+  // 只在其中一个出口成立的防线等于没有。
+  //
+  // 被排除的 peer 不再出现在清单里，**而且它们的倍数数字一个都不能进提示词**。
+  //
+  // 这一点很容易做半套：把离群 peer 从清单里拿掉、却把 annotatePeer 的 reason 原样打印，
+  // 而那句 reason 长这样——"PE 647.5x 超出可比上限 100x（盈利/收入接近于零，倍数失真）"。
+  // 数字还在提示词里，只是换了个位置，再配一句"不要引用"。但本仓库的教训恰恰是：
+  // **给了模型数字，它就会引用**（"仅供参考/框架推演"挡不住，见下面那段反面例子）。
+  // 靠嘱咐去对冲一个已经递到手里的数字，是把防线建在模型的服从性上。
+  //
+  // 所以这里只说"有几家被排除、因为什么类别"，不带任何倍数值。
+  // 前端"为什么选这些同业"面板要展示明细，直接读 compPeers 原始数据即可——
+  // 那是 UI，不是喂给模型的提示词，两者的安全边界不同。
+  const included = compPeers.peers.filter((p) => p.matched && p.multiple != null);
+  const excluded = compPeers.peers.filter((p) => !p.matched);
+  // reason 里可能夹着倍数（"PE 647.5x 超出…"），只取类别、不取数字。
+  const excludedSummary = () => {
+    const distorted = excluded.filter((p) => /超出可比上限/.test(String(p.reason || ""))).length;
+    const otherStage = excluded.filter((p) => /阶段不同/.test(String(p.reason || ""))).length;
+    const noData = excluded.length - distorted - otherStage;
+    return [
+      distorted ? `${distorted} 家倍数失真（盈利趋零，已按可比上限剔除）` : "",
+      otherStage ? `${otherStage} 家估值阶段不同` : "",
+      noData > 0 ? `${noData} 家数据不足` : ""
+    ].filter(Boolean).join("、");
+  };
+  if (!included.length) {
+    const why = excluded.length
+      ? `同业候选有 ${excluded.length} 家，但没有一家可比（${excludedSummary()}）`
+      : compPeers.detail || "同业数据未核到";
+    return `；${why}——因此本轮**没有**任何可引用的同业倍数：只能定性描述，绝对不能给任何具体公司的具体倍数数字。被剔除的同业倍数本身就是失真值，你也拿不到它们，不要猜`;
+  }
+  const peerList = included
+    .map((p) => `${p.ticker} ${p.multipleType} ${Number(p.multiple).toFixed(1)}x`)
     .join("、");
+  const excludedNote = excluded.length
+    ? `；另有 ${excluded.length} 家同业未计入（${excludedSummary()}）——它们的倍数不可用，不要提及或猜测`
+    : "";
   const anchor = compPeers.anchor
     ? `；同业锚点 ${compPeers.anchor.multipleType} p25 ${compPeers.anchor.p25.toFixed(1)}x / 中位 ${compPeers.anchor.median.toFixed(1)}x / p75 ${compPeers.anchor.p75.toFixed(1)}x（${compPeers.anchor.n} 家计入）`
     : "；同业数量不足未生成锚点";
-  return `\n  同业对照（Finnhub 自动匹配，讨论同业/竞对估值倍数时只能引用这里列出的公司和倍数，不能凭自己的知识编造其它公司或倍数，也不能给清单之外的公司编具体数字）：${peerList}${anchor}`;
+  return `\n  同业对照（Finnhub 自动匹配，讨论同业/竞对估值倍数时只能引用这里列出的公司和倍数，不能凭自己的知识编造其它公司或倍数，也不能给清单之外的公司编具体数字）：${peerList}${anchor}${excludedNote}`;
 }
 
 /** G-2/R3：下一业绩日渲染成一行 prompt 文本，供正文引用；没核到就明说，不能编日期。 */

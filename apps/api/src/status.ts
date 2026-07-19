@@ -93,7 +93,7 @@ export async function buildStatusSnapshot(userId = "local") {
   // (DeepSeek → OpenAI → generic); listing a provider the gateway can't use
   // would be the same 配置剧场 the cards below are built to avoid.
   const providers = [
-    ...(process.env.DEEPSEEK_API_KEY ? [{ id: "deepseek", label: "DeepSeek", model: process.env.DEEPSEEK_MODEL || "deepseek-chat" }] : []),
+    ...(process.env.DEEPSEEK_API_KEY ? [{ id: "deepseek", label: "DeepSeek", model: process.env.DEEPSEEK_MODEL || "deepseek-v4-flash" }] : []),
     ...(process.env.OPENAI_API_KEY ? [{ id: "openai", label: "OpenAI", model: process.env.OPENAI_MODEL || "gpt-5-mini" }] : []),
     ...(process.env.MODEL_API_KEY && process.env.MODEL_BASE_URL ? [{ id: "generic", label: "自定义网关", model: process.env.MODEL_NAME || "default" }] : [])
   ];
@@ -151,7 +151,7 @@ export async function buildStatusSnapshot(userId = "local") {
       { id: "web_evidence", label: "可信 web 搜索证据层", priority: "P3", providers: ["Tavily", "SerpAPI"] },
       { id: "analyst_estimates", label: "一致预期与目标价", priority: "P3", providers: ["Finnhub", "FMP"] }
     ],
-    ai, db: { companies: "PostgreSQL" }, canary: { batchId: canaryBatchId, sources: canaryHealth }, hkFilingCoverage,
+    ai, db: { companies: "PostgreSQL" }, cache: { configured: Boolean(process.env.REDIS_URL), backend: process.env.REDIS_URL ? "Redis + memory fallback" : "memory" }, canary: { batchId: canaryBatchId, sources: canaryHealth }, hkFilingCoverage,
     llmAudit, usage, factGuard, updatedAt: new Date().toISOString()
   };
 }

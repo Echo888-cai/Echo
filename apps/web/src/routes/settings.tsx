@@ -14,7 +14,6 @@ import {
 import { notifWhen } from "../lib/format";
 import { showToast } from "../lib/toast";
 import { useAuth } from "../lib/auth-context";
-import { Shell } from "../components/Shell";
 
 interface InstallPromptEvent extends Event {
   prompt(): Promise<void>;
@@ -373,101 +372,99 @@ export function SettingsPage() {
   }
 
   return (
-    <Shell sidebar={false}>
-      <section className="simple-page settings-page">
-        <div className="page-head">
-          <p className="eyebrow">Settings</p>
-          <h1>偏好与运行状态</h1>
-          <span>管理研究额度、通知偏好与个人体验。</span>
-        </div>
-        <div className="settings-grid">
-          <NotificationPreferencesCard />
-          <PwaCard />
-          <LlmAuditCard apiStatus={apiStatus} />
-          <ScorecardCard />
-          {isOwner ? (
-            <>
-              <article className="settings-card">
-                <h2>模型</h2>
-                <p>{apiStatus?.ai?.configured ? "已配置模型网关。" : "未配置模型 Key，系统会使用本地模板。"}</p>
-                {providers.length ? (
-                  providers.map((p, i) => (
-                    <div className="setting-row" key={p.label ?? i}>
-                      <span>{p.label}</span>
-                      <strong>{p.model}</strong>
-                    </div>
-                  ))
-                ) : (
-                  <div className="setting-row">
-                    <span>Provider</span>
-                    <strong>未配置</strong>
+    <section className="simple-page settings-page">
+      <div className="page-head">
+        <p className="eyebrow">Settings</p>
+        <h1>偏好与运行状态</h1>
+        <span>管理研究额度、通知偏好与个人体验。</span>
+      </div>
+      <div className="settings-grid">
+        <NotificationPreferencesCard />
+        <PwaCard />
+        <LlmAuditCard apiStatus={apiStatus} />
+        <ScorecardCard />
+        {isOwner ? (
+          <>
+            <article className="settings-card">
+              <h2>模型</h2>
+              <p>{apiStatus?.ai?.configured ? "已配置模型网关。" : "未配置模型 Key，系统会使用本地模板。"}</p>
+              {providers.length ? (
+                providers.map((p, i) => (
+                  <div className="setting-row" key={p.label ?? i}>
+                    <span>{p.label}</span>
+                    <strong>{p.model}</strong>
                   </div>
-                )}
-              </article>
-              <article className="settings-card">
-                <h2>数据源</h2>
-                {sources.map((s, i) => (
-                  <div className="setting-row" key={s.id ?? i}>
-                    <span>{s.name}</span>
-                    <strong>{s.status}</strong>
-                  </div>
-                ))}
-              </article>
-              <CanaryCard canary={apiStatus?.canary} />
-              <FactGuardCard apiStatus={apiStatus} />
-              <HkCoverageCard apiStatus={apiStatus} />
-            </>
-          ) : null}
-          <article className="settings-card">
-            <h2>前台策略</h2>
-            <p>
-              研究 / 看盘 / 设置三个分区各司其职：落地即研究（连续对话，产品灵魂）；看盘是精简关注列表，点进公司页看真价格曲线（美股日线收盘价）、研究状况、基本面、证伪条件与事件。港股曲线预留付费源，暂标"待接入"。
-            </p>
-          </article>
-          <article className="settings-card">
-            <h2>数据怎么来的</h2>
-            <p>你不需要自己接任何接口。行情、财报、公告、新闻和网页证据都由平台统一接入，回答里会标注本轮用到了哪些来源、有没有联网核验。</p>
-            <div className="setting-row">
-              <span>研究会话</span>
-              <strong>本地自动保存</strong>
-            </div>
-            <div className="setting-row">
-              <span>证据来源</span>
-              <strong>行情 / 财报 / 公告 / 网页</strong>
-            </div>
-          </article>
-          <article className="settings-card">
-            <h2>通知与推送</h2>
-            <p>
-              Temporal 工作流自动执行盘前/盘后速报、证伪线巡检、业绩闭环和 PostgreSQL 备份；失败会从中断步骤继续。结果进入右上角通知中心。
-            </p>
-            {schedStatus ? (
-              <>
+                ))
+              ) : (
                 <div className="setting-row">
-                  <span>编排引擎</span>
-                  <strong>{(schedStatus.scheduler as any)?.engine === "temporal" ? "Temporal" : "未连接"}</strong>
+                  <span>Provider</span>
+                  <strong>未配置</strong>
                 </div>
-                {((schedStatus.scheduler as any)?.jobs || []).map((j: any, i: number) => (
-                  <div className="setting-row" title={j.lastDetail || ""} key={j.label ?? i}>
-                    <span>
-                      {j.label} · {j.schedule}
-                    </span>
-                    <strong>{j.lastStatus === "never" ? "未运行" : `${j.lastStatus === "ok" ? "✓" : "✗"} ${notifWhen(j.lastRunAt || "")}`}</strong>
-                  </div>
-                ))}
-              </>
-            ) : (
+              )}
+            </article>
+            <article className="settings-card">
+              <h2>数据源</h2>
+              {sources.map((s, i) => (
+                <div className="setting-row" key={s.id ?? i}>
+                  <span>{s.name}</span>
+                  <strong>{s.status}</strong>
+                </div>
+              ))}
+            </article>
+            <CanaryCard canary={apiStatus?.canary} />
+            <FactGuardCard apiStatus={apiStatus} />
+            <HkCoverageCard apiStatus={apiStatus} />
+          </>
+        ) : null}
+        <article className="settings-card">
+          <h2>前台策略</h2>
+          <p>
+            研究 / 看盘 / 设置三个分区各司其职：落地即研究（连续对话，产品灵魂）；看盘是精简关注列表，点进公司页看真价格曲线（美股日线收盘价）、研究状况、基本面、证伪条件与事件。港股曲线预留付费源，暂标"待接入"。
+          </p>
+        </article>
+        <article className="settings-card">
+          <h2>数据怎么来的</h2>
+          <p>你不需要自己接任何接口。行情、财报、公告、新闻和网页证据都由平台统一接入，回答里会标注本轮用到了哪些来源、有没有联网核验。</p>
+          <div className="setting-row">
+            <span>研究会话</span>
+            <strong>本地自动保存</strong>
+          </div>
+          <div className="setting-row">
+            <span>证据来源</span>
+            <strong>行情 / 财报 / 公告 / 网页</strong>
+          </div>
+        </article>
+        <article className="settings-card">
+          <h2>通知与推送</h2>
+          <p>
+            Temporal 工作流自动执行盘前/盘后速报、证伪线巡检、业绩闭环和 PostgreSQL 备份；失败会从中断步骤继续。结果进入右上角通知中心。
+          </p>
+          {schedStatus ? (
+            <>
               <div className="setting-row">
-                <span>调度状态</span>
-                <strong>{schedQuery.isError ? "读取失败" : "加载中…"}</strong>
+                <span>编排引擎</span>
+                <strong>{(schedStatus.scheduler as any)?.engine === "temporal" ? "Temporal" : "未连接"}</strong>
               </div>
-            )}
-            <button type="button" className="ghost-btn" onClick={handleTestNotification}>
-              发送测试通知
-            </button>
-          </article>
-        </div>
-      </section>
-    </Shell>
+              {((schedStatus.scheduler as any)?.jobs || []).map((j: any, i: number) => (
+                <div className="setting-row" title={j.lastDetail || ""} key={j.label ?? i}>
+                  <span>
+                    {j.label} · {j.schedule}
+                  </span>
+                  <strong>{j.lastStatus === "never" ? "未运行" : `${j.lastStatus === "ok" ? "✓" : "✗"} ${notifWhen(j.lastRunAt || "")}`}</strong>
+                </div>
+              ))}
+            </>
+          ) : (
+            <div className="setting-row">
+              <span>调度状态</span>
+              <strong>{schedQuery.isError ? "读取失败" : "加载中…"}</strong>
+            </div>
+          )}
+          <button type="button" className="ghost-btn" onClick={handleTestNotification}>
+            发送测试通知
+          </button>
+        </article>
+      </div>
+    </section>
   );
 }

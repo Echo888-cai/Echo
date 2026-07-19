@@ -76,32 +76,22 @@ export function displayValuation(company, marketSnapshot, financialsData, estima
   const band = buildAnalystBand(marketSnapshot, company, estimates);
   if (band) return withExtras(band);
 
-  // Price-centered PE band from a quoted or EPS-derived PE — always coherent. This is
-  // the guaranteed fallback so a bar renders whenever we have a price + real EPS, even
-  // for growth names where FCF-yield is incoherent and analyst targets aren't trustworthy.
-  const p = numOrNull(marketSnapshot?.price ?? company?.price);
-  let pe = marketSnapshot?.pe ?? company?.pe;
-  // financialsData.epsAnnualized === false means eps is a raw period-cumulative
-  // filing figure (HK/CN interim report), not TTM — dividing price by it would
-  // reproduce the same inflated-PE bug already fixed for US (see toDomainSources
-  // in research.ts). Only derive a PE here when eps is a genuine annual figure.
-  if (!pe && financialsData?.eps && p && financialsData?.epsAnnualized !== false) pe = p / financialsData.eps;
-  // pe 必须 > 0：亏损股的负 PE 不能拿来硬凑一条以现价为中心的带子（那是误导）。
-  if (p && pe && pe > 0) {
-    return withExtras({
-      method: "PE 区间",
-      bear: (p * 0.78).toFixed(2),
-      base: p.toFixed(2),
-      bull: (p * 1.28).toFixed(2),
-      currentPrice: p,
-      methods: ["PE 区间"],
-      methodDetail: [{ name: "PE 区间", bear: p * 0.78, base: p, bull: p * 1.28 }],
-      keyAssumptions: [`基于现价与 PE ${Number(pe).toFixed(1)}x 的估值带（约 ±25%，反映 PE 收缩/扩张）`],
-      sensitivity: [],
-      cannotValueReason: null
-    });
-  }
-  return withExtras({ ...v, cannotValueReason: v.cannotValueReason || "缺少自洽的估值口径。" });
+  // 这里曾有一条「PE 区间」保底兜底：bear/base/bull = 现价 ×0.78 / ×1.0 / ×1.28。
+  //
+  // 它读了 pe，但 pe 只用来决定"要不要给带子"，从不参与算带子——所以带子里没有任何公司
+  // 信息，只有现价乘常数。三个算术后果都是恒真的，不是偶发：
+  //   1. base === 现价 →「现价处于中性位置」是同义反复，不是结论；
+  //   2. 赔率 === (1.28-1)/(1-0.78) === 1.27 →「赔率 1.3:1」对每一家公司、每一个价位都成立；
+  //   3. 它让 dataSources.valuation 变成 ok，抬高 dataCompleteness，还经 deriveValuationPosition
+  //      写进 research_snapshots——记分卡于是在用同义反复算命中率。
+  //
+  // 本文件上方两处注释已经把"以现价为中心的 PE 带"点名为**自循环根因**，并要求 stage-aware
+  // 分支绝不回退到它。但它当时仍是保底分支，而港股正好必然落到这里（港股无 pe_ttm，
+  // FMP 是 US-only），于是旗舰标的腾讯拿到的就是这条零信息带子。
+  //
+  // 现在的行为：没有可信口径就诚实地不给带子。缺数据的标的应该显示"未核到"，而不是
+  // 因为缺数据反而得到一条看起来最笃定的带子。
+  return withExtras({ ...v, cannotValueReason: v.cannotValueReason || "缺少自洽的估值口径，本轮不给估值区间。" });
 }
 
 function numOrNull(value) {
@@ -428,15 +418,11 @@ export function computeValuation(company, marketSnapshot, financialsData, compPe
     }
   }
 
-  // ── Fallback: simple PE from market ──────────────
-  if (methods.length === 0 && pe) {
-    const peBear = pe * 0.7;
-    const peBase = pe;
-    const peBull = pe * 1.3;
-    const eps = price / pe;
-    methods.push({ name: "简单 PE", bear: eps * peBear, base: eps * peBase, bull: eps * peBull, weight: 1 });
-    assumptions.push(`仅基于行情 PE ${pe}x，缺 EPS 验证`);
-  }
+  // 这里曾有一条「简单 PE」兜底：eps = price / pe，再乘回 pe×0.7/1.0/1.3 得到带子。
+  // 代数上它恒等于 price×0.7 / price / price×1.3——把现价除以 PE 再乘以 PE，公司信息被
+  // 完整约掉，base 永远等于现价。它不是"精度低的估值"，是**没有估值**，只是把现价换了个
+  // 说法。保留它等于让红线 2 里的"不编数字"在最需要它的地方失效（越是缺数据的标的越会
+  // 落到兜底，于是越缺数据的公司反而越"有"估值带）。宁可没有带子，也不要一条零信息的带子。
 
   if (methods.length === 0) {
     return {
@@ -444,7 +430,9 @@ export function computeValuation(company, marketSnapshot, financialsData, compPe
       bear: null, base: null, bull: null,
       keyAssumptions: ["缺少 PE、EPS、FCF 等估值所需数据。"],
       sensitivity: [],
-      cannotValueReason: "缺少 PE、FCF 和 EPS 数据，无法建立估值框架。配置 FMP_API_KEY 或上传年报补全。"
+      // 用户可见文案里不出现供应商名/环境变量名：这段会经 keyDriversFrom 进 decisionPanel，
+      // 同时喂给 UI 和提示词，而 answerComposer 的作答规则明令禁止"配置 API_KEY / FMP"这类词。
+      cannotValueReason: "缺少可信的 PE、自由现金流与 EPS 口径，本轮不给估值区间。"
     };
   }
 

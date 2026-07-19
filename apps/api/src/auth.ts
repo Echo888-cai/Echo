@@ -22,7 +22,7 @@ const COOKIE_NAME = "echo_session";
 export const OWNER_USER_ID = "local";
 // scryptSync here runs once at module load, not on the request path — safe to stay synchronous.
 const DUMMY_PASSWORD_HASH = `s1$${Buffer.alloc(16).toString("hex")}$${scryptSync("echo-invalid-login-sentinel", Buffer.alloc(16), 64, SCRYPT_PARAMS).toString("hex")}`;
-const USERNAME_RE = /^[a-z0-9_-]{3,24}$/;
+const ACCOUNT_RE = /^(?:[a-z0-9_-]{3,24}|[^\s@]+@[^\s@]+\.[^\s@]+)$/i;
 const scryptAsync = promisify(scrypt) as (password: string, salt: Buffer, keylen: number, options: typeof SCRYPT_PARAMS) => Promise<Buffer>;
 
 export async function hashPassword(password: string) {
@@ -74,8 +74,8 @@ function publicUser(user: any) {
 
 export async function registerWithInvite(input: { invite: string; username: string; password: string; displayName?: string }) {
   const username = input.username.trim().toLowerCase();
-  if (!USERNAME_RE.test(username)) throw new Error("用户名 3-24 位，只能用小写字母/数字/_-");
-  if (await getUserByUsername(username)) throw new Error("用户名已被使用");
+  if (!ACCOUNT_RE.test(username)) throw new Error("请输入有效邮箱");
+  if (await getUserByUsername(username)) throw new Error("邮箱已被使用");
   const invite = await getUnusedInvite(input.invite);
   if (!invite) throw new Error("邀请码无效或已被使用");
   const id = `u_${randomBytes(6).toString("hex")}`;
@@ -103,7 +103,7 @@ export async function loginWithPassword(input: { username: string; password: str
 export async function createOwner(input: { username: string; password: string; displayName?: string }) {
   if (await getUserById(OWNER_USER_ID)) throw new Error("owner 已存在");
   const username = input.username.trim().toLowerCase();
-  if (!USERNAME_RE.test(username)) throw new Error("用户名 3-24 位，只能用小写字母/数字/_-");
+  if (!ACCOUNT_RE.test(username)) throw new Error("请输入有效邮箱");
   return publicUser(await createUser({ id: OWNER_USER_ID, username, passHash: await hashPassword(input.password), displayName: input.displayName, role: "owner" }));
 }
 

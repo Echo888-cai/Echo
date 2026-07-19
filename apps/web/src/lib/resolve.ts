@@ -1,6 +1,6 @@
 // Company identification, dual listings and research-intent resolution.
 import { companiesApi, type ResolvedCompany } from "./api";
-import { extractHkTicker, extractUsTickerToken } from "@echo/domain/company-identity";
+import { extractHkTicker, extractUsTickerToken, normalizeQuestionText } from "@echo/domain/company-identity";
 
 const companyAliases: { pattern: RegExp; ticker: string }[] = [
   { pattern: /腾讯控股|腾讯|Tencent/i, ticker: "0700.HK" },
@@ -122,18 +122,15 @@ export function resolveDualListing(query = ""): DualListingResult | null {
   };
 }
 
-const US_STOPWORDS = new Set([
-  "PE", "PB", "PS", "ROE", "ROI", "ROA", "ROC", "AI", "IPO", "GDP", "CEO",
-  "CFO", "COO", "CTO", "CMO", "US", "HK", "EPS", "FCF", "DCF", "ETF",
-  "Q1", "Q2", "Q3", "Q4", "YOY", "QOQ", "MOM", "TTM", "LTM", "MRQ",
-  "CPI", "PPI", "PMI", "GNP", "EV", "NAV", "AUM", "BPS", "DPS", "NIM",
-  "NYSE", "SEC", "SFC", "MSCI", "FTSE", "SPX", "SPY", "ESG", "SPAC"
-]);
-
+// 停用词表以前在这里手抄了一份 domain 的副本。两份名单必然漂移——实测 SPY 两边都有、
+// QQQ 两边都没有，于是"SPY 和 QQQ 有什么区别"把 QQQ 抽成了研究标的。现在直接用
+// domain 的唯一一份（extractUsTickerToken 内部已经合并 COMMON_NON_TICKERS，
+// 这里不再传第二份名单）。
 export function resolveUsTicker(text = ""): { ticker: string; name: string } | null {
-  const hit = usAliases.find((item) => item.pattern.test(text));
+  const normalized = aliasMatchText(text);
+  const hit = usAliases.find((item) => item.pattern.test(normalized));
   if (hit) return { ticker: hit.ticker, name: hit.name };
-  const ticker = extractUsTickerToken(text, US_STOPWORDS);
+  const ticker = extractUsTickerToken(text);
   return ticker ? { ticker, name: ticker } : null;
 }
 
@@ -141,8 +138,18 @@ export function extractTicker(text = ""): string {
   return extractHkTicker(text);
 }
 
+// 别名匹配前先归一化，再把中文之间的空格折叠掉。
+// 三种真实输入以前都匹配不上，用户只会觉得"连腾讯都认不出来"：
+//   "腾<ZWSP>讯"（复制粘贴夹带零宽字符）、"０７００.ＨＫ"（中文输入法全角）、"腾 讯"（手输空格）。
+// 只折叠 CJK 之间的空格：英文公司名的空格是有意义的（"Applied Materials" 不能变成
+// "AppliedMaterials"，"Coca Cola" 的别名正则也依赖那个空格）。
+function aliasMatchText(text: string): string {
+  return normalizeQuestionText(text).replace(/(?<=[㐀-鿿])\s+(?=[㐀-鿿])/gu, "");
+}
+
 export function extractAliasTicker(text = ""): string {
-  const hit = companyAliases.find((item) => item.pattern.test(text));
+  const normalized = aliasMatchText(text);
+  const hit = companyAliases.find((item) => item.pattern.test(normalized));
   return hit?.ticker || "";
 }
 
@@ -158,10 +165,31 @@ export function companyNameResidual(query = ""): string {
     .trim();
 }
 
-// Chinese company-name suffixes — a hit means the residual is likely a company
-// name, not a follow-up like "毛利率/护城河".
+// 中文公司名后缀——命中说明残句里有个词更像公司名，而不是"毛利率/护城河"这类追问。
 const CN_COMPANY_SUFFIX =
-  /(科技|集团|股份|控股|银行|保险|证券|基金|汽车|医药|生物|制药|能源|半导体|电子|国际|地产|食品|饮料|光电|通信|网络|软件|数据|智能|重工|机械|电力|航空|航运|传媒|文化|教育|物流|材料|化工|钢铁|水泥|实业|电器|家居|服饰|乳业|酒业|影业)/;
+  /(科技|集团|股份|控股|银行|保险|证券|基金|汽车|医药|生物|制药|能源|半导体|电子|国际|地产|食品|饮料|光电|通信|网络|软件|数据|智能|重工|机械|电力|航空|航运|传媒|文化|教育|物流|材料|化工|钢铁|水泥|实业|电器|家居|服饰|乳业|酒业|影业)$/;
+
+/**
+ * 残句里有没有哪个**词**长得像公司名。
+ *
+ * 两个约束都是必需的，少一个就会误判：
+ *
+ * 1. **后缀必须锚在词尾**。这些词是公司名的后缀，不是"出现即公司"的关键词。以前直接拿
+ *    整句测无锚定的正则，等于在问"整句里有没有这几个字"——于是"有**数据**支撑吗"因为含
+ *    「数据」被判成提到了新公司，一句纯追问触发公司重识别（2026-07-17 实测）。同类误伤：
+ *    "**智能**驾驶做得怎么样""**网络**效应还在吗""**软件**收入占比"——全是追问。
+ *
+ * 2. **必须逐词测，不能拿整个残句测**。companyNameResidual 会留下没剥干净的尾巴
+ *    （"药明生物怎么看" → "药明生物 看"），拿整串测 $ 会把真公司名漏掉。
+ *
+ * 长度 ≥ 3 的门槛把光杆后缀挡在外面："科技""数据"自己不是公司名。
+ */
+function residualLooksLikeCompanyName(residual: string): boolean {
+  return residual
+    .split(/\s+/)
+    .filter(Boolean)
+    .some((token) => token.length >= 3 && CN_COMPANY_SUFFIX.test(token));
+}
 
 const LEAD_IN_PREFIX = /^(我想了解|我想问问|我想问|我想知道|我想看看|我想|想了解|想知道|想问问|想问|帮我看看|帮我查查|帮我查|帮我分析|帮我|麻烦你|麻烦|请问|请帮我|了解一下|看下|看看)\s*/;
 const FOLLOWUP_HEAD =
@@ -175,7 +203,7 @@ export function mentionsNewCompany(query = ""): boolean {
   if (extractTicker(query) || extractAliasTicker(query) || resolveUsTicker(query) || resolveDualListing(query)) return true;
   const residual = companyNameResidual(query);
   if (residual.length < 2) return false;
-  if (CN_COMPANY_SUFFIX.test(residual)) return true;
+  if (residualLooksLikeCompanyName(residual)) return true;
   if (/[A-Z][a-z]{2,}/.test(residual)) return true;
   const lead = query.trim().replace(LEAD_IN_PREFIX, "").trim();
   if (/^[一-龥]{2,}/.test(lead) && !FOLLOWUP_HEAD.test(lead)) return true;
@@ -191,7 +219,7 @@ export function mentionsNewCompanyStrong(query = ""): boolean {
   if (extractTicker(query) || extractAliasTicker(query) || resolveUsTicker(query) || resolveDualListing(query)) return true;
   const residual = companyNameResidual(query);
   if (residual.length < 2) return false;
-  if (CN_COMPANY_SUFFIX.test(residual)) return true;
+  if (residualLooksLikeCompanyName(residual)) return true;
   if (/[A-Z][a-z]{2,}/.test(residual)) return true;
   return false;
 }
@@ -279,11 +307,23 @@ export function stripCompanyMentions(query = "", company: { nameZh?: string; nam
   return out;
 }
 
-// Comparison intent: "跟X比/对比/vs/谁更…/哪个更…". Combined with "names another
-// company" to avoid mistaking a longitudinal follow-up ("它和去年比怎么样") for one.
+// 纵向自比：和"自己的过去"比，不是和"另一家公司"比。命中这里就直接不是公司对比——
+// 否则"它和去年比怎么样""相比上个季度改善了吗"会弹出"要不要对比另一家公司"的选择卡，
+// 而用户压根没提第二家公司（2026-07-17 回归实测）。
+// 原注释说"Combined with 'names another company' to avoid mistaking a longitudinal
+// follow-up"——但 sendChat 里 isComparisonQuestion 与 mentionsNewCompanyStrong 是
+// **&&** 关系，去年/上季度这类词本身又不构成公司名，所以真实误报来自
+// "和 X 比" 里的 X 恰好被 mentionsNewCompanyStrong 认成公司的场合。这里直接从源头排除。
+const LONGITUDINAL = /[和跟与相]?(去年|前年|上年|上个?季度|上季|上个?月|上月|上周|同期|此前|之前|年初|历史|过去)/;
+
+// Comparison intent: "跟X比/对比/vs/谁更…/哪个更…".
 export function isComparisonQuestion(query = ""): boolean {
-  return /对比|相比|[和跟与][^，。？?]{1,14}(比|对比|相比|谁|哪个|哪家)|\bvs\b|谁(更|的)|哪(个|家)(更|的)?[^，。？?]{0,8}(好|强|贵|便宜|划算|赔率|值得)/i.test(
-    String(query)
+  const text = String(query);
+  if (LONGITUDINAL.test(text)) return false;
+  // 尾部形容词补齐"深/高/低/大/多/稳"：以前只认 好|强|贵|便宜|划算|赔率|值得，
+  // 于是"哪家的护城河更深"这种标准对比问法不被识别。
+  return /对比|相比|[和跟与][^，。？?]{1,14}(比|对比|相比|谁|哪个|哪家)|\bvs\b|谁(更|的)|哪(个|家)(更|的)?[^，。？?]{0,8}(好|强|贵|便宜|划算|赔率|值得|深|高|低|大|多|稳|快)/i.test(
+    text
   );
 }
 
@@ -315,15 +355,30 @@ export function discoveryKindOf(question = ""): "screener" | "macro" | null {
   return null;
 }
 
-// Multi-position/multi-ticker question: "list (and/、…) + holding signal" or
-// "≥2 occurrences of '股'". Mirrors the server's entityExtractor.looksMultiHolding
-// so it's treated as a follow-up on the current company (server fills in the rest)
-// rather than misread as a switch/comparison.
+// 多标的/组合提问："列举 + 持仓信号"，或**真的点到了 ≥2 个不同标的**。
+//
+// 这个判断的代价是不对称的，所以宁可漏不可错：命中即 true 会让 sendChat 跳过**全部**公司识别
+// （见 researchActions.ts 的 multiHolding 分支），把问题挂到上一家公司名下——也就是串台。
+//
+// 曾经的实现是 `(text.match(/股/g) || []).length >= 2`：数「股」字出现几次。"美**股** NVDA
+// 的**股**价怎么样" 就有两个「股」，于是用户问 NVDA、拿到的是上一家公司的答案。
+// 「港股/美股/A股/股价/股票/股份/股东」全都带「股」字，这个字在投资语境里根本不具区分度。
+//
+// 现在改成数**不同的标的证据**（港股代码 / 美股代码 / 公司别名），这才是"多标的"的定义。
+function distinctSubjectCount(text: string): number {
+  const subjects = new Set<string>();
+  for (const m of text.matchAll(/(?<![\dA-Za-z])(\d{1,5})\s*\.\s*HK\b/gi)) subjects.add(`${m[1].padStart(4, "0")}.HK`);
+  for (const item of companyAliases) if (item.pattern.test(text)) subjects.add(item.ticker);
+  for (const item of usAliases) if (item.pattern.test(text)) subjects.add(item.ticker);
+  for (const m of text.matchAll(/\$([A-Za-z][A-Za-z.-]{0,6})\b/g)) subjects.add(m[1].toUpperCase());
+  return subjects.size;
+}
+
 export function isMultiHoldingQuestion(query = ""): boolean {
   const text = String(query || "");
   if (text.length < 4) return false;
-  const multiShare = (text.match(/股/g) || []).length >= 2;
+  const multiSubject = distinctSubjectCount(text) >= 2;
   const hasList = /[、,，&]|和|与|跟|以及|还有|及/.test(text);
-  const holdingHint = /持有|持仓|组合|仓位|分别|各|股票|加上|拿着|拿了|都拿|买了|买入|入手|加仓|建仓|都有|手里|手上/.test(text);
-  return multiShare || (hasList && holdingHint);
+  const holdingHint = /持有|持仓|组合|仓位|分别|各|加上|拿着|拿了|都拿|买了|买入|入手|加仓|建仓|都有|手里|手上/.test(text);
+  return multiSubject || (hasList && holdingHint);
 }

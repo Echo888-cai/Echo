@@ -46,6 +46,15 @@ export function NotificationBell() {
     return () => document.removeEventListener("pointerdown", handlePointerDown);
   }, [open]);
 
+  useEffect(() => {
+    if (!open) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [open]);
+
   async function handleMarkRead(id: number) {
     try {
       const data = await notificationsApi.markRead(id);
@@ -88,6 +97,9 @@ export function NotificationBell() {
         className="notif-bell"
         type="button"
         aria-label="通知"
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-controls="echo-notification-panel"
         title="通知"
         onClick={() => setOpen((v) => !v)}
       >
@@ -98,7 +110,7 @@ export function NotificationBell() {
         {unread > 0 ? <i className="notif-dot">{unread > 99 ? "99+" : unread}</i> : null}
       </button>
       {open ? (
-        <div className="notif-panel" role="dialog" aria-label="通知中心">
+        <div className="notif-panel" id="echo-notification-panel" role="dialog" aria-label="通知中心">
           <div className="notif-head">
             <strong>通知</strong>
             {unread > 0 ? (

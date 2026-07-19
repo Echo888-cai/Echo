@@ -5,7 +5,7 @@ import { portfolioApi, ApiError } from "../lib/api";
 import { pnlDir } from "../lib/format";
 import { buildChartPaths } from "../lib/chart";
 import { showToast } from "../lib/toast";
-import { Shell } from "../components/Shell";
+import { PageErrorState, PageSkeleton } from "../components/PageState";
 import { PositionCard, PortfolioReviewCard } from "../components/Portfolio";
 
 // Page-specific styles not already loaded by Shell (see login.tsx for the
@@ -222,23 +222,27 @@ export function PortfolioPage() {
 
   if (positionsQuery.isLoading) {
     return (
-      <Shell>
-        <div className="page-wide">
-          <div className="wd-loading">正在加载持仓…</div>
-        </div>
-      </Shell>
+      <div className="page-wide">
+        <PageSkeleton label="正在核对持仓与最新行情" cards={4} />
+      </div>
+    );
+  }
+
+  if (positionsQuery.isError) {
+    return (
+      <div className="page-wide">
+        <PageErrorState title="持仓数据暂时没有响应" description="已记录的成本与数量不会受到影响。恢复连接后可以继续查看。" onRetry={() => void positionsQuery.refetch()} />
+      </div>
     );
   }
 
   if (!positions.length) {
     return (
-      <Shell>
-        <div className="page-wide">
-          {adding
-            ? <PositionEntryForm onSaved={saved} onCancel={() => setAdding(false)} />
-            : <EmptyCta onAdd={handleAdd} />}
-        </div>
-      </Shell>
+      <div className="page-wide">
+        {adding
+          ? <PositionEntryForm onSaved={saved} onCancel={() => setAdding(false)} />
+          : <EmptyCta onAdd={handleAdd} />}
+      </div>
     );
   }
 
@@ -248,33 +252,31 @@ export function PortfolioPage() {
     : "盘前事件会自动盯住这些持仓的止损 / 止盈线和大幅回撤。";
 
   return (
-    <Shell>
-      <div className="page-wide">
-        <div className="pfp-wrap">
-          <div className="wd-head">
-            <div>
-              <p className="hero-eyebrow">
-                <span className="hero-spark" />
-                持仓
-              </p>
-              <h2 className="wd-title">{positions.length} 笔持仓</h2>
-            </div>
-            <button className="wd-portfolio-link wl-add-btn" type="button" onClick={() => setAdding((open) => !open)}>
-              ＋ 记一笔持仓
-            </button>
+    <div className="page-wide">
+      <div className="pfp-wrap">
+        <div className="wd-head">
+          <div>
+            <p className="hero-eyebrow">
+              <span className="hero-spark" />
+              持仓
+            </p>
+            <h2 className="wd-title">{positions.length} 笔持仓</h2>
           </div>
-          {adding ? <PositionEntryForm onSaved={saved} onCancel={() => setAdding(false)} /> : null}
-          <OverviewBanner positions={positions} review={review} />
-          <NetWorthChart snapshots={snapshots} />
-          <PortfolioReviewCard review={review} />
-          <div className="pf-list">
-            {positions.map((p) => (
-              <PositionCard key={p.ticker} position={p} onDelete={handleDelete} />
-            ))}
-          </div>
-          <p className="pf-foot">{foot}</p>
+          <button className="wd-portfolio-link wl-add-btn" type="button" onClick={() => setAdding((open) => !open)}>
+            ＋ 记一笔持仓
+          </button>
         </div>
+        {adding ? <PositionEntryForm onSaved={saved} onCancel={() => setAdding(false)} /> : null}
+        <OverviewBanner positions={positions} review={review} />
+        <NetWorthChart snapshots={snapshots} />
+        <PortfolioReviewCard review={review} />
+        <div className="pf-list">
+          {positions.map((p) => (
+            <PositionCard key={p.ticker} position={p} onDelete={handleDelete} />
+          ))}
+        </div>
+        <p className="pf-foot">{foot}</p>
       </div>
-    </Shell>
+    </div>
   );
 }

@@ -53,7 +53,7 @@ export function registerRestRoutes(app: Hono<any>, createCaller: CallerFactory) 
           input,
           userId,
           (delta) => stream.writeSSE({ event: "token", data: JSON.stringify({ t: delta }) }),
-          (stage) => stream.writeSSE({ event: "status", data: JSON.stringify({ stage }) })
+          (stage, plan) => stream.writeSSE({ event: "status", data: JSON.stringify({ stage, ...(plan ? { plan } : {}) }) })
         );
         await stream.writeSSE({ event: "final", data: JSON.stringify(result) });
         await stream.writeSSE({ event: "done", data: "{}" });
