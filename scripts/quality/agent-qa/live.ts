@@ -17,7 +17,10 @@ import { loadRootEnv } from "@echo/observability";
 loadRootEnv();
 const { runAsk, runReport } = await import("@echo/application/research");
 
-const USER_ID = process.env.ECHO_QA_USER_ID || "u_a410f11a8138";
+// 默认跟 `npm run accounts:reset-owner` 对齐：owner 的 id 恒为 `local`。
+// 旧默认 `u_a410f11a8138` 在账号重置后不存在，会让 research_sessions 外键整轮抛错，
+// 把「研究质量」误报成 11/15 失败（正文其实已经生成完了）。
+const USER_ID = process.env.ECHO_QA_USER_ID || "local";
 
 type Transcript = { firstTokenMs: number | null; totalMs: number; stages: string[]; chars: number };
 
