@@ -1,0 +1,18 @@
+[package]
+name = "echo-domain"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Pure research domain logic (valuation, fact guard, intent routing) — no clock, no I/O"
+
+[dependencies]
+echo-finance-core.workspace = true
+rust_decimal.workspace = true
+rust_decimal_macros.workspace = true
+serde.workspace = true
+# 数字护栏的中文财经抽取需要负向后顾（(?<![\d.])），标准 regex 不支持 → fancy-regex。
+fancy-regex = "0.14"
+
+[dev-dependencies]
+serde_json.workspace = true

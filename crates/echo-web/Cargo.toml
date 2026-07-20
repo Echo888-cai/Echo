@@ -1,0 +1,18 @@
+[package]
+name = "echo-web"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Frontend (Leptos/WASM) — strangles the React/PWA app"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+leptos = { version = "0.6", features = ["csr"] }
+wasm-bindgen = "0.2"
+
+[package.metadata.echo]
+# 研究对话优先的界面按 apps/web 现有 UX 逐屏迁入；UX 打磨是一等验收项（用户约束）。
+strangler-source = "apps/web (React/PWA)"
