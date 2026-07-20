@@ -104,6 +104,60 @@ impl<'a> CompanyRepository<'a> {
     }
 }
 
+/// 调度器状态（`scheduler_state` 表）——每个后台作业的上次运行时刻/状态。是运营数据、不分租户，
+/// 直接读写（无 `user_id`、不走 RLS）。worker 重启后据此恢复「哪些作业该补跑」，是恢复门禁的底座。
+#[derive(Debug, Clone, FromRow)]
+pub struct SchedulerRun {
+    #[sqlx(rename = "job_id")]
+    pub job_id: String,
+    #[sqlx(rename = "last_run_at")]
+    pub last_run_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[sqlx(rename = "last_status")]
+    pub last_status: Option<String>,
+    #[sqlx(rename = "last_detail")]
+    pub last_detail: Option<String>,
+}
+
+/// 调度器状态仓储。
+pub struct SchedulerStateRepository<'a> {
+    pool: &'a PgPool,
+}
+
+impl<'a> SchedulerStateRepository<'a> {
+    #[must_use]
+    pub fn new(pool: &'a PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// 拉全部作业的上次运行状态（worker 启动时一次性读，重建到期判定所需的 last_run 表）。
+    pub async fn all(&self) -> Result<Vec<SchedulerRun>> {
+        let rows = sqlx::query_as::<_, SchedulerRun>(
+            "SELECT job_id, last_run_at, last_status, last_detail FROM scheduler_state",
+        )
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// upsert 一条运行记录（作业跑完/失败都记，last_run_at=now）。job_id 冲突即更新——恢复安全。
+    pub async fn record_run(&self, job_id: &str, status: &str, detail: Option<&str>) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO scheduler_state (job_id, last_run_at, last_status, last_detail) \
+             VALUES ($1, now(), $2, $3) \
+             ON CONFLICT (job_id) DO UPDATE SET \
+               last_run_at = excluded.last_run_at, \
+               last_status = excluded.last_status, \
+               last_detail = excluded.last_detail",
+        )
+        .bind(job_id)
+        .bind(status)
+        .bind(detail)
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
 /// 一条 LLM 调用审计——failover 链上的每一跳都记（不止最终成功那跳）。对齐 TS `insertLlmAudit`。
 /// 是私有数据（带 `user_id`、受 RLS），写入必走 [`with_tenant`]。
 #[derive(Debug, Clone)]

@@ -20,18 +20,18 @@ use echo_application::{
     AnswerContext, ResolvedCompany, build_panel, build_system_prompt, build_user_prompt,
     market_snapshot_from_rows, resolved_company_from_rows,
 };
-use futures_util::Stream;
-use std::convert::Infallible;
-use tokio_stream::StreamExt;
-use tokio_stream::wrappers::ReceiverStream;
 use echo_db::{CompanyRepository, MarketRepository, Pool};
 use echo_domain::{
     Company, Financials, MarketSnapshot, RegistrySources, build_facts_registry, build_soft_note,
     route_research_intent, verify_answer_numbers,
 };
+use futures_util::Stream;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::convert::Infallible;
+use tokio_stream::StreamExt;
+use tokio_stream::wrappers::ReceiverStream;
 
 #[derive(Deserialize)]
 struct AskRequest {

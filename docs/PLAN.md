@@ -57,7 +57,7 @@ React/PWA(apps/web) ── tRPC + Hono SSE(apps/api) ── Temporal(apps/worker
 | 6 | `crates/echo-application` | `packages/application/research.ts` | 🚧 编排+估值+意图已接；DB 行→领域映射(`from_db`)+4 项测试绿；模型网关**非流式核心已接**(`model_gateway`：provider 选择 DeepSeek→OpenAI→通用 / OpenAI 兼容请求体 / 作答提取 / `parse_json_object` / usage 抠取 / `AuditContext` best-effort 落审计，13 项纯函数测试绿)。剩余显式 seam：流式 SSE 增量、活库端到端验证 |
 | 7 | `crates/echo-db` | `packages/db`(Drizzle) → sqlx | 🚧 companies/market_snapshots 仓储 + 租户 RLS(`with_tenant`)；`Pool` 上抛，映射已被 api 消费(非死码)。**llm_audit 仓储已接**(`LlmAuditRepository::insert` 走 with_tenant，error_detail 按 char 截 500，3 项测试绿)。**DB 补数/审计写入路径待活库端到端验证** |
 | 8 | `crates/echo-api` | `apps/api`(Hono/tRPC) → axum | 🚧 `/health`+`/api/ask` 纯核路径已 curl 端到端验证(意图/定点估值/护栏全绿)；缺行情时经 `AppState.pool` 兜底 DB 快照。**生成路径已接**：草稿缺失且配了 provider 时用领域事实(`answer_prompt`)构造提示词→网关生成→生成答案同过数字护栏；无 provider 诚实回 `answer_source:"unavailable"`(curl 验证:无 key 不假造答案)。**流式 SSE 已接**：`POST /api/ask/stream` 走 `model_answer_stream`(reqwest bytes_stream→`parse_sse_line`解帧→`Coalescer`按24字符合并→mpsc→axum `Sse`)，curl 验证 200/`text/event-stream`、无 provider 干净空流不挂死。剩余 seam：流式路径事后跑护栏并把 factGuard 作收尾事件、`visibleText`剥机器行裁剪、活库(生成+审计)端到端验证 |
-| 9 | `crates/echo-worker` | `apps/worker`(Temporal) | 🚧 调度骨架 |
+| 9 | `crates/echo-worker` | `apps/worker`(Temporal) | 🚧 **可恢复调度已接**：9 条 cron 注册表(对齐 register-schedules.ts) + `is_due`/`due_now` 纯到期判定(cron crate，7 项测试绿含工作日/区间/不回填/坏表达式) + echo-db `SchedulerStateRepository`(scheduler_state upsert，重启从 last_run 重建、错过补跑) + 每分钟 tick 循环。**活动体待随 echo-application 逐个搬入**(每搬一个补一条恢复测试才摘对应 TS 工作流)；无 DATABASE_URL 硬失败不跑假调度 |
 | 10 | `crates/echo-web` | `apps/web`(React/PWA) → Leptos/WASM | 🚧 研究外壳骨架 |
 
 平价门禁：对应 Rust crate 必须通过 fmt/clippy(`-D warnings`)/test + 端到端等价核对（同输入同输出），
