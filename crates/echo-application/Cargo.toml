@@ -12,6 +12,9 @@ echo-db.workspace = true
 echo-finance-core.workspace = true
 rust_decimal.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 # 只在写映射测试时用来构造 MarketRow.valid_time；不进入应用层公开 API。

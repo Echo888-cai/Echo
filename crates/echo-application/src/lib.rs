@@ -11,9 +11,14 @@ use echo_domain::{Company, Financials, MarketSnapshot, PeerAnchor, Valuation, di
 use rust_decimal::Decimal;
 
 pub mod from_db;
+pub mod model_gateway;
 pub mod research;
 
 pub use from_db::{market_snapshot_from_rows, resolved_company_from_rows};
+pub use model_gateway::{
+    AnswerKind, ModelAnswer, ModelAnswerOptions, ProviderConfig, model_answer, parse_json_object,
+    provider_config,
+};
 
 /// 一轮研究请求——公司是必到字段（由公司解析闭环在边界处兑现），history 只用于代词承接。
 #[derive(Clone, Debug)]
