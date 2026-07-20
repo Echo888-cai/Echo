@@ -95,6 +95,30 @@ export async function getCompanyByTickerComplete(ticker: string) {
   return row ? hydrateCompany(row) : null;
 }
 
+/**
+ * 经外部数据源核实过的新代码建档入口（美股/港股皆可）。
+ *
+ * 会话-first 产品必须能研究任意合法标的：此前 companies 行只在"保存研究会话"时顺带
+ * 插入（researchSessionsRepository.ensureCompany，事务内），而研究链路又要求行先存在
+ * ——鸡生蛋，任何库里没有的公司第一问必死（"alibaba → BABA → 我还没识别出公司"）。
+ * 这里是研究前的显式建档口。**调用方必须已经用真实数据源验证过代码**（行情探活 /
+ * FMP 搜索命中），不得拿未验证的猜测代码建行——脏行会永远留在搜索结果里。
+ */
+export async function ensureCompanyRow(ticker: string, patch: { nameZh?: string; nameEn?: string; sector?: string; industry?: string } = {}) {
+  const normalized = normalizeTicker(ticker);
+  const isUs = !normalized.includes(".");
+  await database().insert(companies).values({
+    ticker: normalized,
+    nameZh: patch.nameZh || normalized,
+    nameEn: patch.nameEn || (isUs ? patch.nameZh || normalized : null),
+    ...(patch.sector ? { sector: patch.sector } : {}),
+    ...(patch.industry ? { industry: patch.industry } : {}),
+    exchange: isUs ? "US" : "HKEX",
+    currency: isUs ? "USD" : "HKD"
+  }).onConflictDoNothing();
+  return getCompanyByTickerComplete(normalized);
+}
+
 // Read-only, tolerant of a little replication lag, and the highest-traffic lookup in the
 // desk/portfolio views — routed at the replica so it can be moved off the primary connection
 // pool without touching call sites (see packages/db/src/repositories/context.ts).

@@ -10,6 +10,7 @@
     ".": "./src/index.ts",
     "./market-data": "./src/marketData.ts",
     "./research": "./src/research.ts",
+    "./company-resolution": "./src/companyResolution.ts",
     "./export": "./src/exportService.ts",
     "./temporal-config": "./src/temporal-config.ts"
   },

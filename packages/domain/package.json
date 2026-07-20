@@ -9,6 +9,10 @@
     "./company-identity": {
       "types": "./src/companyIdentity.d.ts",
       "default": "./src/companyIdentity.js"
+    },
+    "./company-aliases": {
+      "types": "./src/companyAliases.d.ts",
+      "default": "./src/companyAliases.js"
     }
   },
   "scripts": {

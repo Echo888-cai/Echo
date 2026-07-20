@@ -1,125 +1,42 @@
 // Company identification, dual listings and research-intent resolution.
+// 别名表与双重上市表的唯一底账在 packages/domain/src/companyAliases.js——
+// 这里只做匹配逻辑，不再持有第二份数据（手抄副本必然漂移，见 domain 侧注释）。
 import { companiesApi, type ResolvedCompany } from "./api";
 import { extractHkTicker, extractUsTickerToken, normalizeQuestionText } from "@echo/domain/company-identity";
+import {
+  HK_COMPANY_ALIASES,
+  US_COMPANY_ALIASES,
+  dualListingByTicker,
+  dualListingByName,
+  type HkUsLink
+} from "@echo/domain/company-aliases";
 
-const companyAliases: { pattern: RegExp; ticker: string }[] = [
-  { pattern: /腾讯控股|腾讯|Tencent/i, ticker: "0700.HK" },
-  { pattern: /阿里巴巴|阿里(?!健康|影业)|Alibaba/i, ticker: "9988.HK" },
-  { pattern: /阿里健康/i, ticker: "0241.HK" },
-  { pattern: /阿里影业/i, ticker: "1060.HK" },
-  { pattern: /美团/i, ticker: "3690.HK" },
-  { pattern: /小米/i, ticker: "1810.HK" },
-  { pattern: /比亚迪/i, ticker: "1211.HK" },
-  { pattern: /京东/i, ticker: "9618.HK" },
-  { pattern: /百度/i, ticker: "9888.HK" },
-  { pattern: /快手/i, ticker: "1024.HK" },
-  { pattern: /网易/i, ticker: "9999.HK" },
-  { pattern: /联想/i, ticker: "0992.HK" },
-  { pattern: /耐世特/i, ticker: "1316.HK" },
-  { pattern: /地平线/i, ticker: "9660.HK" },
-  { pattern: /港交所|香港交易所/i, ticker: "0388.HK" }
-];
-
-// US aliases (name + ticker). Chinese names only resolve via this table (FMP
-// search doesn't understand Chinese); English names/pinyin/tickers that miss
-// this table fall through to /api/companies/resolve (FMP + LLM) in resolveCompany.
-// Other US tickers also work via $TICKER or TICKER.US, e.g. $PLTR, PLTR.US.
-const usAliases: { pattern: RegExp; ticker: string; name: string }[] = [
-  { pattern: /苹果|Apple|\bAAPL\b/i, ticker: "AAPL", name: "苹果 Apple" },
-  { pattern: /英伟达|NVIDIA|\bNVDA\b/i, ticker: "NVDA", name: "英伟达 NVIDIA" },
-  { pattern: /特斯拉|Tesla|\bTSLA\b/i, ticker: "TSLA", name: "特斯拉 Tesla" },
-  { pattern: /微软|Microsoft|\bMSFT\b/i, ticker: "MSFT", name: "微软 Microsoft" },
-  { pattern: /谷歌|Google|Alphabet|\bGOOGL?\b/i, ticker: "GOOGL", name: "谷歌 Alphabet" },
-  { pattern: /亚马逊|Amazon|\bAMZN\b/i, ticker: "AMZN", name: "亚马逊 Amazon" },
-  { pattern: /\bMeta\b|Facebook|\bMETA\b/i, ticker: "META", name: "Meta" },
-  { pattern: /奈飞|网飞|Netflix|\bNFLX\b/i, ticker: "NFLX", name: "奈飞 Netflix" },
-  { pattern: /英特尔|Intel|\bINTC\b/i, ticker: "INTC", name: "英特尔 Intel" },
-  { pattern: /\bAMD\b|超威/i, ticker: "AMD", name: "AMD" },
-  { pattern: /台积电|TSMC|\bTSM\b/i, ticker: "TSM", name: "台积电 TSMC" },
-  { pattern: /美光|镁光|Micron|\bMU\b/i, ticker: "MU", name: "美光科技 Micron" },
-  { pattern: /博通|Broadcom|\bAVGO\b/i, ticker: "AVGO", name: "博通 Broadcom" },
-  { pattern: /高通|Qualcomm|\bQCOM\b/i, ticker: "QCOM", name: "高通 Qualcomm" },
-  { pattern: /阿斯麦|阿斯麦尔|\bASML\b/i, ticker: "ASML", name: "阿斯麦 ASML" },
-  { pattern: /应用材料|Applied Materials|\bAMAT\b/i, ticker: "AMAT", name: "应用材料 Applied Materials" },
-  { pattern: /美满|Marvell|\bMRVL\b/i, ticker: "MRVL", name: "美满电子 Marvell" },
-  { pattern: /\bARM\b|安谋/i, ticker: "ARM", name: "ARM" },
-  { pattern: /甲骨文|Oracle|\bORCL\b/i, ticker: "ORCL", name: "甲骨文 Oracle" },
-  { pattern: /思科|Cisco|\bCSCO\b/i, ticker: "CSCO", name: "思科 Cisco" },
-  { pattern: /Adobe|\bADBE\b/i, ticker: "ADBE", name: "Adobe" },
-  { pattern: /Salesforce|赛富时|\bCRM\b/i, ticker: "CRM", name: "Salesforce" },
-  { pattern: /Palantir|\bPLTR\b/i, ticker: "PLTR", name: "Palantir" },
-  { pattern: /Snowflake|\bSNOW\b/i, ticker: "SNOW", name: "Snowflake" },
-  { pattern: /Coinbase|\bCOIN\b/i, ticker: "COIN", name: "Coinbase" },
-  { pattern: /优步|Uber|\bUBER\b/i, ticker: "UBER", name: "优步 Uber" },
-  { pattern: /迪士尼|Disney|\bDIS\b/i, ticker: "DIS", name: "迪士尼 Disney" },
-  { pattern: /星巴克|Starbucks|\bSBUX\b/i, ticker: "SBUX", name: "星巴克 Starbucks" },
-  { pattern: /麦当劳|McDonald|\bMCD\b/i, ticker: "MCD", name: "麦当劳 McDonald's" },
-  { pattern: /可口可乐|Coca[ -]?Cola/i, ticker: "KO", name: "可口可乐 Coca-Cola" },
-  { pattern: /百事|Pepsi|\bPEP\b/i, ticker: "PEP", name: "百事 PepsiCo" },
-  { pattern: /沃尔玛|Walmart|\bWMT\b/i, ticker: "WMT", name: "沃尔玛 Walmart" },
-  { pattern: /耐克|Nike/i, ticker: "NKE", name: "耐克 Nike" },
-  { pattern: /波音|Boeing/i, ticker: "BA", name: "波音 Boeing" },
-  { pattern: /摩根大通|小摩|JPMorgan|JP\s?Morgan|\bJPM\b/i, ticker: "JPM", name: "摩根大通 JPMorgan" },
-  { pattern: /高盛|Goldman/i, ticker: "GS", name: "高盛 Goldman Sachs" },
-  { pattern: /伯克希尔|巴菲特|Berkshire/i, ticker: "BRK-B", name: "伯克希尔 Berkshire" },
-  { pattern: /Visa|维萨/i, ticker: "V", name: "Visa" },
-  { pattern: /万事达|Mastercard/i, ticker: "MA", name: "万事达 Mastercard" },
-  { pattern: /礼来|Eli\s?Lilly|\bLLY\b/i, ticker: "LLY", name: "礼来 Eli Lilly" },
-  { pattern: /强生|Johnson\s?&?\s?Johnson|\bJNJ\b/i, ticker: "JNJ", name: "强生 J&J" },
-  { pattern: /辉瑞|Pfizer|\bPFE\b/i, ticker: "PFE", name: "辉瑞 Pfizer" },
-  { pattern: /\bBABA\b/i, ticker: "BABA", name: "阿里巴巴 ADR" }
-];
-
-// Dual listings (HK + US ADR). Same underlying company, but FMP's free tier only
-// covers the US ADR (not HK), so fundamentals/valuation always use the US ADR
-// leg (more complete data), while surfacing both tickers to the user.
-const DUAL_LISTINGS: { nameZh: string; hk: string; us: string }[] = [
-  { nameZh: "阿里巴巴", hk: "9988.HK", us: "BABA" },
-  { nameZh: "京东", hk: "9618.HK", us: "JD" },
-  { nameZh: "百度", hk: "9888.HK", us: "BIDU" },
-  { nameZh: "网易", hk: "9999.HK", us: "NTES" },
-  { nameZh: "携程", hk: "9961.HK", us: "TCOM" },
-  { nameZh: "哔哩哔哩", hk: "9626.HK", us: "BILI" },
-  { nameZh: "理想汽车", hk: "2015.HK", us: "LI" },
-  { nameZh: "小鹏汽车", hk: "9868.HK", us: "XPEV" },
-  { nameZh: "蔚来", hk: "9866.HK", us: "NIO" },
-  { nameZh: "名创优品", hk: "9896.HK", us: "MNSO" },
-  { nameZh: "新东方", hk: "9901.HK", us: "EDU" },
-  { nameZh: "贝壳", hk: "2423.HK", us: "BEKE" }
-];
-const DUAL_BY_TICKER = new Map<string, (typeof DUAL_LISTINGS)[number]>();
-for (const d of DUAL_LISTINGS) {
-  DUAL_BY_TICKER.set(d.hk, d);
-  DUAL_BY_TICKER.set(d.us, d);
-}
-
-export interface DualListingResult {
-  ticker: string;
+export interface DualListingHit {
   nameZh: string;
-  nameEn: string;
-  industry: string;
-  dualListing: { hk: string; us: string; asked: string; primary: "us" };
+  hk: string;
+  us: string;
+  /** 用户显式点名的那条腿（输了 9988.HK / BABA / $BABA 之类的代码）；null = 没点名，需要问用户。 */
+  explicitLeg: "hk" | "us" | null;
 }
 
-// Resolves "dual listing" queries to the US ADR leg (fuller fundamentals data),
-// with both tickers attached so the frontend can tell the user which side was
-// asked about vs which side drives the numbers. Returns null if not a dual listing.
-export function resolveDualListing(query = ""): DualListingResult | null {
+// Detects a dual-listed (HK + US primary) company in the question. Which leg to
+// research is NOT decided here: an explicit ticker picks its own leg; a bare
+// name (阿里巴巴 / alibaba) returns explicitLeg=null and sendChat asks the user.
+export function resolveDualListing(query = ""): DualListingHit | null {
   const aliasTicker = extractAliasTicker(query); // 阿里巴巴 → 9988.HK
   const usHit = resolveUsTicker(query)?.ticker || ""; // BABA
   const hkTicker = extractTicker(query); // 9988.HK
-  const candidate = [aliasTicker, usHit, hkTicker].find((t) => t && DUAL_BY_TICKER.has(t));
-  const byName = candidate ? null : DUAL_LISTINGS.find((d) => query.includes(d.nameZh));
-  const hit = candidate ? DUAL_BY_TICKER.get(candidate) : byName;
-  if (!hit) return null;
-  const asked = candidate || hit.us; // which side the user actually asked about
-  return {
-    ticker: hit.us,
-    nameZh: hit.nameZh,
-    nameEn: "",
-    industry: "中概 · 双重上市",
-    dualListing: { hk: hit.hk, us: hit.us, asked, primary: "us" }
-  };
+  // 用户敲了明确代码（.HK 代码或 $BABA/BABA）→ 那条腿就是显式选择；
+  // 只有名字命中（aliasTicker 来自中文/英文名的正则）→ 不算显式，要问。
+  const explicitCandidate = [hkTicker, usHit].find((t) => t && dualListingByTicker(t));
+  const link: HkUsLink | null = explicitCandidate
+    ? dualListingByTicker(explicitCandidate)
+    : (aliasTicker && dualListingByTicker(aliasTicker)) || dualListingByName(query);
+  if (!link || !link.us) return null;
+  // 没敲代码但用市场词点了名（"阿里巴巴港股怎么样"）同样算显式选择，不再追问。
+  const marketWord = /美股|\bADR\b/i.test(query) ? ("us" as const) : /港股|港币|\bHKD\b/i.test(query) ? ("hk" as const) : null;
+  const explicitLeg = explicitCandidate ? (explicitCandidate === link.hk ? "hk" : "us") : marketWord;
+  return { nameZh: link.nameZh, hk: link.hk, us: link.us, explicitLeg };
 }
 
 // 停用词表以前在这里手抄了一份 domain 的副本。两份名单必然漂移——实测 SPY 两边都有、
@@ -128,7 +45,7 @@ export function resolveDualListing(query = ""): DualListingResult | null {
 // 这里不再传第二份名单）。
 export function resolveUsTicker(text = ""): { ticker: string; name: string } | null {
   const normalized = aliasMatchText(text);
-  const hit = usAliases.find((item) => item.pattern.test(normalized));
+  const hit = US_COMPANY_ALIASES.find((item) => item.pattern.test(normalized));
   if (hit) return { ticker: hit.ticker, name: hit.name };
   const ticker = extractUsTickerToken(text);
   return ticker ? { ticker, name: ticker } : null;
@@ -149,7 +66,7 @@ function aliasMatchText(text: string): string {
 
 export function extractAliasTicker(text = ""): string {
   const normalized = aliasMatchText(text);
-  const hit = companyAliases.find((item) => item.pattern.test(normalized));
+  const hit = HK_COMPANY_ALIASES.find((item) => item.pattern.test(normalized));
   return hit?.ticker || "";
 }
 
@@ -232,14 +149,32 @@ export function companySearchCandidates(query = ""): string[] {
 }
 
 export type ResolveCompanyResult =
-  | (ResolvedCompany & { dualListing?: DualListingResult["dualListing"] })
+  | (ResolvedCompany & { dualListing?: { hk: string; us: string; chosen: string } })
+  | { dualChoice: DualListingHit }
   | { unverifiedTicker: string; suggestions: { ticker: string; name: string }[] }
   | { unresolved: true; name: string }
   | null;
 
+/** 双重上市公司按选定腿生成研究对象（口径、币种随腿走，另一腿仅对照）。 */
+export function dualLegCompany(dual: DualListingHit, leg: "hk" | "us"): ResolvedCompany & { dualListing: { hk: string; us: string; chosen: string } } {
+  const chosen = leg === "hk" ? dual.hk : dual.us;
+  return {
+    ticker: chosen,
+    nameZh: dual.nameZh,
+    nameEn: "",
+    industry: leg === "hk" ? "港股 · 双重上市" : "美股 · 双重上市",
+    dualListing: { hk: dual.hk, us: dual.us, chosen }
+  };
+}
+
 export async function resolveCompany(query: string, opts: { verify?: boolean } = {}): Promise<ResolveCompanyResult> {
   const dual = resolveDualListing(query);
-  if (dual) return dual;
+  if (dual) {
+    // 用户没显式指定市场：把选择权交回用户（sendChat 渲染港股/美股选择卡），
+    // 而不是替用户默默选美股 ADR——两条腿的币种、口径、盈亏算法都不同。
+    if (!dual.explicitLeg) return { dualChoice: dual };
+    return dualLegCompany(dual, dual.explicitLeg);
+  }
   const us = resolveUsTicker(query);
   const candidates = companySearchCandidates(query);
   let company: any = null;
@@ -368,8 +303,8 @@ export function discoveryKindOf(question = ""): "screener" | "macro" | null {
 function distinctSubjectCount(text: string): number {
   const subjects = new Set<string>();
   for (const m of text.matchAll(/(?<![\dA-Za-z])(\d{1,5})\s*\.\s*HK\b/gi)) subjects.add(`${m[1].padStart(4, "0")}.HK`);
-  for (const item of companyAliases) if (item.pattern.test(text)) subjects.add(item.ticker);
-  for (const item of usAliases) if (item.pattern.test(text)) subjects.add(item.ticker);
+  for (const item of HK_COMPANY_ALIASES) if (item.pattern.test(text)) subjects.add(item.ticker);
+  for (const item of US_COMPANY_ALIASES) if (item.pattern.test(text)) subjects.add(item.ticker);
   for (const m of text.matchAll(/\$([A-Za-z][A-Za-z.-]{0,6})\b/g)) subjects.add(m[1].toUpperCase());
   return subjects.size;
 }

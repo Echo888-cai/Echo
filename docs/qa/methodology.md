@@ -66,7 +66,7 @@ npm run qa:agent:live       # 静态 + live 全链路（要 .env 密钥 + DATABA
 npx tsx scripts/quality/agent-qa/run.ts --json out.json   # 机器可读，用于跨次对比
 ```
 
-`ECHO_QA_USER_ID` 可覆盖 live 层用的用户（默认 `u_a410f11a8138`）。
+`ECHO_QA_USER_ID` 可覆盖 live 层用的用户（默认 `local`，与 `accounts:reset-owner` 的 owner id 一致）。
 live 层会真的写库（研究会话、画像、审计），跑在 dev 库上，不要对生产跑。
 
 ## 怎么加用例

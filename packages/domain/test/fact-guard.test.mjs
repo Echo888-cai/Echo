@@ -5,7 +5,7 @@
 // [4] 回归：北京时间时间戳/来源引用不能被误判成待核实的财务日期（真实回答实测过会 100% 误报）。
 // [5] buildSoftNote / summarizeVerdict / renderHardFailIssues：格式化辅助函数。
 import {
-  parseCompactAmount, convertCurrency, buildFactsRegistry, verifyAnswerNumbers,
+  parseCompactAmount, convertCurrency, buildFactsRegistry, mergeFactsRegistry, verifyAnswerNumbers,
   buildSoftNote, summarizeVerdict, renderHardFailIssues
 } from "../src/index.js";
 
@@ -89,6 +89,27 @@ const registry = buildFactsRegistry(sampleSources);
   check("hkFilings 收入同比派生进了百分比桶", registry.percents.some((f) => f.label.includes("收入同比") && f.value < 0));
   check("持仓浮动盈亏现算进了百分比桶", registry.percents.some((f) => f.label === "持仓浮动盈亏" && Math.abs(f.value - ((431.2 - 380) / 380) * 100) < 0.01));
   check("止损线进了金额桶", registry.amounts.HKD?.some((f) => f.value === 340 && f.label === "止损线"));
+}
+
+console.log("[2b] mergeFactsRegistry：对比对象数字必须并进登记表");
+{
+  const subject = buildFactsRegistry({
+    ticker: "0700.HK", nativeCurrency: "CNY",
+    marketSnapshot: { providerStatus: "ok", price: 461.6, currency: "HKD", changePercent: 0.3 },
+    financialsData: { providerStatus: "ok", currency: "CNY", netMargin: 30.4, netCash: 90_229_000_000 }
+  });
+  const peer = buildFactsRegistry({
+    ticker: "AAPL", nativeCurrency: "USD",
+    marketSnapshot: { providerStatus: "ok", price: 333.74, currency: "USD", changePercent: 5.84 },
+    financialsData: { providerStatus: "missing" }
+  });
+  mergeFactsRegistry(subject, peer);
+  const v = verifyAnswerNumbers(
+    "腾讯净利率 30.4%，苹果近一周 +5.84%，现价 333.74 美元。",
+    subject
+  );
+  check("对比对象涨跌幅不再 soft", v.checked.filter((c) => c.verdict === "soft").length === 0, JSON.stringify(v.checked));
+  check("对比对象现价能 pass", v.checked.some((c) => c.verdict === "pass" && Number(c.value) === 333.74));
 }
 
 console.log("[3] verifyAnswerNumbers：pass / soft / hard 判定");

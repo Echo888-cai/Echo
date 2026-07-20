@@ -36,11 +36,13 @@ import {
 import { askApi, reportsApi, researchSessionsApi, documentsApi, chatStream, ApiError } from "./api";
 import {
   resolveCompany,
+  dualLegCompany,
   stripCompanyMentions,
   isComparisonQuestion,
   isMultiHoldingQuestion,
   mentionsNewCompanyStrong,
-  discoveryKindOf
+  discoveryKindOf,
+  type DualListingHit
 } from "./resolve";
 import { provenanceFromPanel, dataSourceLabels, dataSourceGrounding } from "./answerMeta";
 import { marketLabelOf } from "./format";
@@ -171,7 +173,7 @@ export async function loadSession(id: string, navigate: () => void) {
     let company: ResearchCompany | null = null;
     if (session.ticker) {
       const resolved = await resolveCompany(session.ticker);
-      if (resolved && !("unresolved" in resolved) && !("unverifiedTicker" in resolved)) company = resolved;
+      if (resolved && !("unresolved" in resolved) && !("unverifiedTicker" in resolved) && !("dualChoice" in resolved)) company = resolved;
     }
     if (!company && panel?.ticker) company = { ticker: panel.ticker, nameZh: panel.companyName || panel.ticker };
     setSessionId(session.id);
@@ -311,6 +313,36 @@ function appendCompareChoice(current: ResearchCompany, target: { ticker: string;
       ]
     }
   });
+}
+
+// 双重上市且用户没显式指定市场：问一次按哪条腿分析。两条腿的币种、行情、
+// 估值口径、盈亏算法都不同，替用户默默选一边等于把口径问题藏起来。
+function appendMarketChoice(question: string, dual: DualListingHit) {
+  appendMessage("assistant", "", {
+    type: "choice",
+    choice: {
+      prompt: `${dual.nameZh} 在港美两地双重上市（港股 ${dual.hk}｜美股 ${dual.us}）。你想按哪边的口径分析？行情、币种与估值都会跟着这条腿走，另一边会给实时对照。`,
+      options: [
+        { label: `按港股 ${dual.hk} 分析`, hint: "港币计价 · HKEX 一手披露口径", act: "market", leg: "hk", hk: dual.hk, us: dual.us, name: dual.nameZh, question, recommended: false },
+        { label: `按美股 ${dual.us} 分析`, hint: "美元计价 · 美股财报口径", act: "market", leg: "us", hk: dual.hk, us: dual.us, name: dual.nameZh, question, recommended: false }
+      ]
+    }
+  });
+}
+
+/** 选择卡回调：按选定腿开始研究。原问题已在对话里，不重复落用户消息。 */
+export async function researchDualLeg(option: { leg: "hk" | "us"; hk: string; us: string; name: string; question?: string }) {
+  if (isViewBusy()) return;
+  const company = dualLegCompany({ nameZh: option.name, hk: option.hk, us: option.us, explicitLeg: option.leg }, option.leg);
+  const q = option.question || `${option.name}最近怎么样？`;
+  setResolving(true, "正在检索和思考");
+  try {
+    await sendChat(q, company);
+  } catch (error) {
+    appendMessage("assistant", `这轮研究失败：${error instanceof Error ? error.message : "未知错误"}。`);
+  } finally {
+    setResolving(false);
+  }
 }
 
 function appendDidYouMeanChoice(badTicker: string, suggestions: { ticker: string; name: string }[] = []) {
@@ -473,7 +505,10 @@ function streamCallbacks(key: string) {
 
   function paint() {
     frame = null;
-    if (active && key === activeRunKey()) setStreaming(key, text);
+    if (!active || key !== activeRunKey()) return;
+    // 服务端会截断 FALSIFIERS_JSON；这里再挡一层，避免旧 API / 半截包把机器行刷进气泡。
+    const cut = text.indexOf("FALSIFIERS_JSON:");
+    setStreaming(key, cut >= 0 ? text.slice(0, cut).replace(/\s+$/, "") : text);
   }
 
   return {
@@ -524,6 +559,17 @@ export async function sendChat(question: string, preResolved: ResearchCompany | 
       if (shouldResolve) {
         setResolving(true, "正在识别公司");
         const resolved = await resolveCompany(question, { verify: true });
+        if (resolved && "dualChoice" in resolved) {
+          const dual = resolved.dualChoice;
+          if (prevCompany && (prevCompany.ticker === dual.hk || prevCompany.ticker === dual.us)) {
+            // 同一家公司已经在按某条腿研究：追问沿用当前腿，不重复问市场。
+            company = prevCompany;
+          } else {
+            appendMarketChoice(question, dual);
+            setResolving(false);
+            return;
+          }
+        }
         if (resolved && "unresolved" in resolved) {
           appendMessage(
             "assistant",
@@ -563,7 +609,8 @@ export async function sendChat(question: string, preResolved: ResearchCompany | 
   }
   setCompany(company);
   if (company.dualListing && (switched || !prevCompany?.ticker)) {
-    showToast(`${company.nameZh} 双重上市：港股 ${company.dualListing.hk}｜美股 ${company.dualListing.us}，基本面按美股 ADR 口径。`);
+    const other = company.dualListing.chosen === company.dualListing.hk ? `美股 ${company.dualListing.us}` : `港股 ${company.dualListing.hk}`;
+    showToast(`${company.nameZh} 双重上市：本轮按 ${company.dualListing.chosen} 口径分析，${other} 仅作实时对照。`);
   }
   const sessionId = ensureSessionId();
   const conversationId = ensureConversationId();

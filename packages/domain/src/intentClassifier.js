@@ -78,7 +78,7 @@ const RULES = [
   // 财务质量：补齐"赚钱吗/赚不赚钱/能不能赚钱"这类口语，避免落进 company_status 套全模板。
   {
     intent: RESEARCH_INTENTS.financialQuality,
-    re: /赚钱吗|赚不赚钱|能不能赚钱|能赚钱|赚不赚|是否赚钱|有没有赚钱|盈不盈利|盈利吗|赚钱能力|利润|毛利|净利|现金流|自由现金流|财务质量|经营质量|收入|亏损|盈利|应收|存货|资本开支|回本|占比多少|增速|GMV|口径|profitab|margins?\b|cash\s*flow|\bfcf\b|revenue|earnings\s+quality|financials\b|loss[- ]making|burn\s+rate|receivable|inventory|capex|balance\s+sheet/i
+    re: /赚钱吗|赚不赚钱|能不能赚钱|能赚钱|赚不赚|是否赚钱|有没有赚钱|盈不盈利|盈利吗|赚钱能力|利润|毛利|净利|现金流|自由现金流|财务质量|经营质量|收入|亏损|还在亏|还亏|亏钱|亏不亏|亏吗|亏多少|扭亏|巨亏|减亏|盈亏|盈利|应收|存货|资本开支|回本|占比多少|增速|GMV|口径|profitab|margins?\b|cash\s*flow|\bfcf\b|revenue|earnings\s+quality|financials\b|loss[- ]making|burn\s+rate|receivable|inventory|capex|balance\s+sheet/i
   },
   {
     intent: RESEARCH_INTENTS.riskEvent,

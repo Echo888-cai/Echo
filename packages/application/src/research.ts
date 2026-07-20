@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { getCompanyByTickerComplete, searchCompanies } from "@echo/db/repositories/companyRepository.js";
+import { getCompanyByTickerComplete } from "@echo/db/repositories/companyRepository.js";
 import { ensureFreshMarketSnapshot } from "./marketData.js";
 import { getCompanyProfile, upsertCompanyProfile } from "@echo/db/repositories/companyProfilesRepository.js";
 import { saveResearchSession } from "@echo/db/repositories/researchSessionsRepository.js";
@@ -10,7 +10,8 @@ import { saveWebEvidence, listWebEvidence } from "@echo/db/repositories/webEvide
 import { ensureEarningsCalendar } from "./earningsCalendar.js";
 import { composerFor, reportComposerFor } from "./answerComposition.js";
 import { getComparablePeers } from "./compPeers.js";
-import { insertLlmAudit } from "@echo/db/repositories/llmAuditRepository.js";
+import { modelAnswer, providerConfig, parseJsonObject, type TokenCallback } from "./modelGateway.js";
+import { resolveResearchCompany } from "./companyResolution.js";
 import { insertFactGuardAudit } from "@echo/db/repositories/factGuardRepository.js";
 import { upsertResearchSnapshot } from "@echo/db/repositories/researchSnapshotsRepository.js";
 import { replaceFalsifierRules } from "@echo/db/repositories/watchRulesRepository.js";
@@ -19,9 +20,9 @@ import { compactConversationHistory } from "./conversationContext.js";
 import { getCachedJson, setCachedJson } from "./cache.js";
 import {
   appendReportDisclaimer, buildFactsRegistry, buildSoftNote, classifyResearchIntent, deriveValuationPosition, displayValuation,
-  extractFalsifiersFromAnswer, extractStructuredFalsifiers, extractThesisFromAnswer, isDataFragmentThesis,
-  parseFalsifierRules, planResearchStages, portraitJudgmentChanged, RESEARCH_DEPTHS, RESEARCH_INTENTS, renderHardFailIssues,
-  routeResearchIntent, summarizeVerdict, topPortraitEvidence, verifyAnswerNumbers
+  dualListingByTicker, extractFalsifiersFromAnswer, extractStructuredFalsifiers, extractThesisFromAnswer, isDataFragmentThesis,
+  mergeFactsRegistry, parseFalsifierRules, planResearchStages, portraitJudgmentChanged, RESEARCH_DEPTHS, RESEARCH_INTENTS, renderHardFailIssues,
+  routeResearchIntent, streamSafeResearchText, summarizeVerdict, topPortraitEvidence, verifyAnswerNumbers
 } from "@echo/domain";
 
 type ResearchInput = {
@@ -39,122 +40,14 @@ type ResearchInput = {
   [key: string]: unknown;
 };
 
-function providerConfig() {
-  if (process.env.DEEPSEEK_API_KEY) return { id: "deepseek", key: process.env.DEEPSEEK_API_KEY, base: process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com", model: process.env.DEEPSEEK_MODEL || "deepseek-v4-flash" };
-  if (process.env.OPENAI_API_KEY) return { id: "openai", key: process.env.OPENAI_API_KEY, base: "https://api.openai.com/v1", model: process.env.OPENAI_MODEL || "gpt-5-mini" };
-  if (process.env.MODEL_API_KEY && process.env.MODEL_BASE_URL) return { id: "generic", key: process.env.MODEL_API_KEY, base: process.env.MODEL_BASE_URL, model: process.env.MODEL_NAME || "default" };
-  return null;
-}
+// 模型网关（providerConfig / modelAnswer / 流式读取）已抽到 ./modelGateway.ts——
+// companyResolution 的 LLM 兜底也要用它，留在本文件会形成循环依赖。
 
-type TokenCallback = (delta: string) => void | Promise<void>;
 // Stage names are a stable contract with the frontend (apps/web/src/lib/researchStore.ts
 // maps each to display copy) — renaming one without updating that map silently breaks
 // the wait-phase indicator again.
 type ResearchRoute = ReturnType<typeof routeResearchIntent>;
 type StageCallback = (stage: string, plan?: string[]) => void | Promise<void>;
-
-// Provider deltas often arrive sub-word (DeepSeek/OpenAI can emit hundreds of
-// tiny deltas for a page of Markdown). Forwarding every single one as its own
-// SSE frame/UI state update is what the client re-renders on — at that
-// frequency it re-parses the whole accumulated Markdown on every delta and
-// can peg the main thread badly enough to make the page briefly unresponsive
-// (found via a real E2E regression, not a hunch). Coalescing into ~24-char
-// chunks keeps the real first-token-latency win (still flushed as they fill,
-// not batched to the end) while keeping event/render frequency in the same
-// ballpark as the old fixed-size chunker this replaces.
-const STREAM_CHUNK_SIZE = 24;
-
-/**
- * Reads an OpenAI-compatible `stream: true` chat/completions body (SSE frames,
- * `data: {...}\n\n`, terminated by `data: [DONE]`), forwarding coalesced
- * content chunks to `onToken` as they arrive and accumulating the full text —
- * so the caller gets real token-by-token latency instead of waiting for the
- * whole response before the first byte reaches the client.
- */
-async function readStreamedCompletion(response: Response, onToken?: TokenCallback) {
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error("model stream has no body");
-  const decoder = new TextDecoder();
-  let buf = "";
-  let content = "";
-  let pending = "";
-  let usage: { prompt_tokens?: number; completion_tokens?: number } | undefined;
-  const flush = async () => {
-    if (!pending) return;
-    const chunk = pending;
-    pending = "";
-    await onToken?.(chunk);
-  };
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    let nl;
-    while ((nl = buf.indexOf("\n")) >= 0) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (!line.startsWith("data:")) continue;
-      const data = line.slice(5).trim();
-      if (!data || data === "[DONE]") continue;
-      let json: any;
-      try { json = JSON.parse(data); } catch { continue; }
-      const delta = String(json.choices?.[0]?.delta?.content || "");
-      if (delta) {
-        content += delta;
-        pending += delta;
-        if (pending.length >= STREAM_CHUNK_SIZE) await flush();
-      }
-      if (json.usage) usage = json.usage;
-    }
-  }
-  await flush();
-  return { content: content.trim(), usage };
-}
-
-type ModelAnswerOptions = {
-  kind?: "chat" | "router" | "report";
-  thinking?: boolean;
-  maxTokens?: number;
-  json?: boolean;
-};
-
-async function modelAnswer(system: string, user: string, userId: string, onToken?: TokenCallback, options: ModelAnswerOptions = {}) {
-  const provider = providerConfig();
-  if (!provider) return null;
-  const started = Date.now();
-  const streaming = Boolean(onToken);
-  try {
-    const response = await fetch(`${provider.base.replace(/\/$/, "")}/chat/completions`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${provider.key}`, "content-type": "application/json" },
-      body: JSON.stringify({
-        model: provider.model, temperature: 0.2, messages: [{ role: "system", content: system }, { role: "user", content: user }],
-        ...(provider.id === "deepseek" && options.thinking !== undefined ? { thinking: { type: options.thinking ? "enabled" : "disabled" } } : {}),
-        ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
-        ...(options.json ? { response_format: { type: "json_object" } } : {}),
-        ...(streaming ? { stream: true, stream_options: { include_usage: true } } : {})
-      }),
-      signal: AbortSignal.timeout(options.kind === "report" ? 120_000 : 60_000)
-    });
-    if (!response.ok) throw new Error(`model ${response.status}`);
-    let content: string;
-    let usage: { prompt_tokens?: number; completion_tokens?: number } | undefined;
-    if (streaming) {
-      ({ content, usage } = await readStreamedCompletion(response, onToken));
-    } else {
-      const body: any = await response.json();
-      content = String(body.choices?.[0]?.message?.content || "").trim();
-      usage = body.usage;
-    }
-    await insertLlmAudit({ provider: provider.id, model: provider.model, kind: options.kind || "chat", status: "ok", latencyMs: Date.now() - started,
-      inputTokens: usage?.prompt_tokens, outputTokens: usage?.completion_tokens, userId });
-    return content ? { content, provider: provider.id, model: provider.model } : null;
-  } catch (error) {
-    await insertLlmAudit({ provider: provider.id, model: provider.model, kind: options.kind || "chat", status: "error", latencyMs: Date.now() - started,
-      errorDetail: error instanceof Error ? error.message : String(error), userId });
-    return null;
-  }
-}
 
 const ROUTER_SYSTEM_PROMPT = `你是金融研究产品的请求路由器。只输出 JSON，不回答用户问题。
 intent 只能是：company_status, business_model, competitors, moat, financial_quality, valuation, risk_event, falsify, deep_research。
@@ -164,11 +57,6 @@ depth 只能是：brief, standard, deep。
 
 const VALID_INTENTS = new Set(Object.values(RESEARCH_INTENTS));
 const VALID_DEPTHS = new Set(Object.values(RESEARCH_DEPTHS));
-
-function parseJsonObject(content: string) {
-  const text = String(content || "").replace(/^```(?:json)?\s*/i, "").replace(/```$/i, "").trim();
-  try { return JSON.parse(text); } catch { return null; }
-}
 
 async function resolveResearchRoute(question: string, userId: string): Promise<ResearchRoute> {
   const deterministic = routeResearchIntent(question);
@@ -310,10 +198,12 @@ function decisionPanel(company: any, profile: any, market: any, financialsData?:
   };
 }
 
-async function resolveInputCompany(input: ResearchInput) {
-  if (input.company?.ticker) return getCompanyByTickerComplete(input.company.ticker);
-  const match = (await searchCompanies(input.question, { limit: 1 }))[0];
-  return match ? getCompanyByTickerComplete(match.ticker) : null;
+/**
+ * 公司入口走 companyResolution：库里没有的合法代码会先经真实数据源验证再自动建档，
+ * 而不是在这里死路返回 null（"alibaba → BABA → 我还没识别出公司"的服务端根因）。
+ */
+async function resolveInputCompany(input: ResearchInput, userId: string) {
+  return resolveResearchCompany(input.company, input.question, userId);
 }
 
 function pctOf(numerator: number | null | undefined, denominator: number | null | undefined) {
@@ -417,7 +307,10 @@ function toDomainSources(company: any, market: any, rows: any[]) {
     source: filingSource,
     revenue: row.revenue, grossProfit: row.gross_profit, operatingIncome: row.operating_income,
     netIncome: row.net_income, operatingCashFlow: row.operating_cash_flow, cashAndEquivalents: row.cash_and_equivalents,
-    netCash: row.net_cash, eps: annualEps, epsAnnualized, revenueGrowth: pctChange(row.revenue, row.revenue_prior),
+    // free_cash_flow 列在 0007 已加；此前 toDomainSources 漏映射，导致估值 FCF/DCF 分支
+    // 与 factGuard 登记表永远读不到已入库的 FCF（有数也像没数）。
+    freeCashFlow: row.free_cash_flow, netCash: row.net_cash, eps: annualEps, epsAnnualized,
+    revenueGrowth: pctChange(row.revenue, row.revenue_prior),
     grossMargin: pctOf(row.gross_profit, row.revenue), operatingMargin: pctOf(row.operating_income, row.revenue),
     netMargin: pctOf(row.net_income, row.revenue), profitGrowth: pctChange(row.net_income, row.net_income_prior),
     sharesOutstanding: market?.market_cap && market?.price ? market.market_cap / market.price : null,
@@ -469,7 +362,7 @@ function computeResearchValuation(company: any, marketSnapshot: any, financialsD
  * hard-fail answers and re-call the LLM with a targeted correction prompt; falls
  * back to soft behavior if the retry still fails or the LLM call errors).
  */
-async function applyFactGuard(content: string, company: any, marketSnapshot: any, financialsData: any, valuation: any, userId: string) {
+async function applyFactGuard(content: string, company: any, marketSnapshot: any, financialsData: any, valuation: any, userId: string, compare: any = null) {
   const mode = (process.env.FACT_GUARD_MODE || "shadow").toLowerCase();
   if (mode === "off") return { content, factGuard: null };
   // "Native currency" for amount-matching purposes is the filing's reporting currency
@@ -483,6 +376,26 @@ async function applyFactGuard(content: string, company: any, marketSnapshot: any
     nativeCurrency: financialsData?.currency || company.currency,
     marketSnapshot, financialsData, valuation
   });
+  // 对比任务会并排引用对比对象的现价/涨跌幅/财报数字；不登进登记表 → soft/hard 误报，
+  // full 模式还会为此再打一轮纠错模型，流式结束后界面像卡死。
+  if (compare?.ticker) {
+    const compareRegistry: any = buildFactsRegistry({
+      ticker: compare.ticker,
+      nativeCurrency: compare.financialsData?.currency || compare.marketSnapshot?.currency,
+      marketSnapshot: compare.marketSnapshot,
+      financialsData: compare.financialsData,
+      valuation: compare.valuation
+    });
+    const compareAsOf = isoDate(compare.marketSnapshot?.rawAsOf);
+    if (compareAsOf) {
+      const [y, m, d] = compareAsOf.split("-").map(Number);
+      compareRegistry.dates.push({
+        iso: compareAsOf, year: y, month: m, day: d, quarter: Math.ceil(m / 3),
+        label: `${compare.name || compare.ticker}行情快照时间`, source: "compare.marketSnapshot"
+      });
+    }
+    mergeFactsRegistry(registry, compareRegistry);
+  }
   // buildFactsRegistry only registers the filing period as a date fact — the quote's
   // as-of date is a separate, equally citable fact (models often restate "现价日期"),
   // so append it directly rather than mislabeling it as a filing period.
@@ -593,12 +506,20 @@ export async function financialsDataFor(ticker: string) {
  * 多取一轮只会把已经 13–21s 的时延推得更长。取不到就返回带 missing 状态的壳，
  * 让 buildCompareBlock 如实写"未核到"，而不是让整轮研究失败。
  */
-async function gatherCompareTarget(compareWith: any): Promise<any | null> {
-  const ticker = String(compareWith?.ticker || "").trim();
-  if (!ticker) return null;
-  if (detectMarket(ticker) === "unsupported") return null;
-  const company = await getCompanyByTickerComplete(ticker).catch(() => null);
+async function gatherCompareTarget(compareWith: any, userId: string): Promise<any | null> {
+  const rawTicker = String(compareWith?.ticker || "").trim();
+  if (!rawTicker) return null;
+  if (detectMarket(rawTicker) === "unsupported") return null;
+  // 对比对象也要走"验证→建档"同一道口，否则 companies 表里没有 9988.HK 时这里直接
+  // 返回 null，对话就自称"阿里巴巴未核到"——正是主链路刚修好的表缺行病，只是搬到了
+  // 对比腿上（LIVE-007）。resolveResearchCompany 会用行情探活/FMP 核实后再落行。
+  const company = await resolveResearchCompany(
+    { ticker: rawTicker, nameZh: compareWith?.nameZh },
+    "",
+    userId
+  ).catch(() => null);
   if (!company) return null;
+  const ticker = company.ticker;
   const [market, rows] = await Promise.all([
     ensureFreshMarketSnapshot(ticker).catch(() => null),
     fetchFinancialsRows(ticker).catch(() => [])
@@ -618,7 +539,7 @@ async function gatherCompareTarget(compareWith: any): Promise<any | null> {
 }
 
 async function gatherResearchContext(input: ResearchInput, userId: string, route: ResearchRoute, onStage?: StageCallback) {
-  const company = await resolveInputCompany(input);
+  const company = await resolveInputCompany(input, userId);
   if (!company) return null;
   // A 股退场（PLAN v3 市场聚焦）：companies 表里的存量 A 股仍能被搜索命中，
   // 但研究链路对它诚实拒答，而不是跑出一篇行情/财务/估值全部"未核到"的空壳报告。
@@ -676,14 +597,29 @@ async function gatherResearchContext(input: ResearchInput, userId: string, route
     : Promise.resolve({ evidence: [] as any[], query: webEvidenceQuery, provider: "skipped", searchedAt: new Date().toISOString() });
 
   if (wantsValuation) await onStage?.("valuation");
+  // 双重上市：company.ticker 即用户选定的腿（前端问询或显式代码决定），另一腿只取
+  // 实时价作对照——绝不驱动估值/财务口径（ADR 比例未核实前禁止跨腿换算，PLAN §7）。
+  const dualLink = dualListingByTicker(company.ticker);
+  const dualOtherTicker = dualLink ? (company.ticker === dualLink.hk ? dualLink.us : dualLink.hk) : null;
   // Peers need the subject's own financials to classify its stage, so this can't
   // join the Promise.all above — it runs before valuation because the anchor is
   // an input to the band, not a decoration on it.
   // 对比对象与同业/估值互不依赖，并行取——它是 compareWith 的兑现点（见 gatherCompareTarget）。
-  const [compPeers, compare] = await Promise.all([
+  const [compPeers, compare, dualOtherMarket] = await Promise.all([
     wantsPeers ? getComparablePeers(company.ticker, financialsData) : Promise.resolve(null),
-    input.compareWith ? gatherCompareTarget(input.compareWith).catch(() => null) : Promise.resolve(null)
+    input.compareWith ? gatherCompareTarget(input.compareWith, userId).catch(() => null) : Promise.resolve(null),
+    dualOtherTicker ? ensureFreshMarketSnapshot(dualOtherTicker).catch(() => null) : Promise.resolve(null)
   ]);
+  const dualListing = dualLink ? { hk: dualLink.hk, us: dualLink.us, chosen: company.ticker, nameZh: dualLink.nameZh } : null;
+  const dualQuote = dualOtherTicker && dualOtherMarket?.price != null
+    ? {
+        ticker: dualOtherTicker,
+        price: dualOtherMarket.price,
+        // 快照行不带币种；两地报价币种由交易所决定（HKEX=HKD、美股=USD），据腿推导。
+        currency: dualOtherTicker.endsWith(".HK") ? "HKD" : "USD",
+        changePct: dualOtherMarket.change_percent
+      }
+    : null;
   const valuation = wantsValuation ? computeResearchValuation(company, marketSnapshot, financialsData, compPeers) : null;
 
   // Await web evidence (was kicked off in parallel before valuation).
@@ -743,10 +679,11 @@ async function gatherResearchContext(input: ResearchInput, userId: string, route
     route,
     // compare / documents 此前恒为 null，导致前端发了、契约收了、composer 也写好了渲染逻辑，
     // 但功能永远不存在（见 gatherCompareTarget 与 answerComposition.documentsToPrompt 的注释）。
-    // newsSnapshot / dualListing / dualQuote / otherHoldings 仍为 null——它们是**真的**没有
-    // 数据源（PLAN 第 3 节），保持诚实的 null，不要拿占位数据把它们"点亮"。
+    // dualListing / dualQuote 同病已接真值（domain 双重上市表 + 另一腿真实快照）。
+    // newsSnapshot / otherHoldings 仍为 null——它们是**真的**没有数据源（PLAN 第 3 节），
+    // 保持诚实的 null，不要拿占位数据把它们"点亮"。
     documents: input.documents,
-    webEvidence, newsSnapshot: null, compare, dualListing: null, dualQuote: null, otherHoldings: null
+    webEvidence, newsSnapshot: null, compare, dualListing, dualQuote, otherHoldings: null
   };
   const dataSources = {
     market: market ? {
@@ -764,7 +701,10 @@ async function gatherResearchContext(input: ResearchInput, userId: string, route
     } : { status: "missing" },
     buybacks: buybacks.length ? { status: "ok", source: "HKEX 翌日披露报表", rows: buybacks.length } : { status: "missing" }
   };
-  return { company, profile, market, financials, earnings, marketSnapshot, financialsData, valuation, panel, composer, composerSources, composerContext, dataSources, route, memoryFacts };
+  // compare 必须出现在返回值里：runResearch/runReport 读 ctx.compare 喂 applyFactGuard 的
+  // 对比登记表合并——此前只塞进 composerContext、返回对象漏了它，ctx.compare 恒 undefined，
+  // "对比对象并进 factGuard 登记表"的修复实际从未生效（full 模式对诚实的对比数字照旧误报）。
+  return { company, profile, market, financials, earnings, marketSnapshot, financialsData, valuation, panel, composer, composerSources, composerContext, dataSources, route, memoryFacts, compare, dualListing, dualQuote };
 }
 
 type ResearchContext = Exclude<NonNullable<Awaited<ReturnType<typeof gatherResearchContext>>>, { delisted: string }>;
@@ -902,7 +842,10 @@ export async function runResearch(input: ResearchInput, userId: string, onToken?
   const generated = await modelAnswer(RESEARCH_SYSTEM_PROMPT, prompt, userId, onToken, {
     kind: "chat",
     thinking: route.depth !== RESEARCH_DEPTHS.brief,
-    maxTokens: route.depth === RESEARCH_DEPTHS.brief ? 900 : route.depth === RESEARCH_DEPTHS.deep ? 8_000 : 3_600
+    maxTokens: route.depth === RESEARCH_DEPTHS.brief ? 900 : route.depth === RESEARCH_DEPTHS.deep ? 8_000 : 3_600,
+    // FALSIFIERS_JSON 机器行不得流出到前端（完整内容仍留在 content 供结构化提取）——
+    // 网关是通用模块，这条业务裁剪由调用方注入。
+    visibleText: streamSafeResearchText
   });
   await onStage?.("fact_check");
   // F-3：先把机器可读的 FALSIFIERS_JSON 行从正文里剥掉，再做其它一切。
@@ -918,10 +861,18 @@ export async function runResearch(input: ResearchInput, userId: string, onToken?
   // 来源 at all despite the rules asking for one). Run it before the guard so
   // factGuard verifies the exact text the user ends up reading.
   const guarded = generated
-    ? await applyFactGuard(composer.normalizeResearchAnswer(structured.cleanContent, panel, composerSources, route), company, marketSnapshot, financialsData, valuation, userId)
+    ? await applyFactGuard(composer.normalizeResearchAnswer(structured.cleanContent, panel, composerSources, route), company, marketSnapshot, financialsData, valuation, userId, ctx.compare)
     : { content: fallback, factGuard: null };
   const content = guarded.content;
-  const saved = await persistResearch(ctx, input, userId, content, structured.rules);
+  // 落库失败不得吞掉已经生成（甚至已经 SSE 流出去）的正文——否则用户看到的是
+  // 「研究失败」，真相却是「答完了，只是 user_id 外键/RLS 写不进去」。
+  // 会话/画像丢失是可恢复的数据问题；把正确研究结果一起扔掉才是产品级断裂。
+  let saved: { sessionId: string | null; portrait: any } = { sessionId: null, portrait: null };
+  try {
+    saved = await persistResearch(ctx, input, userId, content, structured.rules);
+  } catch (error) {
+    console.error("[research] 研究结果落库失败（正文仍返回）：", error instanceof Error ? error.message : error);
+  }
   return {
     mode: generated ? "chat_model" : "chat_local",
     provider: generated?.provider || null,
@@ -935,6 +886,9 @@ export async function runResearch(input: ResearchInput, userId: string, onToken?
     newsSnapshot: null,
     factGuard: guarded.factGuard,
     valuation,
+    // 双重上市：选中腿与另一腿对照报价（AnswerCard 的 DualQuote 条读这里）。
+    dualListing: ctx.dualListing,
+    dualQuote: ctx.dualQuote,
     portrait: saved.portrait
   };
 }
@@ -1013,13 +967,18 @@ export async function runReport(input: ResearchInput, userId: string) {
   // conversational lead-in, which belongs above a chat reply, not above a report's
   // "# 深度研究" title. buildReportPrompt already mandates its own header and 来源.
   const guarded = generated
-    ? await applyFactGuard(generated.content, company, marketSnapshot, financialsData, valuation, userId)
+    ? await applyFactGuard(generated.content, company, marketSnapshot, financialsData, valuation, userId, ctx.compare)
     : { content: fallback, factGuard: null };
   // buildReportPrompt 对模型说"结尾不需要再写免责声明（系统会附加）"——这里就是那个"系统"。
   // 之前只有 composeReport 的兜底路径带免责声明，模型路径直接返回正文，于是正常情况下的
   // 报告反而没有声明。fallback 已经过 composeReport 附加，appendReportDisclaimer 幂等，两条路都走它。
   const markdown = appendReportDisclaimer(guarded.content);
-  const saved = await persistResearch(ctx, input, userId, markdown);
+  let saved: { sessionId: string | null; portrait: any } = { sessionId: null, portrait: null };
+  try {
+    saved = await persistResearch(ctx, input, userId, markdown);
+  } catch (error) {
+    console.error("[research] 深度报告落库失败（正文仍返回）：", error instanceof Error ? error.message : error);
+  }
   return {
     mode: generated ? "report_model" : "report_local",
     provider: generated?.provider || null,

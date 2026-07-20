@@ -23,6 +23,8 @@ export type Expect = {
   multiHolding?: boolean;
   strongCompany?: boolean;
   comparison?: boolean;
+  /** 双重上市路由：null=不是双重上市；"ask"=命中且需问用户市场；"hk"/"us"=显式选腿。 */
+  dualLeg?: "hk" | "us" | "ask" | null;
 };
 
 export type Case = {
@@ -381,5 +383,38 @@ export const CORPUS: Case[] = [
   { id: "BND-009", scenario: "boundary/company-vs-followup", q: "写份报告吧", expect: { intent: I.deep },
     why: "口语省略「一」——用户要的仍是报告这个产出形态" },
   { id: "BND-010", scenario: "boundary/company-vs-followup", q: "谷歌反垄断案影响多大", expect: { intent: I.risk, us: "GOOGL" },
-    why: "点名的具体事件优先于泛化财务词" }
+    why: "点名的具体事件优先于泛化财务词" },
+
+  // ── 35. 英文名/拼音识别 ─────────────────────────────────────────────
+  // 2026-07-20 实测缺陷的沉淀："alibaba" 曾经完全没反应（前端解析成 BABA 后服务端
+  // 因 companies 表无行而死路），"tencent/meituan" 被抽成假代码 TENCENT/MEITUAN。
+  // 别名底账已下沉 domain 并补齐英文名；这组守住"英文问法是一等公民"。
+  { id: "ENG-001", scenario: "english-name", q: "tencent", expect: { hk: "0700.HK" },
+    why: "英文名必须经别名底账命中港股代码，而不是被裸 token 抽成假美股代码" },
+  { id: "ENG-002", scenario: "english-name", q: "meituan最近怎么样", expect: { hk: "3690.HK" } },
+  { id: "ENG-003", scenario: "english-name", q: "xiaomi赚钱吗", expect: { intent: I.financial, hk: "1810.HK" } },
+  { id: "ENG-004", scenario: "english-name", q: "kuaishou的护城河", expect: { intent: I.moat, hk: "1024.HK" } },
+  { id: "ENG-005", scenario: "english-name", q: "nvidia怎么样", expect: { us: "NVDA" } },
+  { id: "ENG-006", scenario: "english-name", q: "what about netease", expect: { hk: "9999.HK" } },
+
+  // ── 36. 港美双重上市问询 ────────────────────────────────────────────
+  // 产品决策：双重上市且用户没指明市场时必须问一次（dualLeg="ask"），显式代码或
+  // 市场词（港股/美股/ADR）算已指明，直接按那条腿走，不重复问。
+  { id: "DUAL-001", scenario: "dual-listing", q: "alibaba", expect: { dualLeg: "ask", hk: "9988.HK" },
+    why: "2026-07-20 原始缺陷用例：问 alibaba 曾经没反应；现在应识别为双重上市并问用户按哪边分析" },
+  { id: "DUAL-002", scenario: "dual-listing", q: "阿里巴巴的护城河", expect: { intent: I.moat, dualLeg: "ask" } },
+  { id: "DUAL-003", scenario: "dual-listing", q: "Alibaba估值贵不贵", expect: { intent: I.valuation, dualLeg: "ask" } },
+  { id: "DUAL-004", scenario: "dual-listing", q: "BABA怎么样", expect: { dualLeg: "us" },
+    why: "显式美股代码=已选腿，不再追问" },
+  { id: "DUAL-005", scenario: "dual-listing", q: "9988.HK 便宜吗", expect: { intent: I.valuation, dualLeg: "hk" } },
+  { id: "DUAL-006", scenario: "dual-listing", q: "阿里巴巴港股怎么样", expect: { dualLeg: "hk" },
+    why: "市场词（港股/美股/ADR）等同显式选腿" },
+  { id: "DUAL-007", scenario: "dual-listing", q: "阿里巴巴美股ADR分析一下", expect: { dualLeg: "us" } },
+  { id: "DUAL-008", scenario: "dual-listing", q: "京东怎么样", expect: { dualLeg: "ask", hk: "9618.HK" } },
+  { id: "DUAL-009", scenario: "dual-listing", q: "腾讯怎么样", expect: { dualLeg: null, hk: "0700.HK" },
+    why: "TCEHY 只是 OTC ADR 数据替身，不构成双重上市——绝不为它弹市场问询" },
+  { id: "DUAL-010", scenario: "dual-listing", q: "美团的商业模式", expect: { intent: I.business, dualLeg: null } },
+  { id: "DUAL-011", scenario: "dual-listing", q: "bilibili还在亏吗", expect: { intent: I.financial, dualLeg: "ask" } },
+  { id: "DUAL-012", scenario: "dual-listing", q: "理想汽车 vs 小鹏谁更强", expect: { comparison: true },
+    why: "对比问句先走对比流程；对比对象的双重上市口径由对比链路自己处理" }
 ];

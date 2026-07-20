@@ -1,0 +1,19 @@
+[package]
+name = "echo-application"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Use-case orchestration for the research pipeline"
+
+[dependencies]
+echo-domain.workspace = true
+echo-db.workspace = true
+echo-finance-core.workspace = true
+rust_decimal.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+# 只在写映射测试时用来构造 MarketRow.valid_time；不进入应用层公开 API。
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+rust_decimal_macros.workspace = true

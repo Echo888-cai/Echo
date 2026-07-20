@@ -17,7 +17,10 @@ import { loadRootEnv } from "@echo/observability";
 loadRootEnv();
 const { runAsk, runReport } = await import("@echo/application/research");
 
-const USER_ID = process.env.ECHO_QA_USER_ID || "u_a410f11a8138";
+// 默认跟 `npm run accounts:reset-owner` 对齐：owner 的 id 恒为 `local`。
+// 旧默认 `u_a410f11a8138` 在账号重置后不存在，会让 research_sessions 外键整轮抛错，
+// 把「研究质量」误报成 11/15 失败（正文其实已经生成完了）。
+const USER_ID = process.env.ECHO_QA_USER_ID || "local";
 
 type Transcript = { firstTokenMs: number | null; totalMs: number; stages: string[]; chars: number };
 
@@ -87,11 +90,25 @@ const PROBES: Probe[] = [
     // 只能定性对比"（提示词里的对比块是空的，composer 的规则会逼它这么说）。这句话消失
     // 是链路接通的确定性标志。至于"对比块的字段拼得对不对"，那是纯函数的事，
     // 由 packages/domain/test/compare-block.test.mjs 确定性地测，不该拿模型输出去撞运气。
+    //
+    // 3. 反向署名一度写成 `阿里.{0,12}未核到` / `未核到.{0,12}阿里`——**太宽，会假阳**
+    //    （2026-07-20 接通后实测）。链路接通、阿里真实收入/净利/现价都进了正文时，
+    //    模型仍会**逐项**诚实标注个别缺口（"阿里经营现金流未核到"、"毛利率未核到"、
+    //    "估值未核到"）——这正是红线 2 要求的诚实，不是断裂；而 `未核到.{0,12}阿里`
+    //    还会把**腾讯**的"估值未核到（换行）阿里：…"跨公司误配成命中。要抓的只有
+    //    "整个对比对象拿不到一手数据"这一种断裂署名（财报/行情/资料整体未核到，或
+    //    只能定性对比），不是任何一项指标的缺口。
     assert: (r) => {
       const text = String(r.content || "");
       if (!/阿里|9988/.test(text)) return "回答里完全没有对比对象——对比链路未接通";
-      if (/未核到.{0,12}(阿里|对比对象)|阿里.{0,12}未核到|只能做定性对比/.test(text)) {
-        return "回答自称对比对象“未核到/只能定性对比”——compareWith 的取数没生效";
+      // 断裂署名：对比对象**整体**没有一手数据（财报/行情/资料），或直接弃权只做定性；
+      // 逐项"某指标未核到"是诚实缺口，不算断裂。
+      const targetWideMiss =
+        /只能[^。\n]{0,6}定性(对比|比较)/.test(text) ||
+        /(对比对象|阿里巴巴?)[^。\n]{0,10}(本轮)?(未核到|没有|无从|无法)[^。\n]{0,6}(实时)?(财报|行情|数据|资料|信息)/.test(text) ||
+        /阿里巴巴?[^。\n]{0,8}(尚未|还未|未)上市/.test(text);
+      if (targetWideMiss) {
+        return "回答自称对比对象整体“未核到/只能定性对比”——compareWith 的取数没生效";
       }
       return null;
     }

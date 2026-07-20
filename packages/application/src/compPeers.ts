@@ -14,7 +14,7 @@
  * fed real peers: valuation.js's PE / EV-Sales peer anchors, answerComposer's
  * 同业对照 prompt block, and factGuard's multiple registry.
  */
-import { getCompPeers as fetchProviderPeers } from "@echo/data-plane";
+import { getCompPeers as fetchProviderPeers, listExternalCompPeersAdapters } from "@echo/data-plane";
 import { buildCompPeers } from "@echo/domain";
 import { getCompPeersRow, upsertCompPeers } from "@echo/db/repositories/compPeersRepository.js";
 
@@ -78,7 +78,11 @@ export async function getComparablePeers(ticker: string, financialsData: any) {
     // there will never be a fresher row and stale-if-error would serve a fossil
     // forever. Answer honestly and overwrite any stale cached row.
     if ((error as any)?.name === "NoAuthorizedAdapterError") {
-      const detail = "本市场没有可用的同业数据源";
+      // 空适配器列表（未配 FINNHUB_API_KEY）与"该市场真无授权源"是两件事——前者写
+      // 「本市场没有」会让用户以为港股/美股结构上不可比，其实只是本机没配钥匙。
+      const detail = listExternalCompPeersAdapters().length === 0
+        ? "同业数据源未配置，本轮无法生成同业对照"
+        : "本市场没有可用的同业数据源";
       await upsertCompPeers({ ticker, providerStatus: "missing", detail, peers: [], anchor: null }).catch(() => {});
       return { ticker, stage: null, peers: [], anchor: null, providerStatus: "missing" as const, detail, partial: false };
     }

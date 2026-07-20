@@ -252,6 +252,23 @@ export function buildFactsRegistry(sources = {}) {
   return registry;
 }
 
+/**
+ * 把另一份登记表并入主表（对比任务用）。对比回答会引用两家公司的数字，但
+ * buildFactsRegistry 原先只登主体——对比对象的现价/涨跌幅/净利率等全部落 soft/hard，
+ * 护栏在惩罚诚实引用。合并时按维度追加，不覆盖主体事实。
+ */
+export function mergeFactsRegistry(into, from) {
+  if (!into || !from) return into;
+  for (const [currency, facts] of Object.entries(from.amounts || {})) {
+    if (!Array.isArray(facts) || !facts.length) continue;
+    into.amounts[currency] = [...(into.amounts[currency] || []), ...facts];
+  }
+  if (Array.isArray(from.percents) && from.percents.length) into.percents.push(...from.percents);
+  if (Array.isArray(from.multiples) && from.multiples.length) into.multiples.push(...from.multiples);
+  if (Array.isArray(from.dates) && from.dates.length) into.dates.push(...from.dates);
+  return into;
+}
+
 // ───────────────────────── extraction ─────────────────────────
 
 /**
