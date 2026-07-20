@@ -56,7 +56,7 @@ React/PWA(apps/web) ── tRPC + Hono SSE(apps/api) ── Temporal(apps/worker
 | 5 | `crates/echo-domain::derivations` | `research.ts` 财务衍生(TTM/EPS 年化/margins) | ✅ 已迁 + 4 项测试绿（TTM 桥接 + EPS 年化护栏） |
 | 6 | `crates/echo-application` | `packages/application/research.ts` | 🚧 编排+估值+意图已接；DB 行→领域映射(`from_db`)+4 项测试绿；模型网关**非流式核心已接**(`model_gateway`：provider 选择 DeepSeek→OpenAI→通用 / OpenAI 兼容请求体 / 作答提取 / `parse_json_object` / usage 抠取 / `AuditContext` best-effort 落审计，13 项纯函数测试绿)。剩余显式 seam：流式 SSE 增量、活库端到端验证 |
 | 7 | `crates/echo-db` | `packages/db`(Drizzle) → sqlx | 🚧 companies/market_snapshots 仓储 + 租户 RLS(`with_tenant`)；`Pool` 上抛，映射已被 api 消费(非死码)。**llm_audit 仓储已接**(`LlmAuditRepository::insert` 走 with_tenant，error_detail 按 char 截 500，3 项测试绿)。**DB 补数/审计写入路径待活库端到端验证** |
-| 8 | `crates/echo-api` | `apps/api`(Hono/tRPC) → axum | 🚧 `/health`+`/api/ask` 纯核路径已 curl 端到端验证(意图/定点估值/护栏全绿)；缺行情时经 `AppState.pool` 兜底 DB 快照(seam 已接，待活库验) |
+| 8 | `crates/echo-api` | `apps/api`(Hono/tRPC) → axum | 🚧 `/health`+`/api/ask` 纯核路径已 curl 端到端验证(意图/定点估值/护栏全绿)；缺行情时经 `AppState.pool` 兜底 DB 快照。**生成路径已接**：草稿缺失且配了 provider 时用领域事实(`answer_prompt`)构造提示词→网关生成→生成答案同过数字护栏；无 provider 诚实回 `answer_source:"unavailable"`(curl 验证:无 key 不假造答案)。剩余 seam：流式 SSE、活库(生成+审计)端到端验证 |
 | 9 | `crates/echo-worker` | `apps/worker`(Temporal) | 🚧 调度骨架 |
 | 10 | `crates/echo-web` | `apps/web`(React/PWA) → Leptos/WASM | 🚧 研究外壳骨架 |
 

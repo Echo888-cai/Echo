@@ -10,10 +10,12 @@
 use echo_domain::{Company, Financials, MarketSnapshot, PeerAnchor, Valuation, display_valuation};
 use rust_decimal::Decimal;
 
+pub mod answer_prompt;
 pub mod from_db;
 pub mod model_gateway;
 pub mod research;
 
+pub use answer_prompt::{AnswerContext, build_system_prompt, build_user_prompt};
 pub use from_db::{market_snapshot_from_rows, resolved_company_from_rows};
 pub use model_gateway::{
     AnswerKind, ModelAnswer, ModelAnswerOptions, ProviderConfig, model_answer, parse_json_object,

@@ -12,8 +12,10 @@
 
 use axum::extract::State;
 use axum::{Json, Router, routing::get, routing::post};
+use echo_application::model_gateway::{AuditContext, ModelAnswerOptions, model_answer};
 use echo_application::{
-    ResolvedCompany, build_panel, market_snapshot_from_rows, resolved_company_from_rows,
+    AnswerContext, ResolvedCompany, build_panel, build_system_prompt, build_user_prompt,
+    market_snapshot_from_rows, resolved_company_from_rows,
 };
 use echo_db::{CompanyRepository, MarketRepository, Pool};
 use echo_domain::{
@@ -79,6 +81,11 @@ struct AskResponse {
     data_completeness: u8,
     connected_sources: Vec<&'static str>,
     valuation: echo_domain::Valuation,
+    /// 最终答案正文——客户端给了 `draft_answer` 就回原样，否则由模型网关生成；无 provider/生成失败为 `None`。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    answer: Option<String>,
+    /// 答案来源：`draft`（客户端草稿）/ `generated`（网关生成）/ `unavailable`（未核到模型）。
+    answer_source: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     fact_guard: Option<GuardView>,
 }
@@ -160,8 +167,34 @@ async fn ask(State(state): State<AppState>, Json(req): Json<AskRequest>) -> Json
     // 3) 定点估值 + 决策面板。
     let panel = build_panel(&company, &market, &financials, None);
 
-    // 4) 数字护栏（给了草稿答案才跑）：只登记本公司事实，逐条核对。
-    let fact_guard = req.draft_answer.as_deref().map(|draft| {
+    // 4) 答案：客户端给了草稿就用草稿；否则配了 provider 就用领域事实构造提示词、经网关生成。
+    //    生成的答案同样要过下面的数字护栏——生成路径不是护栏的旁路。
+    let (answer, answer_source) = match req.draft_answer.clone() {
+        Some(draft) => (Some(draft), "draft"),
+        None => {
+            let system = build_system_prompt();
+            let user = build_user_prompt(&AnswerContext {
+                question: &req.question,
+                name_zh: company.name_zh.as_deref(),
+                panel: &panel,
+                market: &market,
+                financials: &financials,
+            });
+            // 配了库就把 LLM 调用审计落库（best-effort，绝不阻断作答）；用户身份暂用 "local"，
+            // 待 auth 边界迁到 Rust 后接真实租户。
+            let audit = state.pool.as_ref().map(|pool| AuditContext {
+                pool,
+                user_id: "local",
+            });
+            match model_answer(&system, &user, ModelAnswerOptions::default(), audit).await {
+                Some(generated) => (Some(generated.content), "generated"),
+                None => (None, "unavailable"),
+            }
+        }
+    };
+
+    // 5) 数字护栏（有答案就跑，草稿或生成一视同仁）：只登记本公司事实，逐条核对。
+    let fact_guard = answer.as_deref().map(|draft| {
         let registry = build_facts_registry(&RegistrySources {
             ticker: &req.ticker,
             native_currency: req
@@ -197,6 +230,8 @@ async fn ask(State(state): State<AppState>, Json(req): Json<AskRequest>) -> Json
         data_completeness: panel.data_completeness,
         connected_sources: panel.connected_sources,
         valuation: panel.valuation,
+        answer,
+        answer_source,
         fact_guard,
     })
 }
