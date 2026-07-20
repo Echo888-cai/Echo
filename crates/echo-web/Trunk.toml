@@ -1,0 +1,10 @@
+[build]
+target = "index.html"
+
+[serve]
+# dev 端口错开 apps/web(React 仍占 5190) 与 echo-api(4180)；把 /api 代理到 echo-api，前端不跨域直连。
+port = 5191
+open = false
+
+[[proxy]]
+backend = "http://127.0.0.1:4180/api"

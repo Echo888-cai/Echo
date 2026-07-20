@@ -11,7 +11,15 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 leptos = { version = "0.6", features = ["csr"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# WASM 专属依赖：gloo-net(fetch) / wasm-bindgen 只在 wasm32 目标编。原生目标（workspace 类型检查用）
+# 不拉它们——组件与视图逻辑照样原生 type-check，只有网络那层按目标分版。
+[target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
+gloo-net = { version = "0.6", features = ["http"] }
+wasm-bindgen-futures = "0.4"
 
 [package.metadata.echo]
 # 研究对话优先的界面按 apps/web 现有 UX 逐屏迁入；UX 打磨是一等验收项（用户约束）。
