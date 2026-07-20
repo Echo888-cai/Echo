@@ -605,6 +605,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "echo-application",
+ "echo-db",
  "echo-domain",
  "rust_decimal",
  "serde",
@@ -616,9 +617,12 @@ dependencies = [
 name = "echo-application"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "echo-db",
  "echo-domain",
  "echo-finance-core",
  "rust_decimal",
+ "rust_decimal_macros",
  "serde",
 ]
 

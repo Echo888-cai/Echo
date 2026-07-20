@@ -10,8 +10,12 @@
 //! 研究质量的病灶所在。单公司硬取值：面板与护栏只吃本请求这一家公司的财务事实，
 //! 跨公司污染（"问苹果答腾讯"）在类型层面就发生不了。
 
+use axum::extract::State;
 use axum::{Json, Router, routing::get, routing::post};
-use echo_application::{ResolvedCompany, build_panel};
+use echo_application::{
+    ResolvedCompany, build_panel, market_snapshot_from_rows, resolved_company_from_rows,
+};
+use echo_db::{CompanyRepository, MarketRepository, Pool};
 use echo_domain::{
     Company, Financials, MarketSnapshot, RegistrySources, build_facts_registry, build_soft_note,
     route_research_intent, verify_answer_numbers,
@@ -79,16 +83,40 @@ struct AskResponse {
     fact_guard: Option<GuardView>,
 }
 
+/// 共享状态：可选的数据库连接池。未配 `DATABASE_URL` 时为 `None`——`/api/ask` 只吃请求体里带的
+/// 数字（纯核路径，可离库端到端验证）；配了库则在缺行情时从 `echo-db` 兜底最新快照。
+#[derive(Clone)]
+struct AppState {
+    pool: Option<Pool>,
+}
+
 async fn health() -> Json<serde_json::Value> {
     Json(json!({ "status": "ok", "service": "echo-api", "stack": "rust" }))
 }
 
-async fn ask(Json(req): Json<AskRequest>) -> Json<AskResponse> {
+/// DB 补数：请求体没带价格且配了库时，从 `echo-db` 拉本公司身份 + 最新快照，经应用层映射折成
+/// 领域事实。仍是**单一公司**——只按本请求的 ticker 取一家，绝不掺别家数字。缺行情就返回 `None`，
+/// 保持"未核到"语义，不用陈旧/占位价冒充（记忆：缺数断口）。
+async fn db_fill(pool: &Pool, ticker: &str) -> Option<(ResolvedCompany, MarketSnapshot)> {
+    let company_row = CompanyRepository::new(pool)
+        .by_ticker(ticker)
+        .await
+        .ok()??;
+    let market_row = MarketRepository::new(pool)
+        .latest_snapshot(ticker)
+        .await
+        .ok()??;
+    let snapshot = market_snapshot_from_rows(&company_row, &market_row);
+    let resolved = resolved_company_from_rows(&company_row, Some(&market_row));
+    Some((resolved, snapshot))
+}
+
+async fn ask(State(state): State<AppState>, Json(req): Json<AskRequest>) -> Json<AskResponse> {
     // 1) 意图路由（确定性首轮；置信度 < 0.7 时应用层再请模型，那步随网关接入）。
     let route = route_research_intent(&req.question);
 
-    // 2) 组装本公司的单一事实源。
-    let company = ResolvedCompany {
+    // 2) 组装本公司的单一事实源。请求体优先；缺价格且配了库时用 DB 最新快照兜底。
+    let mut company = ResolvedCompany {
         ticker: req.ticker.clone(),
         name_zh: req.name_zh.clone(),
         company: Company {
@@ -97,7 +125,7 @@ async fn ask(Json(req): Json<AskRequest>) -> Json<AskResponse> {
             ..Default::default()
         },
     };
-    let market = MarketSnapshot {
+    let mut market = MarketSnapshot {
         price: req.price,
         pe: req.pe,
         market_cap: req.market_cap,
@@ -105,6 +133,14 @@ async fn ask(Json(req): Json<AskRequest>) -> Json<AskResponse> {
         change_percent: req.change_percent,
         ..Default::default()
     };
+    if market.price.is_none() {
+        if let Some(pool) = &state.pool {
+            if let Some((resolved, snapshot)) = db_fill(pool, &req.ticker).await {
+                company = resolved;
+                market = snapshot;
+            }
+        }
+    }
     let financials = Financials {
         provider_ok: req.revenue.is_some() || req.eps.is_some(),
         eps: req.eps,
@@ -165,15 +201,31 @@ async fn ask(Json(req): Json<AskRequest>) -> Json<AskResponse> {
     })
 }
 
-fn router() -> Router {
+fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/api/ask", post(ask))
+        .with_state(state)
 }
 
 #[tokio::main]
 async fn main() {
-    let app = router();
+    // 配了 DATABASE_URL 就建池（缺行情时兜底 DB 快照）；没配则纯核路径运行——两条路都真跑，
+    // 不静默假装接了库。连不上库属硬失败：宁可启动即报，也不带半接的库悄悄降级。
+    let pool = match std::env::var("DATABASE_URL") {
+        Ok(url) => {
+            let pool = echo_db::connect(&url, 5)
+                .await
+                .expect("connect DATABASE_URL");
+            println!("echo-api: DATABASE_URL 已连，缺行情将兜底 DB 快照");
+            Some(pool)
+        }
+        Err(_) => {
+            println!("echo-api: 未配 DATABASE_URL——纯核路径，只吃请求体数字");
+            None
+        }
+    };
+    let app = router(AppState { pool });
     let port = std::env::var("PORT").unwrap_or_else(|_| "4180".into());
     let addr = format!("0.0.0.0:{port}");
     let listener = tokio::net::TcpListener::bind(&addr)

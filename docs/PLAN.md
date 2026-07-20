@@ -54,9 +54,9 @@ React/PWA(apps/web) ── tRPC + Hono SSE(apps/api) ── Temporal(apps/worker
 | 3 | `crates/echo-domain::fact_guard` | `packages/domain/factGuard.js` | ✅ 已迁 + 5 项回归测试绿（符号翻转/中文降幅/股数误判/来源段/币种） |
 | 4 | `crates/echo-domain::intent` | `intentClassifier.js` | ✅ 已迁 + 5 项测试绿（9 规则次序/中英双语/深度判定） |
 | 5 | `crates/echo-domain::derivations` | `research.ts` 财务衍生(TTM/EPS 年化/margins) | ✅ 已迁 + 4 项测试绿（TTM 桥接 + EPS 年化护栏） |
-| 6 | `crates/echo-application` | `packages/application/research.ts` | 🚧 骨架(编排+估值+意图已接；取数/模型待接) |
-| 7 | `crates/echo-db` | `packages/db`(Drizzle) → sqlx | 🚧 仓储 trait 边界 |
-| 8 | `crates/echo-api` | `apps/api`(Hono/tRPC) → axum | 🚧 `/health`+`/api/ask` 骨架实跑 |
+| 6 | `crates/echo-application` | `packages/application/research.ts` | 🚧 编排+估值+意图已接；DB 行→领域映射(`from_db`)+4 项测试绿；模型网关待接 |
+| 7 | `crates/echo-db` | `packages/db`(Drizzle) → sqlx | 🚧 companies/market_snapshots 仓储 + 租户 RLS(`with_tenant`)；`Pool` 上抛，映射已被 api 消费(非死码)。**DB 补数路径待活库端到端验证** |
+| 8 | `crates/echo-api` | `apps/api`(Hono/tRPC) → axum | 🚧 `/health`+`/api/ask` 纯核路径已 curl 端到端验证(意图/定点估值/护栏全绿)；缺行情时经 `AppState.pool` 兜底 DB 快照(seam 已接，待活库验) |
 | 9 | `crates/echo-worker` | `apps/worker`(Temporal) | 🚧 调度骨架 |
 | 10 | `crates/echo-web` | `apps/web`(React/PWA) → Leptos/WASM | 🚧 研究外壳骨架 |
 
