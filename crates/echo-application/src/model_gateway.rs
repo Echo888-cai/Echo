@@ -157,32 +157,109 @@ fn content_from_response(body: &serde_json::Value) -> Option<String> {
     (!content.is_empty()).then_some(content)
 }
 
+/// 从响应体的 `usage` 抠出 (prompt_tokens, completion_tokens)。缺字段即 `None`。纯函数。
+fn usage_from_response(body: &serde_json::Value) -> (Option<i32>, Option<i32>) {
+    let usage = body.get("usage");
+    let get = |key: &str| {
+        usage
+            .and_then(|u| u.get(key))
+            .and_then(serde_json::Value::as_i64)
+            .and_then(|n| i32::try_from(n).ok())
+    };
+    (get("prompt_tokens"), get("completion_tokens"))
+}
+
+/// 审计上下文——把审计写入所需的租户池与用户绑一起。给了就每跳都记（成功/失败都记），
+/// 写入 best-effort（失败吞掉，绝不阻断模型调用）。不给（`None`）就纯作答不落审计。
+#[derive(Clone, Copy)]
+pub struct AuditContext<'a> {
+    pub pool: &'a echo_db::Pool,
+    pub user_id: &'a str,
+}
+
+impl AuditContext<'_> {
+    /// best-effort 写一条审计——任何失败（连不上库、RLS 拒绝、写冲突）都吞掉，不让审计阻断作答。
+    /// `user_id` 由本上下文注入，其余业务字段由调用方在 `entry` 里给全。
+    async fn record(&self, mut entry: echo_db::LlmAuditEntry) {
+        entry.user_id = self.user_id.to_string();
+        let _ = echo_db::LlmAuditRepository::new(self.pool)
+            .insert(&entry)
+            .await;
+    }
+}
+
 /// 统一作答入口（非流式）。选到 provider 就打 OpenAI 兼容端点，取回正文；任何失败（无 provider、
-/// 网络错、非 2xx、空正文）都归一到 `None`，对齐 TS「失败返回 null」。审计落库是显式 seam，暂缺。
+/// 网络错、非 2xx、空正文）都归一到 `None`，对齐 TS「失败返回 null」。给了 `audit` 就每跳落一条
+/// 审计（成功记 tokens/时延，失败记 error_detail），审计写入 best-effort，绝不阻断作答。
 pub async fn model_answer(
     system: &str,
     user: &str,
     options: ModelAnswerOptions,
+    audit: Option<AuditContext<'_>>,
 ) -> Option<ModelAnswer> {
     let provider = provider_config()?;
     let url = format!("{}/chat/completions", provider.base.trim_end_matches('/'));
     let body = build_request_body(&provider, system, user, &options);
+    let kind = options.kind.as_str();
+    let started = std::time::Instant::now();
+
+    // 组一条审计条目：provider/model/kind/时延固定，只有 status/error/tokens 随成功或失败变。
+    let make_entry = |status: &str,
+                      error_detail: Option<String>,
+                      input_tokens: Option<i32>,
+                      output_tokens: Option<i32>| {
+        echo_db::LlmAuditEntry {
+            user_id: String::new(), // AuditContext::record 注入
+            provider: provider.id.clone(),
+            model: Some(provider.model.clone()),
+            kind: kind.to_string(),
+            status: status.to_string(),
+            latency_ms: Some(started.elapsed().as_millis().try_into().unwrap_or(i32::MAX)),
+            error_detail,
+            input_tokens,
+            output_tokens,
+            estimated_cost_usd: None,
+        }
+    };
+
+    // 失败即记一条 error 审计后返回 None——把「记审计 + 归一 None」收成一处，避免每条错路重复。
+    macro_rules! fail {
+        ($detail:expr) => {{
+            if let Some(ctx) = &audit {
+                ctx.record(make_entry("error", Some($detail), None, None))
+                    .await;
+            }
+            return None;
+        }};
+    }
 
     let client = reqwest::Client::new();
-    let response = client
+    let response = match client
         .post(&url)
         .bearer_auth(&provider.key)
         .json(&body)
         .timeout(options.kind.timeout())
         .send()
         .await
-        .ok()?;
+    {
+        Ok(r) => r,
+        Err(e) => fail!(e.to_string()),
+    };
     if !response.status().is_success() {
-        return None;
+        fail!(format!("model {}", response.status().as_u16()));
     }
-    let payload: serde_json::Value = response.json().await.ok()?;
-    let content = content_from_response(&payload)?;
-    let _ = options.kind.as_str(); // 审计 seam 接上后作为 kind 落库
+    let payload: serde_json::Value = match response.json().await {
+        Ok(p) => p,
+        Err(e) => fail!(e.to_string()),
+    };
+    let Some(content) = content_from_response(&payload) else {
+        fail!("empty model content".to_string());
+    };
+    let (input_tokens, output_tokens) = usage_from_response(&payload);
+    if let Some(ctx) = &audit {
+        ctx.record(make_entry("ok", None, input_tokens, output_tokens))
+            .await;
+    }
     Some(ModelAnswer {
         content,
         provider: provider.id,
@@ -341,5 +418,18 @@ mod tests {
     fn parse_json_object_bad_input_is_none() {
         assert!(parse_json_object("not json").is_none());
         assert!(parse_json_object("").is_none());
+    }
+
+    #[test]
+    fn usage_extracted_when_present() {
+        let body = serde_json::json!({
+            "usage": { "prompt_tokens": 120, "completion_tokens": 45 }
+        });
+        assert_eq!(usage_from_response(&body), (Some(120), Some(45)));
+    }
+
+    #[test]
+    fn usage_missing_is_none_pair() {
+        assert_eq!(usage_from_response(&serde_json::json!({})), (None, None));
     }
 }

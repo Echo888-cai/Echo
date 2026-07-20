@@ -104,6 +104,71 @@ impl<'a> CompanyRepository<'a> {
     }
 }
 
+/// 一条 LLM 调用审计——failover 链上的每一跳都记（不止最终成功那跳）。对齐 TS `insertLlmAudit`。
+/// 是私有数据（带 `user_id`、受 RLS），写入必走 [`with_tenant`]。
+#[derive(Debug, Clone)]
+pub struct LlmAuditEntry {
+    pub user_id: String,
+    pub provider: String,
+    pub model: Option<String>,
+    pub kind: String,
+    pub status: String,
+    pub latency_ms: Option<i32>,
+    pub error_detail: Option<String>,
+    pub input_tokens: Option<i32>,
+    pub output_tokens: Option<i32>,
+    pub estimated_cost_usd: Option<Decimal>,
+}
+
+/// error_detail 落库前截到 500 字（对齐 TS 的 `.slice(0, 500)`）——按 `char` 截，不切裂多字节。
+#[must_use]
+pub fn truncate_error_detail(detail: &str) -> String {
+    detail.chars().take(500).collect()
+}
+
+/// LLM 审计仓储。写入是 best-effort：审计**绝不能阻断模型调用**（对齐 TS「audit must never block」），
+/// 失败由调用方吞掉。
+pub struct LlmAuditRepository<'a> {
+    pool: &'a PgPool,
+}
+
+impl<'a> LlmAuditRepository<'a> {
+    #[must_use]
+    pub fn new(pool: &'a PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// 在租户事务内插入一条审计。`user_id` 兜底 "local"（对齐 TS 默认）。
+    pub async fn insert(&self, entry: &LlmAuditEntry) -> Result<()> {
+        let user_id = if entry.user_id.is_empty() {
+            "local"
+        } else {
+            entry.user_id.as_str()
+        };
+        let error_detail = entry.error_detail.as_deref().map(truncate_error_detail);
+        let mut tx = with_tenant(self.pool, user_id).await?;
+        sqlx::query(
+            "INSERT INTO llm_audit \
+             (user_id, provider, model, kind, status, latency_ms, error_detail, input_tokens, output_tokens, estimated_cost_usd) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        )
+        .bind(user_id)
+        .bind(&entry.provider)
+        .bind(&entry.model)
+        .bind(&entry.kind)
+        .bind(&entry.status)
+        .bind(entry.latency_ms)
+        .bind(&error_detail)
+        .bind(entry.input_tokens)
+        .bind(entry.output_tokens)
+        .bind(entry.estimated_cost_usd)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+}
+
 /// 行情仓储——唯一取数入口的持久化侧（对齐 TS 的 ensureFreshMarketSnapshot 读路径）。
 pub struct MarketRepository<'a> {
     pool: &'a PgPool,
@@ -125,5 +190,30 @@ impl<'a> MarketRepository<'a> {
         .fetch_optional(self.pool)
         .await?;
         Ok(row)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_error_detail;
+
+    #[test]
+    fn error_detail_truncated_to_500_chars() {
+        let long = "x".repeat(1000);
+        assert_eq!(truncate_error_detail(&long).chars().count(), 500);
+    }
+
+    #[test]
+    fn error_detail_short_is_untouched() {
+        assert_eq!(truncate_error_detail("boom"), "boom");
+    }
+
+    #[test]
+    fn error_detail_truncation_respects_char_boundary() {
+        // 多字节字符（中文 3 字节）按字符截，不切裂 UTF-8。
+        let s = "错".repeat(600);
+        let out = truncate_error_detail(&s);
+        assert_eq!(out.chars().count(), 500);
+        assert!(out.is_char_boundary(out.len())); // 未切裂
     }
 }
