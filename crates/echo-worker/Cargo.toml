@@ -1,0 +1,15 @@
+[package]
+name = "echo-worker"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Background workflows (earnings review, falsifier patrol) — replaces the Temporal worker"
+
+[[bin]]
+name = "echo-worker"
+path = "src/main.rs"
+
+[dependencies]
+echo-domain.workspace = true
+tokio.workspace = true

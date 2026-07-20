@@ -1,8 +1,47 @@
 [workspace]
-members = ["crates/finance-core", "packages/finance-native"]
 resolver = "3"
+members = [
+    # 金融定点算术内核（Money / Decimal，二进制浮点只允许出现在展示边界）
+    "crates/finance-core",
+    # 纯领域逻辑：估值、数字护栏、意图路由、财务衍生——从 packages/domain 的 JS 绞杀迁入
+    "crates/echo-domain",
+    # 用例编排：研究链路（取数 → 估值 → 作答 → 护栏 → 落库）
+    "crates/echo-application",
+    # 持久化与租户 RLS（sqlx + PostgreSQL）
+    "crates/echo-db",
+    # HTTP/SSE 边界（axum），替代 Hono+tRPC 的 /api/ask 等路由
+    "crates/echo-api",
+    # 后台工作流（业绩复盘、证伪巡检），替代 Temporal worker
+    "crates/echo-worker",
+    # 前端（Leptos/WASM），替代 React/PWA
+    "crates/echo-web",
+    # 迁移期保留：给尚存的 TS 应用层调用同一套 Rust 定点内核的 NAPI 桥
+    "packages/finance-native",
+]
 
 [workspace.package]
 edition = "2024"
 license = "UNLICENSED"
 rust-version = "1.85"
+authors = ["Echo Research"]
+
+# 集中依赖底账：版本只在这里钉一次，各 crate 用 `dep.workspace = true` 继承，
+# 避免同一依赖在多个 crate 里漂移出不同版本（工作区级单一事实源）。
+[workspace.dependencies]
+echo-finance-core = { path = "crates/finance-core" }
+echo-domain = { path = "crates/echo-domain" }
+echo-application = { path = "crates/echo-application" }
+echo-db = { path = "crates/echo-db" }
+
+rust_decimal = { version = "1.36", default-features = false, features = ["serde", "std"] }
+rust_decimal_macros = "1.36"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing = "0.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
