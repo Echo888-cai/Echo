@@ -270,4 +270,48 @@ mod tests {
         assert_eq!(out.chars().count(), 500);
         assert!(out.is_char_boundary(out.len())); // 未切裂
     }
+
+    /// 活库集成：scheduler_state 往返（#9 可恢复门禁）。默认 `#[ignore]`，只在配了 DATABASE_URL 时
+    /// 手动跑：`cargo test -p echo-db -- --ignored`。验 `record_run` upsert + `all()` 读回同一行，
+    /// 证明 Rust 仓储与真库 schema（列名/类型）对齐；跑完删掉探针行，不留污染。
+    #[tokio::test]
+    #[ignore = "需要活库 DATABASE_URL"]
+    async fn live_scheduler_state_round_trip() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            return;
+        };
+        let pool = super::connect(&url, 2).await.expect("connect");
+        let repo = super::SchedulerStateRepository::new(&pool);
+        let probe_id = "echo-verify-probe";
+
+        repo.record_run(probe_id, "ok", Some("live probe"))
+            .await
+            .expect("record_run");
+        let rows = repo.all().await.expect("all");
+        let found = rows
+            .iter()
+            .find(|r| r.job_id == probe_id)
+            .expect("probe row present");
+        assert_eq!(found.last_status.as_deref(), Some("ok"));
+        assert_eq!(found.last_detail.as_deref(), Some("live probe"));
+        assert!(found.last_run_at.is_some(), "last_run_at 应由 now() 落值");
+
+        // upsert 语义：同 id 再写一次应更新而非插重。
+        repo.record_run(probe_id, "error", Some("second"))
+            .await
+            .expect("upsert");
+        let after = repo.all().await.expect("all2");
+        assert_eq!(
+            after.iter().filter(|r| r.job_id == probe_id).count(),
+            1,
+            "upsert 不应产生重复行"
+        );
+
+        // 清理探针，不留污染。
+        sqlx::query("DELETE FROM scheduler_state WHERE job_id = $1")
+            .bind(probe_id)
+            .execute(&pool)
+            .await
+            .expect("cleanup probe");
+    }
 }

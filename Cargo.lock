@@ -672,6 +672,7 @@ dependencies = [
  "serde",
  "sqlx",
  "thiserror 2.0.19",
+ "tokio",
 ]
 
 [[package]]

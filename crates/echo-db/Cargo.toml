@@ -22,3 +22,7 @@ sqlx = { version = "0.8", default-features = false, features = [
     "macros",
 ] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[dev-dependencies]
+# 活库集成测试（#[ignore]，仅配了 DATABASE_URL 时手动跑）用的异步测试宏与运行时。
+tokio = { workspace = true }
