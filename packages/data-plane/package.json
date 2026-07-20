@@ -15,7 +15,7 @@
     "verify": "tsx src/verify.ts",
     "canary": "tsx src/canary.ts"
   },
-  "dependencies": { "@echo/db": "*", "@echo/observability": "*" },
+  "dependencies": { "@echo/db": "*", "@echo/domain": "*", "@echo/observability": "*" },
   "devDependencies": {
     "typescript": "^6.0.3",
     "tsx": "^4.19.2"

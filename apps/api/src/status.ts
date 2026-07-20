@@ -8,7 +8,6 @@ const sourceLabels: Record<string, string> = {
   web_evidence: "网页证据层", hk_filing: "港股一手 filing", valuation: "估值链路",
   earnings: "财报日历", comp_peers: "同业可比",
   "market:yahoo-chart": "行情 · Yahoo", "market:finnhub": "行情 · Finnhub",
-  "market:twelvedata": "行情 · Twelve Data", "market:alphavantage": "行情 · Alpha Vantage",
   "financials:fmp": "财务 · FMP", "earnings:finnhub": "财报日历 · Finnhub",
   "earnings:hk-adr-finnhub": "财报日历 · Finnhub（港股 ADR 映射）",
   "comp_peers:finnhub": "同业可比 · Finnhub"
@@ -124,8 +123,8 @@ export async function buildStatusSnapshot(userId = "local") {
           : { status: "limited" as const, detail: "未配置 FMP_API_KEY；港股由一手 filing 覆盖，美股标准化三表缺失" })
       },
       // No news adapter exists anywhere in the repo. The old card read the
-      // FINNHUB/ALPHAVANTAGE/TWELVEDATA keys — which are registered for *quotes*
-      // only — and reported 新闻舆情 as "ok": exactly the 配置剧场 red line 2 forbids.
+      // quote-only provider keys and reported 新闻舆情 as "ok": exactly the
+      // 配置剧场 red line 2 forbids.
       { id: "news", name: "新闻舆情", status: "limited" as const, detail: "未接通：仓库内无新闻适配器（P3 待办）" },
       { id: "web_evidence", name: "网页证据层",
         ...(hasWebSearch

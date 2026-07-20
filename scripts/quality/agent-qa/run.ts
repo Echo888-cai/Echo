@@ -18,7 +18,8 @@ import {
   isMultiHoldingQuestion,
   mentionsNewCompanyStrong,
   extractAliasTicker,
-  resolveUsTicker
+  resolveUsTicker,
+  resolveDualListing
 } from "../../../apps/web/src/lib/resolve.ts";
 import { CORPUS, type Case } from "./corpus.ts";
 
@@ -42,6 +43,13 @@ function hkTickerOf(q: string): string {
 /** 美股代码：走前端真实用的那条（别名表 → 裸 token），而不是只调 domain 的底层函数。 */
 function usTickerOf(q: string): string {
   return resolveUsTicker(q)?.ticker || "";
+}
+
+/** 双重上市路由：null=非双重上市；"ask"=需问用户市场；"hk"/"us"=显式选腿。 */
+function dualLegOf(q: string): "hk" | "us" | "ask" | null {
+  const dual = resolveDualListing(q);
+  if (!dual) return null;
+  return dual.explicitLeg || "ask";
 }
 
 function runStatic(): { failures: Failure[]; checks: number } {
@@ -74,6 +82,7 @@ function runStatic(): { failures: Failure[]; checks: number } {
     guard("multiHolding", () => isMultiHoldingQuestion(c.q), e.multiHolding);
     guard("strongCompany", () => mentionsNewCompanyStrong(c.q), e.strongCompany);
     guard("comparison", () => isComparisonQuestion(c.q), e.comparison);
+    guard("dualLeg", () => dualLegOf(c.q), e.dualLeg);
   }
   return { failures, checks };
 }

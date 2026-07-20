@@ -830,7 +830,15 @@ function buildChatPrompt(question, panel, dataSources = {}, context = {}) {
   const documentsBlock = documentsToPrompt(context.documents);
   const dual = context.dualListing;
   const dualQuote = context.dualQuote;
-  const dualAskedHk = !!(dual && dual.asked && /\.HK$/i.test(dual.asked));
+  // 双重上市规则行：选中腿（dual.chosen）决定全部口径，另一腿只作价差对照。
+  // ADR 兑换比例每家不同且必须逐条人工核实（PLAN §7），核实前禁止跨腿换算。
+  const dualChosenHk = !!(dual && /\.HK$/i.test(String(dual.chosen || "")));
+  const dualContrast = dualQuote && dualQuote.price != null
+    ? `另一边 ${dualQuote.ticker} 实时价 ${dualQuote.price} ${dualQuote.currency || ""}${Number.isFinite(Number(dualQuote.changePct)) ? `（${Number(dualQuote.changePct) >= 0 ? "+" : ""}${Number(dualQuote.changePct).toFixed(2)}%）` : ""}，只可作为两地行情对照提一句；ADR 兑换比例未经人工核实，**禁止**用它做跨腿换算或推导"折价/溢价"百分比。`
+    : "本轮未核到另一边实时价，不要凭印象给两地价差。";
+  const dualBlock = dual
+    ? `\n- 本标的港美双重上市（港股 ${dual.hk}｜美股 ${dual.us}），本轮**已选定按${dualChosenHk ? `港股 ${dual.hk}（HKD 计价，财务优先 HKEX 一手披露口径）` : `美股 ${dual.us}（USD 计价，财务用美股报表口径）`}**分析：行情、估值、盈亏一律用这条腿的价格与币种，**不得**混用另一边的价格。${dualContrast}`
+    : "";
   const holdingsBlock = buildHoldingsBlock(context.otherHoldings);
   const hasHoldings = !context.compare && Boolean(context.otherHoldings?.length);
   const answerShape = briefMode
@@ -897,7 +905,7 @@ ${webEvidencePrompt}
 - 凡涉及收入/利润/利润率/现金流/EPS/回购分红的具体数字，只能引用上面“已核到的实时财报”块；本地档案只提供定性判断（护城河/商业模式/多空逻辑），不得作为财务数字来源。${hasLiveFin ? "本轮已有实时财报，必须用真实数字支撑财务判断，不要再写“未核到完整三表/仅本地档案口径”。" : "本轮无实时财报：严禁给出任何具体财务数字或其估算值（包括收入/利润/EPS/利润率/现金流的绝对值，以及“约”“大约”“行业常见范围”这类措辞），只能定性描述赚钱机制与风险并说明置信度下降；要数字就明说“需核最新财报”。"}
 - 讨论同业/竞对的估值倍数（PE/EV-Sales 等具体数字）时，只能引用上面"同业对照"里列出的公司和倍数；讨论下一次财报/业绩日时，只能引用上面"下一业绩日"给的日期；两者都没核到时只能说"未核到"，不能凭自己的知识编造其它公司、倍数或日期。**"按行业常识/框架推演/仅供参考"这类免责措辞不能当成编数字的许可证**——给同业公司点名却配一个编出来的倍数，本质还是编数字，标不标"框架"都不行；没有真实数据就只做定性描述，不点具体公司名+具体数字的组合。
 - 不要使用“暂不评分”“完整度xx%”“需要补充材料”“未接入”这种产品状态词，改成研究语言：当前未核到、置信度下降。
-- 用户提到的任何股票代码/公司，即使你印象里它“没上市/不是标准代码/是私人公司”，也**绝不**断言它不存在、拒绝评估、或建议换成别的代码——它很可能是你知识截止后才上市的新票（如刚 IPO 的标的）。本轮没核到它的实时数据时，只说“本轮未能核到 X 的实时数据、置信度下降”，照常基于其余已核到的标的给判断。${dual ? `\n- 本标的港美双重上市（港股 ${dual.hk}｜美股 ${dual.us}）。基本面/估值本轮一律按**美股 ADR ${dual.us}** 口径（数据更全）。${dualQuote ? `用户问的是港股，已核到**港股 ${dualQuote.ticker} 实时价 ${dualQuote.price} ${dualQuote.currency}${dualQuote.changePct != null ? `（${dualQuote.changePct >= 0 ? "+" : ""}${dualQuote.changePct}%）` : ""}**：盈亏**必须**用这个港股价 + 用户 HKD 成本算${dualQuote.cost != null ? `（成本 ${dualQuote.cost}${dualQuote.shares != null ? `、持股 ${dualQuote.shares}` : ""}${dualQuote.pnlPct != null ? ` → 浮动 ${dualQuote.pnlPct >= 0 ? "+" : ""}${dualQuote.pnlPct}%` : ""}）` : ""}，**绝不**用 ADR 美元价算港股盈亏；估值/基本面继续用 ADR ${dual.us} 口径。` : dualAskedHk ? `用户问的是**港股 ${dual.hk}**：本轮未取到港股实时价，盈亏只说明口径（按港股价 + HKD 成本），**不要**用 ADR 美元价硬算港股盈亏，提示用户可按港股实时价换算。` : `若用户持有的是港股 ${dual.hk}，提示其盈亏需按港股价 + HKD 成本另算，不要用 ADR 美元价硬套。`}` : ""}
+- 用户提到的任何股票代码/公司，即使你印象里它“没上市/不是标准代码/是私人公司”，也**绝不**断言它不存在、拒绝评估、或建议换成别的代码——它很可能是你知识截止后才上市的新票（如刚 IPO 的标的）。本轮没核到它的实时数据时，只说“本轮未能核到 X 的实时数据、置信度下降”，照常基于其余已核到的标的给判断。${dualBlock}
 - ${briefMode ? "数据缺口最多一句，不能让它抢走直接结论。" : "“还缺什么”只在末尾出现一段，且只说还缺哪些事实会提高置信度，不写后台或厂商词。"}
 - ${briefMode ? "只展开与用户问题直接相关的 1-2 个依据。" : "“推断”必须是信息密度最高的部分，覆盖赚钱机制、壁垒到利润、财务兑现与重估变量。"}
 - 对“赚不赚钱”，必须先回答赚钱机制和盈利质量：是否有收入来源、利润是否稳定、现金流是否支撑。

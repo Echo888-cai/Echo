@@ -11,7 +11,7 @@ import { markdownToHtml, renderRichAnswer } from "../lib/markdown";
 import { PositionCard, PortfolioReviewCard } from "./Portfolio";
 import { portfolioApi, type PortfolioPosition, type PortfolioReview as PortfolioReviewData } from "../lib/api";
 import { showToast } from "../lib/toast";
-import { researchSuggested, forceResearch, runComparison, switchAndResearch, copyMessage } from "../lib/researchActions";
+import { researchSuggested, forceResearch, runComparison, switchAndResearch, researchDualLeg, copyMessage } from "../lib/researchActions";
 import { useNavigate } from "@tanstack/react-router";
 
 const SOURCE_TYPE_LABEL: Record<string, string> = {
@@ -193,8 +193,8 @@ function DualQuote({ dq }: { dq: any }) {
   return (
     <div className="dual-quote">
       <div className="dq-head">
-        港股口径 · {dq.ticker}
-        <span>盈亏按港股价 + HKD 成本；估值/基本面见下方 ADR 口径</span>
+        另一上市地对照 · {dq.ticker}
+        <span>仅作两地价差参考；本轮分析口径见正文与来源</span>
       </div>
       <div className="dq-body">
         <span className="dq-price">
@@ -634,6 +634,7 @@ function ChoiceCard({ choice }: { choice: any }) {
     else if (o.act === "switch") await switchAndResearch({ ticker: o.ticker, name: o.name });
     else if (o.act === "research") await researchSuggested(o.ticker, o.name);
     else if (o.act === "force") await forceResearch(o.ticker);
+    else if (o.act === "market") await researchDualLeg({ leg: o.leg, hk: o.hk, us: o.us, name: o.name, question: o.question });
   }
   return (
     <article className="message assistant">
@@ -699,7 +700,6 @@ function PortfolioPanelMessage({ positions = [], review }: { positions: Portfoli
 
 // ── top-level dispatcher ────────────────────────────────────────────────
 function AnswerCardImpl({ message }: { message: Message }) {
-  const navigate = useNavigate();
   if (message.role === "user") {
     return (
       <article className="message user">
