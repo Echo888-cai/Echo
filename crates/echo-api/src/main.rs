@@ -11,12 +11,19 @@
 //! 跨公司污染（"问苹果答腾讯"）在类型层面就发生不了。
 
 use axum::extract::State;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::{Json, Router, routing::get, routing::post};
-use echo_application::model_gateway::{AuditContext, ModelAnswerOptions, model_answer};
+use echo_application::model_gateway::{
+    AuditContext, ModelAnswerOptions, OwnedAuditContext, model_answer, model_answer_stream,
+};
 use echo_application::{
     AnswerContext, ResolvedCompany, build_panel, build_system_prompt, build_user_prompt,
     market_snapshot_from_rows, resolved_company_from_rows,
 };
+use futures_util::Stream;
+use std::convert::Infallible;
+use tokio_stream::StreamExt;
+use tokio_stream::wrappers::ReceiverStream;
 use echo_db::{CompanyRepository, MarketRepository, Pool};
 use echo_domain::{
     Company, Financials, MarketSnapshot, RegistrySources, build_facts_registry, build_soft_note,
@@ -118,11 +125,12 @@ async fn db_fill(pool: &Pool, ticker: &str) -> Option<(ResolvedCompany, MarketSn
     Some((resolved, snapshot))
 }
 
-async fn ask(State(state): State<AppState>, Json(req): Json<AskRequest>) -> Json<AskResponse> {
-    // 1) 意图路由（确定性首轮；置信度 < 0.7 时应用层再请模型，那步随网关接入）。
-    let route = route_research_intent(&req.question);
-
-    // 2) 组装本公司的单一事实源。请求体优先；缺价格且配了库时用 DB 最新快照兜底。
+/// 组装本公司的单一事实源（company/market/financials）——请求体优先，缺价格且配了库时用 DB 最新
+/// 快照兜底。`/api/ask` 与 `/api/ask/stream` 共用，保证两条路吃同一份事实，绝不掺别家数字。
+async fn assemble_facts(
+    state: &AppState,
+    req: &AskRequest,
+) -> (ResolvedCompany, MarketSnapshot, Financials) {
     let mut company = ResolvedCompany {
         ticker: req.ticker.clone(),
         name_zh: req.name_zh.clone(),
@@ -163,6 +171,15 @@ async fn ask(State(state): State<AppState>, Json(req): Json<AskRequest>) -> Json
         currency: req.reporting_currency.clone(),
         ..Default::default()
     };
+    (company, market, financials)
+}
+
+async fn ask(State(state): State<AppState>, Json(req): Json<AskRequest>) -> Json<AskResponse> {
+    // 1) 意图路由（确定性首轮；置信度 < 0.7 时应用层再请模型，那步随网关接入）。
+    let route = route_research_intent(&req.question);
+
+    // 2) 组装本公司的单一事实源。
+    let (company, market, financials) = assemble_facts(&state, &req).await;
 
     // 3) 定点估值 + 决策面板。
     let panel = build_panel(&company, &market, &financials, None);
@@ -236,10 +253,41 @@ async fn ask(State(state): State<AppState>, Json(req): Json<AskRequest>) -> Json
     })
 }
 
+/// 流式作答：`POST /api/ask/stream` —— 同一份单公司事实构造提示词，经网关流式生成，把合并后的
+/// 正文块作为 SSE `data:` 事件边生成边下发（对齐 TS 的 token 流式作答体验）。无 provider 时流为空。
+///
+/// 显式 seam：流式路径当前只吐正文块；生成完再跑数字护栏、把 factGuard 结果作为收尾事件推下去，
+/// 是下一段（对齐 TS「先流 token 再事后 fact-check」）。故 hard-fail 的事后拦截随该 seam 接上。
+async fn ask_stream(
+    State(state): State<AppState>,
+    Json(req): Json<AskRequest>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let (company, market, financials) = assemble_facts(&state, &req).await;
+    let panel = build_panel(&company, &market, &financials, None);
+
+    let system = build_system_prompt();
+    let user = build_user_prompt(&AnswerContext {
+        question: &req.question,
+        name_zh: company.name_zh.as_deref(),
+        panel: &panel,
+        market: &market,
+        financials: &financials,
+    });
+    // 流式审计要在 'static 后台任务里落，故用拥有所有权的上下文（池是 Arc，克隆廉价）。
+    let audit = state.pool.as_ref().map(|pool| OwnedAuditContext {
+        pool: pool.clone(),
+        user_id: "local".to_string(),
+    });
+    let rx = model_answer_stream(system, user, ModelAnswerOptions::default(), audit);
+    let stream = ReceiverStream::new(rx).map(|chunk| Ok(Event::default().data(chunk)));
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
 fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/api/ask", post(ask))
+        .route("/api/ask/stream", post(ask_stream))
         .with_state(state)
 }
 

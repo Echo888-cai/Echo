@@ -627,10 +627,12 @@ dependencies = [
  "echo-application",
  "echo-db",
  "echo-domain",
+ "futures-util",
  "rust_decimal",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
@@ -641,6 +643,7 @@ dependencies = [
  "echo-db",
  "echo-domain",
  "echo-finance-core",
+ "futures-util",
  "reqwest",
  "rust_decimal",
  "rust_decimal_macros",
