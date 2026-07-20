@@ -21,7 +21,8 @@ export interface ResearchCompany {
   nameZh?: string;
   nameEn?: string;
   industry?: string;
-  dualListing?: { hk: string; us: string; asked: string; primary: "us" };
+  /** 港美双重上市：chosen 是用户选定（或显式点名）的分析腿，另一腿仅作对照。 */
+  dualListing?: { hk: string; us: string; chosen: string };
 }
 
 export interface RecentSession {

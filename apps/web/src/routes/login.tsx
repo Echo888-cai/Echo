@@ -8,6 +8,16 @@ import "@echo/ui/styles/09-auth.css";
 
 type AuthMode = "login" | "register";
 
+/** Map transport failures (Safari "Load failed", Chrome "Failed to fetch") to a clear next step. */
+function humanAuthError(err: unknown): string {
+  if (err instanceof ApiError) return err.message;
+  const message = err instanceof Error ? err.message : "";
+  if (/load failed|failed to fetch|networkerror|network request failed|econnrefused/i.test(message)) {
+    return "连不上研究服务。请先双击桌面「启动 Echo」再登录。";
+  }
+  return message || "失败了，再试一次";
+}
+
 function EchoMark() {
   return (
     <span className="echo-mark" aria-hidden="true">
@@ -49,7 +59,7 @@ export function LoginPage() {
       }
       location.assign("/");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "失败了，再试一次");
+      setError(humanAuthError(err));
       setBusy(false);
     }
   }

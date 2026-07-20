@@ -43,7 +43,7 @@ crates/finance-core   十进制定点金融数值内核
 
 **已接通且经真实数据端到端验证：**
 
-- **行情**：多源适配器链（Finnhub → Twelve Data → Yahoo → Alpha Vantage）+ 熔断降级；唯一入口 `ensureFreshMarketSnapshot`（15 分钟新鲜窗、失败退旧快照、核不到即 null）。港股实际只有 Yahoo 一路真实覆盖（见第 7 节）。
+- **行情**：多源适配器链（Finnhub → Yahoo）+ 熔断降级；唯一入口 `ensureFreshMarketSnapshot`（15 分钟新鲜窗、失败退旧快照、核不到即 null）。港股实际只有 Yahoo 一路真实覆盖（见第 7 节）。2026-07-20 数据源收口：删除 Twelve Data（免费档仅美股、与 Finnhub 完全重复）与 Alpha Vantage（25 次/天、末位兜底贡献为零）两个适配器及其环境变量。
 - **财务**：美股走 FMP `stable`（三表 + TTM 比率，含真实 trailing PE）；港股走一手 HKEX filing 解析管道（`hkFilingsPipeline`，含场内回购翌日披露、公司自报 FCF 解析）。
 - **财报日历**：美股 Finnhub `/stock/earnings`（含 last_* 已报告字段）；港股经人工核实的 HK→ADR 映射表（9 支，`hkAdr.ts`）查 ADR 日历。
 - **研究链路**：`answerComposer`（意图分类路由段落结构，中英双语）+ `reportComposer`（深度报告与对话回答共享取数、分开渲染）+ 同业可比（`comp_peers`，24h TTL，倍数可比上限过滤离群值——**锚点与提示词两个出口都过滤**，2026-07 修复了"防线只在锚点生效、离群倍数仍经散文到达用户"）+ 对话内对比（`compareWith` 真实取两家数据）+ 用户上传资料进事实块。
@@ -121,7 +121,7 @@ crates/finance-core   十进制定点金融数值内核
 
 | 能力 | 源 | 说明 |
 | --- | --- | --- |
-| 美股行情 | Finnhub → Twelve Data → Yahoo → Alpha Vantage 链 | 免费密钥各自官网自助申请，已接熔断降级 |
+| 美股行情 | Finnhub → Yahoo 链 | `FINNHUB_API_KEY` 官网自助申请，已接熔断降级；Twelve Data / Alpha Vantage 已于 2026-07-20 收口删除 |
 | 港股行情 | Yahoo chart 接口 | 免费无密钥；**不可商用**，商用前必须换源（第 5 节第 1 项） |
 | 美股三表 + TTM 比率 | FMP `stable` 免费档 | `FMP_API_KEY`；免费档限额低，重度使用建议升级 |
 | 财报日历（美股） | Finnhub `/stock/earnings` | 免费档可用 |
@@ -151,8 +151,8 @@ crates/finance-core   十进制定点金融数值内核
 
 | 事项 | 实测结论 |
 | --- | --- |
-| Finnhub / Twelve Data 免费档 | 美股行情可用；港股直接"无权限/需付费计划"。Finnhub `/stock/peers`、`/stock/metric` 美股可用、港股 403；`/calendar/earnings` 只覆盖美股，不带 `from/to` 参数会静默返回空数组 |
-| Alpha Vantage | 无 HKEX 原始代码（SYMBOL_SEARCH 只命中法兰克福/伦敦/ADR 挂牌）；25 次/天，只作美股最后兜底 |
+| Finnhub / Twelve Data 免费档 | 美股行情可用；港股直接"无权限/需付费计划"。Finnhub `/stock/peers`、`/stock/metric` 美股可用、港股 403；`/calendar/earnings` 只覆盖美股，不带 `from/to` 参数会静默返回空数组。Twelve Data 适配器已于 2026-07-20 删除（与 Finnhub 完全重复），事实保留备考 |
+| Alpha Vantage | 无 HKEX 原始代码（SYMBOL_SEARCH 只命中法兰克福/伦敦/ADR 挂牌）；25 次/天，只配美股末位兜底。适配器已于 2026-07-20 删除，事实保留备考 |
 | FMP `stable` | 美股三表 + TTM 比率可用（用它的 `priceToEarningsRatioTTM`，勿拿季度 EPS 反推 PE）；港股三表一律"Premium Query Parameter"；legacy v3 端点已退役（200 状态但返回错误体）；`profile` 无 ADR/underlying 字段，`search-name` 模糊匹配不可靠 |
 | Yahoo chart 接口 | 港股行情唯一真实源；`range=5y&interval=1mo` 免费给 61 个月度历史点、无需密钥；**`commercialUseAllowed=false`，商用前必须换源** |
 | HK→ADR 映射 | 只能人工核实维护（`hkAdr.ts`，9 支，每条经真实 Finnhub 调用核实）；自动发现两条路径都不可靠，错配代价（自信地给错日期）比"未核到"更糟 |

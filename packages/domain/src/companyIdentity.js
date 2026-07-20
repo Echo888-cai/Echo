@@ -79,7 +79,7 @@ export function extractHkTicker(text = "") {
  */
 const COMMON_NON_TICKERS = new Set([
   "PE", "PB", "PS", "ROE", "ROI", "ROA", "ROC", "AI", "IPO", "GDP", "CEO",
-  "CFO", "COO", "CTO", "CMO", "US", "HK", "EPS", "FCF", "DCF", "ETF",
+  "CFO", "COO", "CTO", "CMO", "US", "HK", "EPS", "FCF", "DCF", "ETF", "ADR",
   "Q1", "Q2", "Q3", "Q4", "YOY", "QOQ", "MOM", "TTM", "LTM", "MRQ",
   "CPI", "PPI", "PMI", "GNP", "EV", "NAV", "AUM", "BPS", "DPS", "NIM",
   "NYSE", "SEC", "SFC", "MSCI", "FTSE", "ESG", "SPAC",

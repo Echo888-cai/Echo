@@ -8,8 +8,6 @@
 import { postgresQuoteAdapter } from "./adapters/postgresQuoteAdapter.js";
 import { yahooQuoteAdapter } from "./adapters/yahooQuoteAdapter.js";
 import { finnhubQuoteAdapter } from "./adapters/finnhubQuoteAdapter.js";
-import { twelveDataQuoteAdapter } from "./adapters/twelveDataQuoteAdapter.js";
-import { alphaVantageQuoteAdapter } from "./adapters/alphaVantageQuoteAdapter.js";
 import { postgresFundamentalsAdapter } from "./adapters/postgresFundamentalsAdapter.js";
 import { fmpFundamentalsAdapter } from "./adapters/fmpFundamentalsAdapter.js";
 import { postgresFilingsAdapter } from "./adapters/postgresFilingsAdapter.js";
@@ -30,15 +28,16 @@ import type { QuotePort, QuoteResult, FundamentalsPort, FilingsPort, CalendarPor
 // changes; the router already re-ranks whatever's registered.
 const quoteAdapters: QuotePort[] = [postgresQuoteAdapter];
 // 真实外部行情源，供快照刷新链路使用；与读缓存的 postgresQuoteAdapter 分开注册，
-// 避免"读缓存→写缓存"的循环。新的付费源（Polygon/Wind 等）注册到这里。
+// 避免"读缓存→写缓存"的循环。新的付费源（EODHD/Polygon 等）买到 key 并真实验证后
+// 注册到这里——没 key 不留壳（配置剧场红线）。
 // Only registered here if their API key is actually set — an adapter with no
 // key would just throw on every call, which is indistinguishable from "this
 // provider is down" and would trip its circuit breaker for no reason.
+// 2026-07-20 数据源收口：删除 Twelve Data（免费档仅美股，与 Finnhub 完全重复）与
+// Alpha Vantage（25 次/天、仅美股末位兜底，实际贡献为零）。链 = Finnhub → Yahoo。
 const liveQuoteAdapters: QuotePort[] = [
   ...(process.env.FINNHUB_API_KEY ? [finnhubQuoteAdapter] : []),
-  ...(process.env.TWELVEDATA_API_KEY ? [twelveDataQuoteAdapter] : []),
-  yahooQuoteAdapter,
-  ...(process.env.ALPHAVANTAGE_API_KEY ? [alphaVantageQuoteAdapter] : [])
+  yahooQuoteAdapter
 ];
 // External (third-party, network-calling) adapters are kept in their own arrays
 // so the canary can probe exactly them: probing the postgres cache/first-party

@@ -48,6 +48,7 @@ import { getEarningsCalendarRow } from "@echo/db/repositories/earningsCalendarRe
 import { addToWatch, getHiddenTickers, listWatchAdds, removeFromWatch } from "@echo/db/repositories/watchlistRepository.js";
 import { listCompanyProfiles } from "@echo/db/repositories/companyProfilesRepository.js";
 import { runAsk, runReport } from "@echo/application/research";
+import { resolveCompanyQuery, verifyTickerListing } from "@echo/application/company-resolution";
 import { exportResearchMarkdown } from "@echo/application/export";
 import { parseDocument } from "./documents.js";
 import { executeResearchWorkflow } from "./temporal.js";
@@ -455,17 +456,14 @@ export const appRouter = t.router({
         const companies = input.q ? await searchCompanies(input.q) : [];
         return { companies, total: companies.length };
       }),
-    verify: protectedProcedure.input(tickerInput).query(async ({ input }) => {
-      const company = await getCompanyByTickerComplete(input.ticker);
-      if (company) return { status: "verified" as const, name: company.nameZh || company.nameEn || company.ticker };
-      const suggestions = (await searchCompanies(input.ticker, { limit: 5 })).map((item) => ({ ticker: item.ticker, name: item.nameZh || item.nameEn || item.ticker }));
-      return { status: "not_found" as const, suggestions };
-    }),
-    resolve: protectedProcedure.input(queryText).query(async ({ input }) => {
-      const direct = await getCompanyByTickerComplete(input.q);
-      const match = direct || (await searchCompanies(input.q, { limit: 1 }))[0];
-      if (!match) return { company: null, reason: "not_found" };
-      return { company: { ticker: match.ticker, nameZh: match.nameZh || match.ticker, ...(match.nameEn ? { nameEn: match.nameEn } : {}), ...(match.industry ? { industry: match.industry } : {}) } };
+    // 真实的多级解析（DB → 别名底账 → FMP 搜索 → 行情探活 → LLM 兜底），只读不建档；
+    // 建档发生在研究链路（resolveResearchCompany）。此前这两个端点只查本地库，
+    // 前端注释承诺的 "FMP + LLM" 从未存在——典型配置剧场，已兑现。
+    verify: protectedProcedure.input(tickerInput).query(async ({ input }) => verifyTickerListing(input.ticker)),
+    resolve: protectedProcedure.input(queryText).query(async ({ ctx, input }) => {
+      const { company, reason } = await resolveCompanyQuery(input.q, ctx.user.id);
+      if (!company) return { company: null, reason: reason || "not_found" };
+      return { company: { ticker: company.ticker, nameZh: company.nameZh, ...(company.nameEn ? { nameEn: company.nameEn } : {}), ...(company.industry ? { industry: company.industry } : {}) } };
     })
   }),
   scheduler: t.router({
