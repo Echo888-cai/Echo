@@ -12,6 +12,9 @@ use rust_decimal::Decimal;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{FromRow, Postgres, Transaction};
 
+// 连接池类型对上层再导出，让 echo-api 等消费方不必直接钉 sqlx 版本（工作区单一事实源在此收口）。
+pub use sqlx::postgres::PgPool as Pool;
+
 /// 数据层错误——薄封装 sqlx，避免上层直接耦合驱动。
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
