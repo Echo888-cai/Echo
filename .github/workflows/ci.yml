@@ -45,15 +45,15 @@ jobs:
       - name: Migrate schema as bootstrap role
         run: cargo xtask migrate
       - name: Create NOBYPASSRLS app role for live DB tests
+        env:
+          PGPASSWORD: postgres
         run: |
-          docker run --rm --network host -e PGPASSWORD=postgres postgres:16-alpine \
-            psql -h 127.0.0.1 -U postgres -d echo_ci <<'SQL'
-          DO $$
-          BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'echo_app') THEN
-              CREATE ROLE echo_app LOGIN PASSWORD 'echo_app' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
-            END IF;
-          END$$;
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+          psql -h 127.0.0.1 -U postgres -d echo_ci -v ON_ERROR_STOP=1 <<'SQL'
+          DROP ROLE IF EXISTS echo_app;
+          CREATE ROLE echo_app LOGIN PASSWORD 'echo_app'
+            NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
           GRANT USAGE ON SCHEMA public TO echo_app;
           GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO echo_app;
           GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO echo_app;
@@ -62,7 +62,8 @@ jobs:
           ALTER DEFAULT PRIVILEGES IN SCHEMA public
             GRANT USAGE, SELECT ON SEQUENCES TO echo_app;
           SQL
-      - name: Live Postgres integration (ignored DB/API tests)
+          # Prove the app role can authenticate before cargo tests.
+          PGPASSWORD=echo_app psql -h 127.0.0.1 -U echo_app -d echo_ci -c 'SELECT 1'      - name: Live Postgres integration (ignored DB/API tests)
         env:
           DATABASE_URL: ${{ env.ECHO_APP_DATABASE_URL }}
           ECHO_SKIP_TEST_MIGRATE: "1"
