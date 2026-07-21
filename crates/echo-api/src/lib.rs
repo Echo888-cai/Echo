@@ -446,6 +446,50 @@ async fn companies_verify(
     })
 }
 
+/// 研究入口：验证主体（必要时从问题解析）并在有库时 ensure 建档。
+async fn prepare_research_request(state: &AppState, mut req: AskRequest) -> AskRequest {
+    let ports = ApiCompanyResolvePorts {
+        state: state.clone(),
+    };
+    let ticker = {
+        let trimmed = req.ticker.trim();
+        (!trimmed.is_empty()).then_some(trimmed)
+    };
+    let Some(listing) = CompanyResolveService::resolve_research_company(
+        &ports,
+        ticker,
+        req.name_zh.as_deref(),
+        &req.question,
+    )
+    .await
+    else {
+        return req;
+    };
+    if let Some(pool) = &state.pool {
+        if let Err(error) = CompanyRepository::new(pool)
+            .ensure(
+                &listing.ticker,
+                Some(listing.name_zh.as_str()),
+                (!listing.name_en.is_empty()).then_some(listing.name_en.as_str()),
+                None,
+                (!listing.industry.is_empty()).then_some(listing.industry.as_str()),
+            )
+            .await
+        {
+            warn!(
+                ticker = %listing.ticker,
+                error = %error,
+                "验证通过后建档失败，本轮仍继续研究"
+            );
+        }
+    }
+    req.ticker = listing.ticker;
+    if req.name_zh.is_none() {
+        req.name_zh = Some(listing.name_zh);
+    }
+    req
+}
+
 async fn watch_list(
     State(state): State<AppState>,
     Extension(user): Extension<PublicUser>,
@@ -927,6 +971,7 @@ async fn ask(
     Extension(current_user): Extension<PublicUser>,
     Json(req): Json<AskRequest>,
 ) -> Json<AskResponse> {
+    let req = prepare_research_request(&state, req).await;
     let ports = ApiResearchPorts {
         state: state.clone(),
     };
@@ -944,6 +989,7 @@ async fn ask_stream(
     Extension(current_user): Extension<PublicUser>,
     Json(req): Json<AskRequest>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let req = prepare_research_request(&state, req).await;
     let ports = ApiResearchPorts { state };
     let rx = ResearchService::ask_stream(ports, current_user.id, req);
     let stream = ReceiverStream::new(rx).map(|event: ResearchStreamEvent| {

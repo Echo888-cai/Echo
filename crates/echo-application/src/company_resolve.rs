@@ -1,7 +1,8 @@
-//! 公司解析 / 验证用例——只读，验证成功后的建档由研究链路另行调用 `CompanyRepository::ensure`。
+//! 公司解析 / 验证用例。
 //!
 //! 顺序对齐旧 `companyResolution.ts`：显式港股代码 → 别名 → DB → 美股词元 → FMP 名称搜索。
-//! 本切片不含 LLM 兜底（中文生僻名仍可能 unresolved）。
+//! 研究入口经 [`CompanyResolveService::resolve_research_company`] 验证后，由 API 调用
+//! `CompanyRepository::ensure` 建档（验证先于建档）。本切片不含 LLM 兜底。
 
 use echo_domain::{
     extract_hk_ticker, extract_us_ticker_token, match_hk_alias, match_us_alias,
@@ -185,6 +186,23 @@ impl CompanyResolveService {
             company: None,
             reason: Some("not_found".into()),
         }
+    }
+
+    /// 研究链路入口：有 ticker 则库命中或外部验证；无 ticker 则对问题跑 resolve。
+    /// 调用方在拿到 `Some` 后负责 `ensure` 建档。
+    pub async fn resolve_research_company<P: CompanyResolvePorts>(
+        ports: &P,
+        ticker: Option<&str>,
+        name_zh: Option<&str>,
+        question: &str,
+    ) -> Option<ResolvedListing> {
+        if let Some(ticker) = ticker.map(str::trim).filter(|value| !value.is_empty()) {
+            if let Some(existing) = ports.db_by_ticker(ticker).await {
+                return Some(from_db(existing));
+            }
+            return Self::verify_candidate(ports, ticker, name_zh, None).await;
+        }
+        Self::resolve_query(ports, question).await.company
     }
 
     pub async fn verify_ticker<P: CompanyResolvePorts>(ports: &P, ticker: &str) -> VerifyResult {
@@ -405,5 +423,43 @@ mod tests {
         let result = CompanyResolveService::verify_ticker(&ports, "ZZZZ").await;
         assert_eq!(result.status, VerifyStatus::NotFound);
         assert_eq!(result.suggestions.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn research_entry_verifies_explicit_ticker() {
+        let ports = FakePorts {
+            fmp_exact: HashMap::from([(
+                "AAPL".into(),
+                ExternalSymbolHit {
+                    symbol: "AAPL".into(),
+                    name: "Apple Inc.".into(),
+                    exchange: Some("NASDAQ".into()),
+                },
+            )]),
+            ..FakePorts::default()
+        };
+        let company = CompanyResolveService::resolve_research_company(
+            &ports,
+            Some("AAPL"),
+            None,
+            "估值怎么样",
+        )
+        .await
+        .expect("verified");
+        assert_eq!(company.ticker, "AAPL");
+        assert_eq!(company.source, ResolveSource::Fmp);
+    }
+
+    #[tokio::test]
+    async fn research_entry_falls_back_to_question_resolve() {
+        let ports = FakePorts {
+            alive: HashMap::from([("NVDA".into(), true)]),
+            ..FakePorts::default()
+        };
+        let company =
+            CompanyResolveService::resolve_research_company(&ports, None, None, "英伟达护城河？")
+                .await
+                .expect("resolved");
+        assert_eq!(company.ticker, "NVDA");
     }
 }
