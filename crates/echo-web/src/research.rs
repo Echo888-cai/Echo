@@ -10,6 +10,8 @@ use leptos::*;
 /// 一条对话轮——用户问题 + 助手答案（或错误）。
 #[derive(Clone)]
 struct Turn {
+    /// 提交时分配的唯一 id——并发请求的结果按 id 归位，不按“最后一条”猜测。
+    id: u64,
     question: String,
     ticker: String,
     /// `None` 表示正在 pending；`Some(Ok(_))` 成功；`Some(Err(_))` 失败。
@@ -176,40 +178,41 @@ pub fn ResearchPage() -> impl IntoView {
     let (question, set_question) = create_signal(String::new());
     let (ticker, set_ticker) = create_signal(String::new());
     let (thread, set_thread) = create_signal(Vec::<Turn>::new());
+    let (next_id, set_next_id) = create_signal(0u64);
 
-    let ask = create_action(|req: &AskRequest| {
-        let req = req.clone();
-        async move { fetch_ask(req).await }
-    });
-    let pending = ask.pending();
-
-    // 把完成的请求拼进 thread。
-    create_effect(move |_| {
-        if let Some(result) = ask.value().get() {
-            set_thread.update(|t| {
-                if let Some(last) = t.last_mut() {
-                    last.result = Some(result);
-                }
-            });
-        }
-    });
+    // 任一轮还没落地结果时视为 pending——禁止再次提交，避免并发请求的结果错位。
+    let pending = move || thread.get().iter().any(|turn| turn.result.is_none());
 
     let submit = move || {
+        if pending() {
+            return;
+        }
         let q = question.get().trim().to_string();
         let t = ticker.get().trim().to_uppercase();
         if q.is_empty() || t.is_empty() {
             return;
         }
+        let id = next_id.get();
+        set_next_id.set(id + 1);
         // push a pending placeholder so the thread shows the user bubble immediately
         set_thread.update(|v| {
             v.push(Turn {
+                id,
                 question: q.clone(),
                 ticker: t.clone(),
                 result: None,
             })
         });
-        ask.dispatch(AskRequest::minimal(q, t));
         set_question.set(String::new());
+        let req = AskRequest::minimal(q, t);
+        leptos::spawn_local(async move {
+            let result = fetch_ask(req).await;
+            set_thread.update(|v| {
+                if let Some(turn) = v.iter_mut().find(|turn| turn.id == id) {
+                    turn.result = Some(result);
+                }
+            });
+        });
     };
 
     let has_thread = move || !thread.get().is_empty();
@@ -297,10 +300,10 @@ pub fn ResearchPage() -> impl IntoView {
                         <button
                             class="composer-send"
                             on:click=move |_| submit()
-                            disabled=move || pending.get()
+                            disabled=pending
                             title="发送（Enter）"
                         >
-                            {move || if pending.get() { "…" } else { "↑" }}
+                            {move || if pending() { "…" } else { "↑" }}
                         </button>
                     </div>
                 </div>
