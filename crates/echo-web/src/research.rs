@@ -8,9 +8,10 @@
 
 use crate::api;
 use echo_contracts::{
-    AskRequest, AskResponse, Decimal, GuardView, MutationResponse, ResearchSessionDetail,
-    ResearchSessionResponse, ResearchSessionsResponse, ResearchStreamEvent,
-    ResearchStreamStageName, RouteView, ValuationView,
+    AskRequest, AskResponse, CompanyResolveResponse, CompanySearchItem, CompanySearchResponse,
+    Decimal, GuardView, MutationResponse, ResearchSessionDetail, ResearchSessionResponse,
+    ResearchSessionsResponse, ResearchStreamEvent, ResearchStreamStageName, RouteView,
+    ValuationView,
 };
 use leptos::*;
 
@@ -94,6 +95,19 @@ fn decimal_text(value: Option<Decimal>) -> String {
     value
         .map(|decimal| decimal.normalize().to_string())
         .unwrap_or_else(|| "—".to_string())
+}
+
+/// 公司候选的展示标签——优先中文名，缺了退中文名/英文名/代码本身，不留空。
+fn company_display(name_zh: &str, name_en: Option<&str>, ticker: &str) -> String {
+    let name = non_empty(name_zh)
+        .or_else(|| name_en.and_then(non_empty))
+        .unwrap_or_else(|| ticker.to_string());
+    format!("{name} · {ticker}")
+}
+
+fn non_empty(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 /// 推入一条新的 pending turn 并接上类型化 SSE 流。
@@ -525,7 +539,13 @@ pub fn ResearchPage(
     on_navigate: Callback<Option<String>>,
 ) -> impl IntoView {
     let (question, set_question) = create_signal(String::new());
-    let (ticker, set_ticker) = create_signal(String::new());
+    // 研究对象输入——公司名/代码皆可；`resolved` 是唯一可信来源，输入文本变化即失效。
+    let (company_query, set_company_query) = create_signal(String::new());
+    let (resolved, set_resolved) = create_signal(None::<(String, String)>);
+    let (candidates, set_candidates) = create_signal(Vec::<CompanySearchItem>::new());
+    let (search_gen, set_search_gen) = create_signal(0u64);
+    let (resolving, set_resolving) = create_signal(false);
+    let (resolve_error, set_resolve_error) = create_signal(None::<String>);
     let (thread, set_thread) = create_signal(Vec::<Turn>::new());
     let (next_id, set_next_id) = create_signal(0u64);
     let (session_error, set_session_error) = create_signal(None::<String>);
@@ -605,19 +625,87 @@ pub fn ResearchPage(
     let pending = move || thread.get().iter().any(|turn| turn.status.is_streaming());
     let on_persisted = Callback::new(move |_| sessions.refetch());
 
-    let submit = move || {
-        if pending() {
+    // 研究对象输入变化——本地 DB 候选（便宜）实时查，旧一代请求用 gen 挡掉不覆盖新结果。
+    let on_query_input = move |ev| {
+        let value = event_target_value(&ev);
+        set_company_query.set(value.clone());
+        set_resolved.set(None);
+        set_resolve_error.set(None);
+        let query = value.trim().to_string();
+        let generation = search_gen.get() + 1;
+        set_search_gen.set(generation);
+        if query.is_empty() {
+            set_candidates.set(Vec::new());
             return;
         }
+        leptos::spawn_local(async move {
+            let path = format!(
+                "/api/companies/search?q={}&limit=8",
+                api::encode_query(&query)
+            );
+            if let Ok(response) = api::get::<CompanySearchResponse>(&path).await {
+                if search_gen.get_untracked() == generation {
+                    set_candidates.set(response.companies);
+                }
+            }
+        });
+    };
+
+    let select_candidate = move |item: CompanySearchItem| {
+        let label = company_display(&item.name_zh, item.name_en.as_deref(), &item.ticker);
+        set_company_query.set(label.clone());
+        set_resolved.set(Some((item.ticker, label)));
+        set_candidates.set(Vec::new());
+        set_resolve_error.set(None);
+    };
+
+    // 确认好的候选（点选或 resolve 验证成功）才真正起一轮研究；输入框和确认态一并清空。
+    let fire_turn = move |target_ticker: String| {
         let q = question.get().trim().to_string();
-        let t = ticker.get().trim().to_uppercase();
-        if q.is_empty() || t.is_empty() {
+        if q.is_empty() {
             return;
         }
         let id = next_id.get();
         set_next_id.set(id + 1);
-        start_turn(id, q, t, set_thread, on_persisted);
+        start_turn(id, q, target_ticker, set_thread, on_persisted);
         set_question.set(String::new());
+        set_company_query.set(String::new());
+        set_resolved.set(None);
+        set_candidates.set(Vec::new());
+    };
+
+    let submit = move || {
+        if pending() || resolving.get() {
+            return;
+        }
+        if question.get().trim().is_empty() {
+            return;
+        }
+        if let Some((target_ticker, _)) = resolved.get() {
+            fire_turn(target_ticker);
+            return;
+        }
+        let query = company_query.get().trim().to_string();
+        if query.is_empty() {
+            set_resolve_error.set(Some("请先填写研究对象（公司名或代码）。".to_string()));
+            return;
+        }
+        set_resolving.set(true);
+        set_resolve_error.set(None);
+        leptos::spawn_local(async move {
+            let path = format!("/api/companies/resolve?q={}", api::encode_query(&query));
+            let outcome = api::get::<CompanyResolveResponse>(&path).await;
+            set_resolving.set(false);
+            match outcome {
+                Ok(response) => match response.company {
+                    Some(company) => fire_turn(company.ticker),
+                    None => set_resolve_error.set(Some(format!(
+                        "未能把「{query}」识别为可研究的公司，请换个更准确的名称或代码。"
+                    ))),
+                },
+                Err(message) => set_resolve_error.set(Some(message)),
+            }
+        });
     };
 
     let has_thread = move || !thread.get().is_empty();
@@ -754,22 +842,61 @@ pub fn ResearchPage(
                         rows="2"
                     />
                     <div class="composer-footer">
-                        <input
-                            class="composer-ticker"
-                            prop:value=ticker
-                            on:input=move |ev| set_ticker.set(event_target_value(&ev))
-                            on:keydown=move |ev| if ev.key() == "Enter" { submit() }
-                            placeholder="研究对象，如 AAPL / 9988.HK"
-                        />
+                        <div class="company-picker">
+                            <input
+                                class="company-input"
+                                prop:value=company_query
+                                on:input=on_query_input
+                                on:keydown=move |ev| if ev.key() == "Enter" { submit() }
+                                placeholder="研究对象，如 苹果 / AAPL / 9988.HK"
+                                disabled=resolving
+                            />
+                            {move || if resolving.get() {
+                                view! { <span class="company-status">"核实中…"</span> }.into_view()
+                            } else if resolved.get().is_some() {
+                                view! { <span class="company-status is-confirmed">"✓ 已确认"</span> }.into_view()
+                            } else {
+                                view! {}.into_view()
+                            }}
+                            {move || {
+                                let items = candidates.get();
+                                if items.is_empty() {
+                                    view! {}.into_view()
+                                } else {
+                                    view! {
+                                        <div class="company-dropdown">
+                                            {items.into_iter().map(|item| {
+                                                let label = company_display(&item.name_zh, item.name_en.as_deref(), &item.ticker);
+                                                let industry = item.industry.clone();
+                                                let pick = item.clone();
+                                                view! {
+                                                    <button
+                                                        type="button"
+                                                        class="company-item"
+                                                        on:click=move |_| select_candidate(pick.clone())
+                                                    >
+                                                        <span class="company-item-name">{label}</span>
+                                                        {industry.map(|value| view! { <span class="company-item-industry">{value}</span> })}
+                                                    </button>
+                                                }
+                                            }).collect_view()}
+                                        </div>
+                                    }.into_view()
+                                }
+                            }}
+                        </div>
                         <button
                             class="composer-send"
                             on:click=move |_| submit()
-                            disabled=pending
+                            disabled=move || pending() || resolving.get()
                             title="发送（Enter）"
                         >
-                            {move || if pending() { "…" } else { "↑" }}
+                            {move || if pending() || resolving.get() { "…" } else { "↑" }}
                         </button>
                     </div>
+                    {move || resolve_error.get().map(|message| view! {
+                        <p class="company-error">{message}</p>
+                    })}
                 </div>
             </div>
         </main>
