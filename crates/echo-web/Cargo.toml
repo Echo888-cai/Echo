@@ -14,6 +14,7 @@ echo-contracts.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 leptos = { version = "0.6", features = ["csr"] }
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 
 # WASM 专属依赖：gloo-net(fetch) / wasm-bindgen 只在 wasm32 目标编。原生目标（workspace 类型检查用）
 # 不拉它们——组件与视图逻辑照样原生 type-check，只有网络那层按目标分版。
