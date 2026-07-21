@@ -25,20 +25,22 @@ use echo_application::model_gateway::{
     model_answer_stream,
 };
 use echo_application::{
-    AuthError, AuthService, LoadedFundamentals, PersistResearchSession, ResearchPorts,
-    ResearchService, ResolvedCompany, market_snapshot_from_rows, resolved_company_from_rows,
+    AuthError, AuthService, CompanyResolvePorts, CompanyResolveService, DbCompanyHit,
+    ExternalSymbolHit, LoadedFundamentals, PersistResearchSession, ResearchPorts, ResearchService,
+    ResolvedCompany, market_snapshot_from_rows, resolved_company_from_rows,
 };
 use echo_config::ApiConfig;
 use echo_contracts::{
     AskRequest, AskResponse, AuthInviteRequest, AuthInviteResponse, AuthLoginRequest,
     AuthLogoutResponse, AuthMeResponse, AuthRegisterRequest, AuthUserResponse,
-    ChangedCountResponse, CompanySearchItem, CompanySearchQuery, CompanySearchResponse,
-    ErrorResponse, HealthResponse, ListQuery, MutationResponse, Notification,
-    NotificationReadRequest, NotificationsListResponse, PortfolioListResponse, PortfolioPosition,
-    PortfolioUpsertRequest, PreferencesResponse, PreferencesUpdateRequest, PublicUser,
-    ResearchSessionDetail, ResearchSessionResponse, ResearchSessionSummary,
-    ResearchSessionsResponse, ResearchStreamEvent, TickerQuery, UnreadResponse, UserPreferences,
-    UserRole, WatchEntry, WatchListResponse, WatchMutationRequest,
+    ChangedCountResponse, CompanyResolveItem, CompanyResolveQuery, CompanyResolveResponse,
+    CompanySearchItem, CompanySearchQuery, CompanySearchResponse, CompanyVerifyQuery,
+    CompanyVerifyResponse, CompanyVerifySuggestion, ErrorResponse, HealthResponse, ListQuery,
+    MutationResponse, Notification, NotificationReadRequest, NotificationsListResponse,
+    PortfolioListResponse, PortfolioPosition, PortfolioUpsertRequest, PreferencesResponse,
+    PreferencesUpdateRequest, PublicUser, ResearchSessionDetail, ResearchSessionResponse,
+    ResearchSessionSummary, ResearchSessionsResponse, ResearchStreamEvent, TickerQuery,
+    UnreadResponse, UserPreferences, UserRole, WatchEntry, WatchListResponse, WatchMutationRequest,
 };
 use echo_data::{
     FmpSearchService, FundamentalsRow, FundamentalsService, QuoteService, pct_change, pct_of,
@@ -328,6 +330,120 @@ async fn companies_search(
             })
             .collect(),
     }))
+}
+
+struct ApiCompanyResolvePorts {
+    state: AppState,
+}
+
+impl CompanyResolvePorts for ApiCompanyResolvePorts {
+    async fn db_by_ticker(&self, ticker: &str) -> Option<DbCompanyHit> {
+        let pool = self.state.pool.as_ref()?;
+        let row = CompanyRepository::new(pool)
+            .by_ticker(ticker)
+            .await
+            .ok()??;
+        Some(DbCompanyHit {
+            ticker: row.ticker,
+            name_zh: row.name_zh,
+            name_en: row.name_en,
+            industry: row.industry,
+        })
+    }
+
+    async fn db_search(&self, query: &str, limit: i64) -> Vec<DbCompanyHit> {
+        let Some(pool) = self.state.pool.as_ref() else {
+            return Vec::new();
+        };
+        CompanyRepository::new(pool)
+            .search(query, limit)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| DbCompanyHit {
+                ticker: row.ticker,
+                name_zh: row.name_zh,
+                name_en: row.name_en,
+                industry: row.industry,
+            })
+            .collect()
+    }
+
+    async fn fmp_exact_us(&self, ticker: &str) -> Option<ExternalSymbolHit> {
+        let search = self.state.fmp_search.as_ref()?;
+        let hit = search.exact_us_hit(ticker).await?;
+        Some(ExternalSymbolHit {
+            symbol: hit.symbol,
+            name: hit.name,
+            exchange: hit.exchange,
+        })
+    }
+
+    async fn fmp_search_name(&self, name: &str) -> Vec<ExternalSymbolHit> {
+        let Some(search) = self.state.fmp_search.as_ref() else {
+            return Vec::new();
+        };
+        search
+            .search_name(name)
+            .await
+            .into_iter()
+            .map(|hit| ExternalSymbolHit {
+                symbol: hit.symbol,
+                name: hit.name,
+                exchange: hit.exchange,
+            })
+            .collect()
+    }
+
+    async fn quote_alive(&self, ticker: &str) -> bool {
+        let Some(quotes) = self.state.quotes.as_ref() else {
+            return false;
+        };
+        matches!(quotes.fetch_live(ticker).await, Ok(routed) if routed.quote.price.is_some())
+    }
+}
+
+async fn companies_resolve(
+    State(state): State<AppState>,
+    Query(query): Query<CompanyResolveQuery>,
+) -> Json<CompanyResolveResponse> {
+    let ports = ApiCompanyResolvePorts { state };
+    let result = CompanyResolveService::resolve_query(&ports, &query.q).await;
+    Json(CompanyResolveResponse {
+        company: result.company.map(|company| CompanyResolveItem {
+            ticker: company.ticker,
+            name_zh: company.name_zh,
+            name_en: (!company.name_en.is_empty()).then_some(company.name_en),
+            industry: (!company.industry.is_empty()).then_some(company.industry),
+        }),
+        reason: result.reason,
+    })
+}
+
+async fn companies_verify(
+    State(state): State<AppState>,
+    Query(query): Query<CompanyVerifyQuery>,
+) -> Json<CompanyVerifyResponse> {
+    let ports = ApiCompanyResolvePorts { state };
+    let result = CompanyResolveService::verify_ticker(&ports, &query.ticker).await;
+    let status = match result.status {
+        echo_application::VerifyStatus::Verified => "verified",
+        echo_application::VerifyStatus::NotFound => "not_found",
+    };
+    Json(CompanyVerifyResponse {
+        status: status.into(),
+        name: result.name.filter(|value| !value.is_empty()),
+        suggestions: (!result.suggestions.is_empty()).then(|| {
+            result
+                .suggestions
+                .into_iter()
+                .map(|item| CompanyVerifySuggestion {
+                    ticker: item.ticker,
+                    name: item.name,
+                })
+                .collect()
+        }),
+    })
 }
 
 async fn watch_list(
@@ -851,6 +967,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ask/stream", post(ask_stream))
         .route("/api/auth/invite", post(auth_invite))
         .route("/api/companies/search", get(companies_search))
+        .route("/api/companies/resolve", get(companies_resolve))
+        .route("/api/companies/verify", get(companies_verify))
         .route("/api/watch/list", get(watch_list))
         .route("/api/watch/track", post(watch_track))
         .route("/api/watch/untrack", post(watch_untrack))

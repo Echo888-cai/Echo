@@ -10,6 +10,7 @@ description = "Use-case orchestration for the research pipeline"
 echo-domain.workspace = true
 echo-contracts.workspace = true
 echo-db.workspace = true
+echo-data.workspace = true
 echo-finance-core.workspace = true
 rust_decimal.workspace = true
 serde.workspace = true

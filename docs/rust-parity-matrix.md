@@ -123,7 +123,8 @@ All nine schedules are defined and can execute activities, but no atomic claim/l
 | Yahoo quote | `yahooQuoteAdapter` | `echo-data::QuoteService` | rust-accepted | quote/router/quality tests | keep | #43 | 同上；商用模式必须遵守授权门。 |
 | PostgreSQL quote read | `postgresQuoteAdapter` | `MarketRepository` | replaced | repository tests | keep | #43 | 已由 Rust DB repository 承接。 |
 | FMP fundamentals | `fmpFundamentalsAdapter` | `echo-data::FundamentalsService` | rust-accepted | fixture + commercial/HK gates | keep | Phase 2 | US-only stable 三表；商用模式拒绝；`ResearchPorts::load_fundamentals` 已接线。 |
-| FMP company search | `fmpSearchAdapter` | `echo-data::FmpSearchService` | skeleton | normalize/filter unit tests | keep | Phase 2 | search-symbol/name + 美股主板过滤；完整 resolve/verify/建档链未完成。 |
+| FMP company search | `fmpSearchAdapter` | `echo-data::FmpSearchService` | rust-accepted | normalize/filter + resolve ports | keep | Phase 2 | resolve/verify 已消费；研究链路建档 ensure 仍待接。 |
+| Company resolve/verify | `companyResolution` | `CompanyResolveService` + `/api/companies/{resolve,verify}` | skeleton | alias/identity + fake-port tests | keep | Phase 2 | 无 LLM 兜底；验证先于建档的研究入口未接线。 |
 | Tavily evidence search | `tavilySearchAdapter` | — | pending | — | keep | Phase 2 | 配置含 `TAVILY_API_KEY`，但没有 consumer。 |
 | Finnhub earnings calendar | `finnhubCalendarAdapter` | — | pending | — | keep | Phase 2 | 日历/业绩数据端口未迁移。 |
 | Finnhub peers | `finnhubPeersAdapter` | — | pending | — | keep | Phase 2 | 同业比较事实未迁移。 |
@@ -137,7 +138,7 @@ All nine schedules are defined and can execute activities, but no atomic claim/l
 | Capability | Old surface | Rust landing | Status | Tests | Product decision | Owner/PR | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Auth/users/sessions/invites | `authRepository` | `AuthRepository`, `AuthService` | rust-accepted | auth tests + CI live NOBYPASSRLS | keep | #43 / #45 | CI 用 `echo_app` 跑 register/session round-trip。 |
-| Companies | `companyRepository` | `CompanyRepository::search` | rust-accepted | repository/API tests | keep | #43 | 仅检索；建档、验证、别名解析未完成。 |
+| Companies | `companyRepository` | `CompanyRepository::{search,ensure,by_ticker}` | rust-accepted | repository/API + resolve | keep | #43 / Phase 2 | search/ensure 已有；resolve/verify HTTP 已接；研究建档未自动调用 ensure。 |
 | Market snapshots | quote repositories | `MarketRepository`, `QuoteService` | rust-accepted | market/quote tests | keep | #43 | 需要真实供应商 contract/canary。 |
 | Watchlist | `watchlistRepository` | `WatchlistRepository` | skeleton | repository/API + CI live | keep | #43 / #45 | 基础 track/list/untrack；不能替代 rules/desk。 |
 | Portfolio positions | `portfolioRepository` | `PortfolioRepository` | skeleton | repository/API + CI live | keep | #43 / #45 | CRUD 已有；enriched/review/snapshot 仍缺。 |

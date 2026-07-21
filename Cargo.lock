@@ -718,6 +718,7 @@ dependencies = [
  "base64",
  "chrono",
  "echo-contracts",
+ "echo-data",
  "echo-db",
  "echo-domain",
  "echo-finance-core",
