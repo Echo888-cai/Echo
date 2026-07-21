@@ -348,10 +348,27 @@ impl OwnedAuditContext {
     }
 }
 
-/// 流式作答——返回一个逐块下发合并后正文的接收端（对齐 TS 的 `readStreamedCompletion`）。
-/// 内部 spawn 一个后台任务读 OpenAI 兼容的 `stream:true` SSE 帧、按 [`Coalescer`] 合并成 ~24 字符
-/// 的块推给 channel；结束时按 usage/时延 best-effort 落一条审计。任何早退（无 provider、网络错、
-/// 非 2xx）都只是让流提前结束——接收端读到通道关闭即止，语义等价于 TS 的失败静默。
+/// 模型流式事件——区分正文块、干净结束与失败，避免通道关闭被误当成成功。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ModelStreamEvent {
+    Delta(String),
+    Completed,
+    Failed { message: String },
+}
+
+/// 流式作答启动结果。
+#[derive(Debug)]
+pub enum ModelStreamStart {
+    /// 未配置任何 provider。
+    Unavailable,
+    /// 已启动后台拉流任务。
+    Ready(tokio::sync::mpsc::Receiver<ModelStreamEvent>),
+}
+
+/// 流式作答——返回终端可辨的事件流（对齐 TS 的 `readStreamedCompletion`）。
+/// 内部 spawn 读 OpenAI 兼容 `stream:true` SSE，按 [`Coalescer`] 合并成 ~24 字符块。
+/// 干净结束发 [`ModelStreamEvent::Completed`]；无 provider 返回 [`ModelStreamStart::Unavailable`]；
+/// 网络/HTTP/读失败发 [`ModelStreamEvent::Failed`]。
 ///
 /// 显式 seam：TS 的 `visibleText`（剥 FALSIFIERS_JSON 机器行）属研究编排层裁剪，随该层接上；
 /// 此处只做协议级合并，不掺业务裁剪。
@@ -361,14 +378,14 @@ pub fn model_answer_stream(
     user: String,
     options: ModelAnswerOptions,
     audit: Option<OwnedAuditContext>,
-) -> tokio::sync::mpsc::Receiver<String> {
+) -> ModelStreamStart {
     use futures_util::StreamExt;
 
-    let (tx, rx) = tokio::sync::mpsc::channel::<String>(32);
+    let Some(provider) = provider_config() else {
+        return ModelStreamStart::Unavailable;
+    };
+    let (tx, rx) = tokio::sync::mpsc::channel::<ModelStreamEvent>(32);
     tokio::spawn(async move {
-        let Some(provider) = provider_config() else {
-            return;
-        };
         let url = format!("{}/chat/completions", provider.base.trim_end_matches('/'));
         let mut body = build_request_body(&provider, &system, &user, &options);
         // 开流式 + 要 usage 帧（对齐 TS：stream:true / stream_options.include_usage）。
@@ -399,6 +416,14 @@ pub fn model_answer_stream(
             }
         };
 
+        let fail = |message: String| async {
+            if let Some(ctx) = &audit {
+                ctx.record(make_entry("error", Some(message.clone()), None, None))
+                    .await;
+            }
+            let _ = tx.send(ModelStreamEvent::Failed { message }).await;
+        };
+
         let client = reqwest::Client::new();
         let response = match client
             .post(&url)
@@ -410,22 +435,11 @@ pub fn model_answer_stream(
         {
             Ok(r) if r.status().is_success() => r,
             Ok(r) => {
-                if let Some(ctx) = &audit {
-                    ctx.record(make_entry(
-                        "error",
-                        Some(format!("model {}", r.status().as_u16())),
-                        None,
-                        None,
-                    ))
-                    .await;
-                }
+                fail(format!("model {}", r.status().as_u16())).await;
                 return;
             }
             Err(e) => {
-                if let Some(ctx) = &audit {
-                    ctx.record(make_entry("error", Some(e.to_string()), None, None))
-                        .await;
-                }
+                fail(e.to_string()).await;
                 return;
             }
         };
@@ -451,7 +465,7 @@ pub fn model_answer_stream(
                 match parse_sse_line(&line) {
                     SseFrame::Delta(delta) => {
                         if let Some(block) = coalescer.push(&delta) {
-                            if tx.send(block).await.is_err() {
+                            if tx.send(ModelStreamEvent::Delta(block)).await.is_err() {
                                 return; // 接收端已丢弃，停读
                             }
                         }
@@ -465,17 +479,24 @@ pub fn model_answer_stream(
             }
         }
         if let Some(block) = coalescer.flush() {
-            let _ = tx.send(block).await;
+            let _ = tx.send(ModelStreamEvent::Delta(block)).await;
         }
         if let Some(ctx) = &audit {
-            let entry = match errored {
-                Some(detail) => make_entry("error", Some(detail), input_tokens, output_tokens),
+            let entry = match &errored {
+                Some(detail) => {
+                    make_entry("error", Some(detail.clone()), input_tokens, output_tokens)
+                }
                 None => make_entry("ok", None, input_tokens, output_tokens),
             };
             ctx.record(entry).await;
         }
+        if let Some(detail) = errored {
+            let _ = tx.send(ModelStreamEvent::Failed { message: detail }).await;
+        } else {
+            let _ = tx.send(ModelStreamEvent::Completed).await;
+        }
     });
-    rx
+    ModelStreamStart::Ready(rx)
 }
 
 /// 去掉 ```json 围栏后解析成 JSON 对象；任何解析失败返回 `None`。对齐 TS 的 `parseJsonObject`。

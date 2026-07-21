@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "frozen_at": "dc4b75c",
+  "policy": "Wire shapes for AskRequest/AskResponse are frozen here for drift detection; widen only with an explicit parity-matrix note.",
+  "samples": {
+    "AskRequest.minimal": {
+      "question": "腾讯估值？",
+      "ticker": "0700.HK"
+    },
+    "AskResponse.skeleton": {
+      "ticker": "0700.HK",
+      "route": {
+        "intent": "valuation",
+        "depth": "brief",
+        "confidence": 0.94,
+        "multi_part": false,
+        "answer_style": "direct",
+        "plan": [
+          "routing",
+          "resolving",
+          "market_financials",
+          "valuation",
+          "generating",
+          "fact_check"
+        ]
+      },
+      "data_completeness": 0,
+      "connected_sources": [],
+      "valuation": {
+        "method": "unavailable",
+        "methods": [],
+        "method_detail": [],
+        "key_assumptions": [],
+        "sensitivity": [],
+        "stage_aware": false,
+        "data_suspect": false
+      },
+      "answer_source": "unavailable"
+    },
+    "HealthResponse": {
+      "status": "ok",
+      "service": "echo-api",
+      "stack": "rust"
+    }
+  }
+}
