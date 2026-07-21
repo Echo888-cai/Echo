@@ -1,60 +1,15 @@
 //! 模型网关——统一的 OpenAI 兼容 HTTP 客户端。
 //!
-//! OpenAI 兼容协议（DeepSeek 主 → OpenAI 备 → 通用），`POST /chat/completions`。
-//! 本轮先把**非流式核心**接通并强类型化：provider 选择、请求体构造、作答提取、JSON 解析
-//! 都有强类型结构与纯函数单测。流式 SSE 与审计落库分别由 API 与数据库层负责。
+//! OpenAI 兼容协议（DeepSeek 具名预设 → 通用 `MODEL_*` 覆盖层），`POST /chat/completions`。
+//! provider 选择在 `echo-config` 完成（唯一环境变量入口）并由调用方显式注入；本模块只负责
+//! 请求体构造、作答提取、JSON 解析——都有强类型结构与纯函数单测。流式 SSE 与审计落库分别由
+//! API 与数据库层负责。
 //!
 //! 失败一律返回 `None`，由编排层落到「未核到」。
 
 use std::time::Duration;
 
-/// 选中的模型 provider——id 决定 DeepSeek 专属的 `thinking` 开关是否附带。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProviderConfig {
-    pub id: String,
-    pub key: String,
-    pub base: String,
-    pub model: String,
-}
-
-/// 纯选择逻辑：按 DeepSeek → OpenAI → 通用的次序，从注入的取值器读环境。
-/// 抽成纯函数是为了单测不去污染进程级 `std::env`（Rust 测试并行跑，改全局 env 会串味）。
-fn provider_config_from(get: impl Fn(&str) -> Option<String>) -> Option<ProviderConfig> {
-    let non_empty = |k: &str| get(k).filter(|v| !v.is_empty());
-
-    if let Some(key) = non_empty("DEEPSEEK_API_KEY") {
-        return Some(ProviderConfig {
-            id: "deepseek".into(),
-            key,
-            base: non_empty("DEEPSEEK_BASE_URL")
-                .unwrap_or_else(|| "https://api.deepseek.com".into()),
-            model: non_empty("DEEPSEEK_MODEL").unwrap_or_else(|| "deepseek-v4-flash".into()),
-        });
-    }
-    if let Some(key) = non_empty("OPENAI_API_KEY") {
-        return Some(ProviderConfig {
-            id: "openai".into(),
-            key,
-            base: "https://api.openai.com/v1".into(),
-            model: non_empty("OPENAI_MODEL").unwrap_or_else(|| "gpt-5-mini".into()),
-        });
-    }
-    if let (Some(key), Some(base)) = (non_empty("MODEL_API_KEY"), non_empty("MODEL_BASE_URL")) {
-        return Some(ProviderConfig {
-            id: "generic".into(),
-            key,
-            base,
-            model: non_empty("MODEL_NAME").unwrap_or_else(|| "default".into()),
-        });
-    }
-    None
-}
-
-/// 从进程环境选 provider。没配任何 key 时返回 `None`——编排层据此走「未核到」，绝不假装有模型。
-#[must_use]
-pub fn provider_config() -> Option<ProviderConfig> {
-    provider_config_from(|k| std::env::var(k).ok())
-}
+pub use echo_config::ModelProviderConfig as ProviderConfig;
 
 /// 调用类别——只影响超时（report 给 120s，其余 60s），与 TS 一致。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -252,18 +207,20 @@ impl AuditContext<'_> {
     }
 }
 
-/// 统一作答入口（非流式）。选到 provider 就打 OpenAI 兼容端点，取回正文；任何失败（无 provider、
-/// 网络错、非 2xx、空正文）都归一到 `None`，对齐 TS「失败返回 null」。给了 `audit` 就每跳落一条
-/// 审计（成功记 tokens/时延，失败记 error_detail），审计写入 best-effort，绝不阻断作答。
+/// 统一作答入口（非流式）。`provider` 由调用方在进程边界经 `echo-config` 解析后注入——本函数
+/// 不再读 env。没配任何 provider 时（`None`）直接归一到 `None`，对齐 TS「失败返回 null」。
+/// 打了 OpenAI 兼容端点后任何失败（网络错、非 2xx、空正文）也归一到 `None`。给了 `audit` 就每跳
+/// 落一条审计（成功记 tokens/时延，失败记 error_detail），审计写入 best-effort，绝不阻断作答。
 pub async fn model_answer(
     system: &str,
     user: &str,
     options: ModelAnswerOptions,
+    provider: Option<&ProviderConfig>,
     audit: Option<AuditContext<'_>>,
 ) -> Option<ModelAnswer> {
-    let provider = provider_config()?;
+    let provider = provider?;
     let url = format!("{}/chat/completions", provider.base.trim_end_matches('/'));
-    let body = build_request_body(&provider, system, user, &options);
+    let body = build_request_body(provider, system, user, &options);
     let kind = options.kind.as_str();
     let started = std::time::Instant::now();
 
@@ -326,8 +283,8 @@ pub async fn model_answer(
     }
     Some(ModelAnswer {
         content,
-        provider: provider.id,
-        model: provider.model,
+        provider: provider.id.clone(),
+        model: provider.model.clone(),
     })
 }
 
@@ -377,11 +334,12 @@ pub fn model_answer_stream(
     system: String,
     user: String,
     options: ModelAnswerOptions,
+    provider: Option<ProviderConfig>,
     audit: Option<OwnedAuditContext>,
 ) -> ModelStreamStart {
     use futures_util::StreamExt;
 
-    let Some(provider) = provider_config() else {
+    let Some(provider) = provider else {
         return ModelStreamStart::Unavailable;
     };
     let (tx, rx) = tokio::sync::mpsc::channel::<ModelStreamEvent>(32);
@@ -517,62 +475,6 @@ pub fn parse_json_object(content: &str) -> Option<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-
-    fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
-        let map: HashMap<String, String> = pairs
-            .iter()
-            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-            .collect();
-        move |k: &str| map.get(k).cloned()
-    }
-
-    #[test]
-    fn deepseek_wins_over_openai_and_takes_defaults() {
-        let cfg = provider_config_from(env(&[
-            ("DEEPSEEK_API_KEY", "ds-key"),
-            ("OPENAI_API_KEY", "oa-key"),
-        ]))
-        .expect("provider");
-        assert_eq!(cfg.id, "deepseek");
-        assert_eq!(cfg.base, "https://api.deepseek.com");
-        assert_eq!(cfg.model, "deepseek-v4-flash");
-        assert_eq!(cfg.key, "ds-key");
-    }
-
-    #[test]
-    fn openai_selected_when_no_deepseek_and_honors_model_override() {
-        let cfg = provider_config_from(env(&[
-            ("OPENAI_API_KEY", "oa-key"),
-            ("OPENAI_MODEL", "gpt-5"),
-        ]))
-        .expect("provider");
-        assert_eq!(cfg.id, "openai");
-        assert_eq!(cfg.base, "https://api.openai.com/v1");
-        assert_eq!(cfg.model, "gpt-5");
-    }
-
-    #[test]
-    fn generic_needs_both_key_and_base() {
-        assert!(provider_config_from(env(&[("MODEL_API_KEY", "k")])).is_none());
-        let cfg = provider_config_from(env(&[
-            ("MODEL_API_KEY", "k"),
-            ("MODEL_BASE_URL", "https://llm.internal/v1"),
-        ]))
-        .expect("provider");
-        assert_eq!(cfg.id, "generic");
-        assert_eq!(cfg.model, "default");
-    }
-
-    #[test]
-    fn empty_string_key_is_not_a_provider() {
-        assert!(provider_config_from(env(&[("DEEPSEEK_API_KEY", "")])).is_none());
-    }
-
-    #[test]
-    fn no_keys_means_no_provider() {
-        assert!(provider_config_from(env(&[])).is_none());
-    }
 
     #[test]
     fn deepseek_body_carries_thinking_and_options() {
@@ -604,9 +506,9 @@ mod tests {
     #[test]
     fn non_deepseek_body_omits_thinking() {
         let provider = ProviderConfig {
-            id: "openai".into(),
+            id: "generic".into(),
             key: "k".into(),
-            base: "https://api.openai.com/v1".into(),
+            base: "https://llm.internal/v1".into(),
             model: "gpt-5-mini".into(),
         };
         let body = build_request_body(

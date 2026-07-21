@@ -26,7 +26,6 @@ pub use from_db::{market_snapshot_from_rows, resolved_company_from_rows};
 pub use model_gateway::{
     AnswerKind, ModelAnswer, ModelAnswerOptions, ModelStreamEvent, ModelStreamStart,
     OwnedAuditContext, ProviderConfig, model_answer, model_answer_stream, parse_json_object,
-    provider_config,
 };
 pub use research::{
     CompareResearchFacts, LoadedFundamentals, PersistResearchSession, ResearchFacts,

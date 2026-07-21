@@ -15,7 +15,6 @@ crates/
   echo-web/            Leptos/WASM
   echo-e2e/             Rust WebDriver 验收
 migrations/             编译进 echo-db 的 PostgreSQL SQL
-infra/terraform/        部署基础设施（不承载业务逻辑）
 ```
 
 依赖只能向下：domain 不碰 IO；application 组织用例；db 是唯一持久化入口；data 是唯一外部行情入口；api 和 worker 复用 application/domain，不复制数字逻辑。金额、股数、比率必须是 `rust_decimal::Decimal`，不能在展示边界之外使用二进制浮点。

@@ -13,7 +13,6 @@ const DEFAULT_DB_CONNECTIONS: u32 = 5;
 pub struct DataSourceConfig {
     pub finnhub_api_key: Option<String>,
     pub fmp_api_key: Option<String>,
-    pub tavily_api_key: Option<String>,
     pub commercial_mode: bool,
 }
 
@@ -25,9 +24,55 @@ impl DataSourceConfig {
         Self {
             finnhub_api_key: non_empty(lookup("FINNHUB_API_KEY")),
             fmp_api_key: non_empty(lookup("FMP_API_KEY")),
-            tavily_api_key: non_empty(lookup("TAVILY_API_KEY")),
             commercial_mode: flag(non_empty(lookup("ECHO_COMMERCIAL_MODE"))),
         }
+    }
+}
+
+/// 模型 provider 配置——两层：DeepSeek 具名预设（默认 base/model，可用 `DEEPSEEK_BASE_URL`/
+/// `DEEPSEEK_MODEL` 覆盖），否则退到通用 `MODEL_*` 覆盖层（指向任意 OpenAI 兼容端点，
+/// 包括 OpenAI 本身——不再单独维护一套 `OPENAI_*` 预设，二者是同一形状的端点）。
+/// 故意不实现 `Debug`，避免密钥进入日志。
+#[derive(Clone)]
+pub struct ModelProviderConfig {
+    pub id: String,
+    pub key: String,
+    pub base: String,
+    pub model: String,
+}
+
+impl ModelProviderConfig {
+    #[must_use]
+    pub fn from_env() -> Option<Self> {
+        Self::from_lookup(|key| std::env::var(key).ok())
+    }
+
+    fn from_lookup<F>(mut lookup: F) -> Option<Self>
+    where
+        F: FnMut(&str) -> Option<String>,
+    {
+        if let Some(key) = non_empty(lookup("DEEPSEEK_API_KEY")) {
+            return Some(Self {
+                id: "deepseek".into(),
+                key,
+                base: non_empty(lookup("DEEPSEEK_BASE_URL"))
+                    .unwrap_or_else(|| "https://api.deepseek.com".into()),
+                model: non_empty(lookup("DEEPSEEK_MODEL"))
+                    .unwrap_or_else(|| "deepseek-v4-flash".into()),
+            });
+        }
+        if let (Some(key), Some(base)) = (
+            non_empty(lookup("MODEL_API_KEY")),
+            non_empty(lookup("MODEL_BASE_URL")),
+        ) {
+            return Some(Self {
+                id: "generic".into(),
+                key,
+                base,
+                model: non_empty(lookup("MODEL_NAME")).unwrap_or_else(|| "default".into()),
+            });
+        }
+        None
     }
 }
 
@@ -52,6 +97,7 @@ pub struct ApiConfig {
     pub auth_disabled_user_id: String,
     pub secure_cookie: bool,
     pub data_sources: DataSourceConfig,
+    pub model_provider: Option<ModelProviderConfig>,
 }
 
 impl ApiConfig {
@@ -87,6 +133,7 @@ impl ApiConfig {
             DEFAULT_DB_CONNECTIONS,
         )?;
         let data_sources = DataSourceConfig::from_lookup(&mut lookup);
+        let model_provider = ModelProviderConfig::from_lookup(&mut lookup);
         Ok(Self {
             listen_addr: SocketAddr::new(host, port),
             database_url: non_empty(lookup("DATABASE_URL")),
@@ -96,6 +143,7 @@ impl ApiConfig {
                 .unwrap_or_else(|| "local".into()),
             secure_cookie: flag(non_empty(lookup("ECHO_TRUST_PROXY"))),
             data_sources,
+            model_provider,
         })
     }
 }
@@ -220,6 +268,54 @@ mod tests {
             ApiConfig::from_lookup(lookup(&[("API_PORT", "99999")])),
             Err(ConfigError::InvalidPort { .. })
         ));
+    }
+
+    #[test]
+    fn deepseek_preset_wins_and_takes_defaults() {
+        let cfg = ModelProviderConfig::from_lookup(lookup(&[
+            ("DEEPSEEK_API_KEY", "ds-key"),
+            ("MODEL_API_KEY", "generic-key"),
+            ("MODEL_BASE_URL", "https://llm.internal/v1"),
+        ]))
+        .expect("provider");
+        assert_eq!(cfg.id, "deepseek");
+        assert_eq!(cfg.base, "https://api.deepseek.com");
+        assert_eq!(cfg.model, "deepseek-v4-flash");
+        assert_eq!(cfg.key, "ds-key");
+    }
+
+    #[test]
+    fn deepseek_base_and_model_are_overridable() {
+        let cfg = ModelProviderConfig::from_lookup(lookup(&[
+            ("DEEPSEEK_API_KEY", "ds-key"),
+            ("DEEPSEEK_BASE_URL", "https://deepseek.internal"),
+            ("DEEPSEEK_MODEL", "deepseek-custom"),
+        ]))
+        .expect("provider");
+        assert_eq!(cfg.base, "https://deepseek.internal");
+        assert_eq!(cfg.model, "deepseek-custom");
+    }
+
+    #[test]
+    fn generic_layer_needs_both_key_and_base() {
+        assert!(ModelProviderConfig::from_lookup(lookup(&[("MODEL_API_KEY", "k")])).is_none());
+        let cfg = ModelProviderConfig::from_lookup(lookup(&[
+            ("MODEL_API_KEY", "k"),
+            ("MODEL_BASE_URL", "https://llm.internal/v1"),
+        ]))
+        .expect("provider");
+        assert_eq!(cfg.id, "generic");
+        assert_eq!(cfg.model, "default");
+    }
+
+    #[test]
+    fn empty_string_key_is_not_a_provider() {
+        assert!(ModelProviderConfig::from_lookup(lookup(&[("DEEPSEEK_API_KEY", "")])).is_none());
+    }
+
+    #[test]
+    fn no_keys_means_no_provider() {
+        assert!(ModelProviderConfig::from_lookup(lookup(&[])).is_none());
     }
 
     #[test]
