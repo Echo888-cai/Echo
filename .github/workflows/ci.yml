@@ -63,7 +63,8 @@ jobs:
             GRANT USAGE, SELECT ON SEQUENCES TO echo_app;
           SQL
           # Prove the app role can authenticate before cargo tests.
-          PGPASSWORD=echo_app psql -h 127.0.0.1 -U echo_app -d echo_ci -c 'SELECT 1'      - name: Live Postgres integration (ignored DB/API tests)
+          PGPASSWORD=echo_app psql -h 127.0.0.1 -U echo_app -d echo_ci -c 'SELECT 1'
+      - name: Live Postgres integration (ignored DB/API tests)
         env:
           DATABASE_URL: ${{ env.ECHO_APP_DATABASE_URL }}
           ECHO_SKIP_TEST_MIGRATE: "1"
