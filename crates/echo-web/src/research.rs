@@ -144,7 +144,10 @@ fn AnswerCard(turn: Turn) -> impl IntoView {
             <div class="answer-text-section">
                 <p class="answer-source-label">"作答 · " {res.answer_source.as_str()}</p>
                 {match res.answer.clone() {
-                    Some(text) => view! { <p class="answer-text">{text}</p> }.into_view(),
+                    Some(text) => {
+                        let html = crate::markdown::render(&text);
+                        view! { <div class="answer-text" inner_html=html></div> }.into_view()
+                    }
                     None => view! {
                         <p class="answer-unavailable">
                             "未核到模型作答（未配 provider）——本轮只给结构化事实，不臆造。"
