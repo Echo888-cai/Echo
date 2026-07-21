@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn position_pnl_uses_exact_decimal_arithmetic() {
         // 100 shares @ 317.31 vs. cost basis 280.00 — mirrors
-        // apps/api/src/app.ts's enrichPosition, which used to do this in JS
+        // 组合层的 enrich_position 规则：缺价格时保持未核到，不伪造盈亏。
         // binary float.
         let price = Money::new(Decimal::new(31731, 2), Currency::Usd);
         let avg_cost = Money::new(Decimal::new(28000, 2), Currency::Usd);

@@ -1,85 +1,78 @@
 # Echo Research
 
-面向美股与港股价值投资者的证据优先 AI 研究台。产品围绕连续研究对话、公司画像、判断快照和可自动核对的证伪条件展开，不提供买卖指令，也不会用未经核实的数字填补数据缺口。
+Echo 是面向美股与港股的证据优先研究台。研究问题、定点估值、数字护栏、公司判断、证伪线、通知和组合成本都在同一条 Rust 事实链上；缺失数据明确显示“未核到”，不提供买卖指令。
 
-## 架构
+## 唯一运行栈
 
 ```text
-apps/
-  web       React 19 + Vite + TanStack Query/Router，PWA 与 SSE 研究对话
-  api       Hono + tRPC，无状态 HTTP/API 服务
-  worker    Temporal workflows、周期任务与一手披露管道
-packages/
-  application  研究用例编排
-  contracts    zod 契约与 OpenAPI
-  data-plane   行情、基本面、公告与日历适配器
-  db           Drizzle + PostgreSQL、NUMERIC、双时态数据与强制 RLS
-  domain       零框架依赖的研究规则、答案与报告编排
-  ui           品牌 tokens、组件与页面样式
-crates/
-  finance-core 十进制定点金融数值内核
-tests/
-  e2e          跨 React/PWA、Hono 与 PostgreSQL 的核心用户链路
-infra/
-  terraform    蓝绿服务、托管 PostgreSQL、观测与告警 IaC
-scripts/
-  document-processing  披露文档处理工具
-  quality              仓库质量与旧底盘禁入检查
-docs/          产品计划、发布门禁与架构说明
+Leptos/WASM  →  axum HTTP/SSE  →  echo-application/domain
+                                      ↓
+                              sqlx + PostgreSQL/RLS
+                                      ↓
+                         echo-data 外部供应商路由
+                         echo-worker 可恢复后台活动
 ```
 
-仓库只有这一套运行架构。API 的非流式操作通过 tRPC，研究流通过 Hono 原生 SSE；后台研究、公告入库、业绩核对、摘要、证伪和备份均由 Temporal 执行。
+工程入口只有 Cargo。`echo-finance-core` 和 `rust_decimal` 负责金额、股数、比率与估值；`echo-data` 在供应商授权、质量门和熔断之后才允许行情进入数据库；私有仓储同时使用应用层用户过滤和 PostgreSQL 强制 RLS。
 
 ## 本地运行
 
-要求 Node.js、Rust、PostgreSQL；Redis 用于短期意图/上下文缓存（不可用时自动回退到内存），Temporal 用于后台持久任务。
+需要 Rust 1.85、Trunk（WASM 前端）和 PostgreSQL。未配置 `DATABASE_URL` 时 API 仍可运行纯核研究路径，持仓、自选、通知和研究历史会诚实返回 PostgreSQL 不可用。
 
 ```bash
-npm install
-export DATABASE_URL=postgresql:///echo_dev
-npm run db:migrate
-npm run dev
-npm run worker
+cp .env.example .env
+export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/echo_dev
+cargo xtask migrate
+
+# 终端一：API
+cargo run -p echo-api
+
+# 终端二：Leptos/WASM（/api 自动代理到 4180）
+cargo xtask web
+
+# 终端三：可恢复后台活动
+cargo run -p echo-worker
 ```
 
-私有部署可用 `npm run accounts:reset-owner` 重置租户账号。该命令要求显式提供 `ECHO_BOOTSTRAP_EMAIL` 与 `ECHO_BOOTSTRAP_PASSWORD`，并在单个事务中清空旧租户数据、创建唯一 owner 与 Pro 席位；密码只以 scrypt 哈希保存。
-
-Web 默认地址为 `http://localhost:5190`，API 默认地址为 `http://127.0.0.1:4180`。Temporal 地址可通过 `TEMPORAL_ADDRESS` 配置。
-
-## 验收
+首个 owner：
 
 ```bash
-export DATABASE_URL=postgresql:///echo_dev
-npm run lint
-npm run typecheck
-npm run lint:rust
-npm test
-npm run test:e2e
-npm run build --workspace @echo/web
-npm run db:recovery-drill
+ECHO_BOOTSTRAP_EMAIL=owner@example.com \
+ECHO_BOOTSTRAP_PASSWORD='use-a-long-password' \
+cargo xtask bootstrap-owner
 ```
 
-测试体系由领域单测、PostgreSQL/RLS 集成测试、唯一 API 契约测试、Temporal 可重放测试和 Playwright 核心链路组成。恢复演练会创建隔离数据库，执行真实备份与恢复，核对关键表行数和强制 RLS 后自动销毁演练库。
+默认地址：Web `http://127.0.0.1:5191`，API `http://127.0.0.1:4180`。
 
-## 环境变量
+## 验收门禁
 
-核心变量：
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo check -p echo-web --target wasm32-unknown-unknown
+cargo xtask web
 
-```text
-DATABASE_URL=
-REDIS_URL=redis://127.0.0.1:6379
-TEMPORAL_ADDRESS=127.0.0.1:7233
-TEMPORAL_NAMESPACE=default
-TEMPORAL_TASK_QUEUE=echo-research
-OTEL_EXPORTER_OTLP_ENDPOINT=
+# 已启动 API、Trunk 和 chromedriver/geckodriver 后：
+cargo xtask e2e
 ```
 
-全集见 [.env.example](.env.example)，其中每个变量都有真实代码消费方。
+浏览器验收位于 `crates/echo-e2e`，使用 Rust WebDriver 客户端检查真实研究、 自选、持仓和设置交互；没有浏览器驱动时它不会阻塞普通单测。
 
-模型和数据供应商密钥均只允许存在于服务端环境。缺少外部数据时，产品明确显示“未核到”，不生成替代数字。商用环境只允许选择授权元数据标记为可商用的适配器。
+## 外部数据与配置
 
-## 文档
+Finnhub（美股，有 key 时优先）→ Yahoo Chart（美/港研究源）是实时行情降级链。免费源标记为不可商用，`ECHO_COMMERCIAL_MODE=1` 时会被整个路由排除，绝不会悄悄兜底。模型、行情、Tavily 密钥只在服务端环境读取。
 
-- [产品计划与验收底账](docs/PLAN.md)
-- [文档导航](docs/README.md)
-- [仓库目录与代码归属](docs/architecture/repository-layout.md)
+完整变量见 [.env.example](.env.example)。
+
+## 目录
+
+- `crates/echo-domain`：纯意图、估值、财务衍生与数字护栏。
+- `crates/echo-application`：研究提示词、模型网关和应用编排。
+- `crates/echo-api`：axum 鉴权、研究、工作区和 SSE 边界。
+- `crates/echo-db`：sqlx 仓储、迁移、RLS、通知咽喉与调度状态。
+- `crates/echo-data`：授权感知数据源、质量门、熔断和行情写入。
+- `crates/echo-worker`：九类可恢复后台活动。
+- `crates/echo-web`：Leptos/WASM 工作区。
+- `crates/echo-e2e`：Rust WebDriver 验收。
+- `migrations`：编译进 `echo-db` 的 PostgreSQL 迁移正文。

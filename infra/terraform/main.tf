@@ -220,7 +220,7 @@ resource "aws_iam_role_policy_attachment" "execution" {
 }
 resource "aws_iam_role_policy" "execution_secrets" {
   role   = aws_iam_role.execution.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = [aws_secretsmanager_secret.database.arn, var.temporal_api_key_secret_arn, var.otel_headers_secret_arn] }] })
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = [aws_secretsmanager_secret.database.arn, var.otel_headers_secret_arn] }] })
 }
 
 resource "aws_iam_role" "task" {
@@ -234,17 +234,12 @@ resource "aws_iam_role_policy" "backup" {
 
 locals {
   common_environment = [
-    { name = "NODE_ENV", value = var.environment },
+    { name = "ECHO_ENV", value = var.environment },
     { name = "AWS_REGION", value = var.aws_region },
-    { name = "TEMPORAL_ADDRESS", value = var.temporal_address },
-    { name = "TEMPORAL_NAMESPACE", value = var.temporal_namespace },
-    { name = "TEMPORAL_TLS", value = "1" },
-    { name = "TEMPORAL_TASK_QUEUE", value = "echo-research" },
     { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = var.otel_exporter_otlp_endpoint }
   ]
   common_secrets = [
     { name = "DATABASE_URL", valueFrom = "${aws_secretsmanager_secret.database.arn}:DATABASE_URL::" },
-    { name = "TEMPORAL_API_KEY", valueFrom = var.temporal_api_key_secret_arn },
     { name = "OTEL_EXPORTER_OTLP_HEADERS", valueFrom = var.otel_headers_secret_arn }
   ]
 }

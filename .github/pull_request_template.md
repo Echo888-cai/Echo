@@ -4,12 +4,14 @@
 
 ## 验证
 
-- [ ] `npm test`
-- [ ] `npm run lint`
-- [ ] `npm run typecheck`
+- [ ] `cargo fmt --all -- --check`
+- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
+- [ ] `cargo test --workspace`
+- [ ] `cargo check -p echo-web --target wasm32-unknown-unknown`
 - [ ] 浏览器可见改动已完成三档视口 × 双主题验收
 - [ ] 私有数据改动包含跨用户隔离测试
 - [ ] 外部数据改动已在非 CI 环境真实验证
+- [ ] 若涉及页面流程，已运行 `cargo xtask e2e`
 
 ## 风险检查
 

@@ -1,9 +1,9 @@
-# Echo Research 文档导航
+# 文档导航
 
-- [PLAN.md](PLAN.md)：唯一产品计划、架构完成底账、发布门禁和后续路线图。
-- [architecture/repository-layout.md](architecture/repository-layout.md)：仓库目录、代码归属和新增文件规则。
-- [architecture/system-overview.md](architecture/system-overview.md)：运行时架构图、部署拓扑（ECS/RDS/只读副本/Proxy/WAF）、CI/CD 流水线说明、本地运行手册和容量测试工具。
-- [architecture/conversation-research-engine.md](architecture/conversation-research-engine.md)：意图分层、上下文与长期记忆、证据护栏、Rust 边界及 Honeclaw 差距分析。
-- [../README.md](../README.md)：项目简介、本地启动、环境变量和常用验收命令。
+- [PLAN.md](PLAN.md)：当前 Rust 单栈目标、验收底账和仍有边界的功能。
+- [architecture/repository-layout.md](architecture/repository-layout.md)：crate 归属与新增代码规则。
+- [architecture/system-overview.md](architecture/system-overview.md)：运行时拓扑、数据质量和租户边界。
+- [architecture/conversation-research-engine.md](architecture/conversation-research-engine.md)：研究回答的意图、估值和事实护栏。
+- [qa/README.md](qa/README.md)：Cargo 与 Rust WebDriver 验收门禁。
 
-文档只描述当前唯一架构。历史迁移说明、已退役接口和旧数据库操作手册不保留在主仓库，避免被误当成有效运行路径。
+文档只描述当前架构；退役的 Node/Python/React 实现不再作为有效运行路径维护。

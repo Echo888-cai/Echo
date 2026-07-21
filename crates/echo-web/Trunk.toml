@@ -1,0 +1,10 @@
+[build]
+target = "index.html"
+
+[serve]
+# 开发端口与 axum API 分离；同源 /api 请求由 Trunk 代理到 axum。
+port = 5191
+open = false
+
+[[proxy]]
+backend = "http://127.0.0.1:4180/api"

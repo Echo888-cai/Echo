@@ -1,22 +1,32 @@
 [workspace]
 resolver = "3"
 members = [
+    # Cargo 单入口工程任务（check / web / e2e / migrate / release）。
+    "xtask",
     # 金融定点算术内核（Money / Decimal，二进制浮点只允许出现在展示边界）
     "crates/finance-core",
-    # 纯领域逻辑：估值、数字护栏、意图路由、财务衍生——从 packages/domain 的 JS 绞杀迁入
+    # HTTP 与 WASM 共用的 serde 契约（请求/响应只定义一次）。
+    "crates/echo-contracts",
+    # 服务端环境配置单一入口；业务 crate 不直接散读环境变量。
+    "crates/echo-config",
+    # Rust 原生日志与追踪初始化。
+    "crates/echo-observability",
+    # 纯领域逻辑：估值、数字护栏、意图路由与财务衍生。
     "crates/echo-domain",
     # 用例编排：研究链路（取数 → 估值 → 作答 → 护栏 → 落库）
     "crates/echo-application",
     # 持久化与租户 RLS（sqlx + PostgreSQL）
     "crates/echo-db",
-    # HTTP/SSE 边界（axum），替代 Hono+tRPC 的 /api/ask 等路由
+    # 数据源授权、质量门、熔断与外部适配器；所有 HTTP 取数只从这里出入口。
+    "crates/echo-data",
+    # HTTP/SSE 边界（axum）与认证路由。
     "crates/echo-api",
-    # 后台工作流（业绩复盘、证伪巡检），替代 Temporal worker
+    # 后台工作流（业绩复盘、证伪巡检）与可恢复调度。
     "crates/echo-worker",
-    # 前端（Leptos/WASM），替代 React/PWA
+    # 前端（Leptos/WASM）。
     "crates/echo-web",
-    # 迁移期保留：给尚存的 TS 应用层调用同一套 Rust 定点内核的 NAPI 桥
-    "packages/finance-native",
+    # 浏览器验收：Rust WebDriver 客户端，测试真实 Leptos 页面和核心交互。
+    "crates/echo-e2e",
 ]
 
 [workspace.package]
@@ -29,17 +39,39 @@ authors = ["Echo Research"]
 # 避免同一依赖在多个 crate 里漂移出不同版本（工作区级单一事实源）。
 [workspace.dependencies]
 echo-finance-core = { path = "crates/finance-core" }
+echo-contracts = { path = "crates/echo-contracts" }
+echo-config = { path = "crates/echo-config" }
+echo-observability = { path = "crates/echo-observability" }
 echo-domain = { path = "crates/echo-domain" }
 echo-application = { path = "crates/echo-application" }
 echo-db = { path = "crates/echo-db" }
+echo-data = { path = "crates/echo-data" }
 
 rust_decimal = { version = "1.36", default-features = false, features = ["serde", "std"] }
 rust_decimal_macros = "1.36"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["fs", "macros", "process", "rt-multi-thread", "sync", "time"] }
+tokio-stream = "0.1"
+futures-util = { version = "0.3", default-features = false }
 tracing = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+base64 = "0.22"
+hex = "0.4"
+rand = "0.8"
+sha2 = "0.10"
+subtle = "2"
+uuid = { version = "1", features = ["v4"] }
+# 模型网关的 HTTP 客户端：rustls 与 sqlx 的 tls-rustls 对齐（不引 OpenSSL）；
+# 只用 json + 流式 body，OpenAI 兼容协议（DeepSeek/OpenAI）。
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "json",
+    "stream",
+] }
+url = "2"
+fantoccini = { version = "0.22", default-features = false, features = ["rustls-tls"] }
 
 [profile.release]
 lto = "thin"

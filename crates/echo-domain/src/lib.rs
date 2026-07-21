@@ -1,13 +1,12 @@
 //! Echo Research 领域内核——纯逻辑，不碰时钟、数据库、网络或环境变量。
 //!
-//! 绞杀式迁移账本（从 `packages/domain/*.js` 迁入 Rust 定点，逐块达到平价后摘掉旧件）：
+//! 领域模块清单：
 //!   * [x] `valuation`   ← valuation.js（多方法估值 + 阶段感知 EV/Sales + 可信度护栏）
 //!   * [x] `fact_guard`  ← factGuard.js（数字护栏：中文财经抽取 + 数量级/符号/币种/日期核对）
 //!   * [x] `intent`      ← intentClassifier.js（意图路由 + 深度 + 阶段计划，中英双语一等公民）
 //!   * [x] `derivations` ← research.ts 的 deriveAnnualEps / 比率衍生（TTM 桥接 + EPS 年化护栏）
 //!
-//! 纯领域核到此收口。迁移期这套逻辑经 `echo-finance-node`（NAPI）暴露给尚存的 TS 应用层，
-//! 两栈算同一份数字。
+//! 领域核保持无副作用，可在服务端与浏览器端复用并独立测试。
 
 pub mod derivations;
 pub mod fact_guard;
