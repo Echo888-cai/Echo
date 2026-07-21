@@ -962,7 +962,9 @@ mod tests {
     async fn live_register_session_logout_round_trip() {
         let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
         let pool = echo_db::connect(&database_url, 3).await.expect("connect");
-        echo_db::migrate(&pool).await.expect("migrate");
+        if std::env::var("ECHO_SKIP_TEST_MIGRATE").ok().as_deref() != Some("1") {
+            echo_db::migrate(&pool).await.expect("migrate");
+        }
         let auth = AuthService::new(&pool);
         let owner = auth
             .create_owner("owner@example.com", "owner-password", Some("Owner".into()))

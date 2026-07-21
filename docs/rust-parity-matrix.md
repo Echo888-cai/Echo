@@ -109,7 +109,7 @@
 
 | Capability | Old surface | Rust landing | Status | Tests | Product decision | Owner/PR | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Auth repos | TS | `repositories/auth.rs` | rust-accepted | ignored live | keep | | CI 活库未强制 |
+| Auth repos | TS | `repositories/auth.rs` | rust-accepted | CI ignored→opt-in live | keep | ci-postgres | CI 用 `echo_app` NOBYPASSRLS 跑 |
 | Workspace watch/portfolio/prefs/sessions/notifications | TS | `workspace.rs` | skeleton | ignored RLS | keep | | |
 | Operations / LLM audit / scheduler | TS | `operations.rs` | skeleton | ignored | keep | | |
 | Company profiles / snapshots / memory | TS | 表在、仓储缺 | pending | — | keep | | |
