@@ -25,8 +25,8 @@ use echo_application::model_gateway::{
     model_answer_stream,
 };
 use echo_application::{
-    AuthError, AuthService, PersistResearchSession, ResearchPorts, ResearchService,
-    ResolvedCompany, market_snapshot_from_rows, resolved_company_from_rows,
+    AuthError, AuthService, LoadedFundamentals, PersistResearchSession, ResearchPorts,
+    ResearchService, ResolvedCompany, market_snapshot_from_rows, resolved_company_from_rows,
 };
 use echo_config::ApiConfig;
 use echo_contracts::{
@@ -40,13 +40,15 @@ use echo_contracts::{
     ResearchSessionsResponse, ResearchStreamEvent, TickerQuery, UnreadResponse, UserPreferences,
     UserRole, WatchEntry, WatchListResponse, WatchMutationRequest,
 };
-use echo_data::QuoteService;
+use echo_data::{
+    FmpSearchService, FundamentalsRow, FundamentalsService, QuoteService, pct_change, pct_of,
+};
 use echo_db::{
     CompanyRepository, MarketRepository, NotificationsRepository, Pool, PortfolioRepository,
     PortfolioUpsert, PreferencesPatch, PreferencesRepository, ResearchSessionRepository,
     SaveResearchSession, UserPreferencesRow, WatchlistRepository,
 };
-use echo_domain::MarketSnapshot;
+use echo_domain::{Financials, MarketSnapshot};
 use futures_util::Stream;
 use std::convert::Infallible;
 use tokio_stream::StreamExt;
@@ -58,10 +60,13 @@ const SESSION_MAX_AGE_SECONDS: i64 = 30 * 86_400;
 
 /// 共享状态：可选的数据库连接池。未配 `DATABASE_URL` 时为 `None`——`/api/ask` 只吃请求体里带的
 /// 数字（纯核路径，可离库端到端验证）；配了库则在缺行情时从 `echo-db` 兜底最新快照。
+/// FMP fundamentals/search 不依赖数据库，有配置即可注入研究端口。
 #[derive(Clone)]
 pub struct AppState {
     pool: Option<Pool>,
     quotes: Option<QuoteService>,
+    fundamentals: Option<FundamentalsService>,
+    fmp_search: Option<FmpSearchService>,
     auth_disabled: bool,
     auth_disabled_user_id: String,
     secure_cookie: bool,
@@ -73,6 +78,8 @@ impl AppState {
         Self {
             pool: None,
             quotes: None,
+            fundamentals: None,
+            fmp_search: None,
             auth_disabled: true,
             auth_disabled_user_id: "local".into(),
             secure_cookie: false,
@@ -664,10 +671,35 @@ async fn research_sessions_clear(
     Ok(Json(ChangedCountResponse { changed }))
 }
 
-/// HTTP 边界上的研究端口适配：DB 补数、行情刷新、模型生成、会话落库。
+/// HTTP 边界上的研究端口适配：DB 补数、行情刷新、FMP 财务、模型生成、会话落库。
 /// 持有 `AppState` 所有权，以便流式用例在 SSE 生命周期内驱动。
 struct ApiResearchPorts {
     state: AppState,
+}
+
+fn financials_from_fmp_row(row: &FundamentalsRow) -> Financials {
+    Financials {
+        provider_ok: true,
+        currency: row.currency.clone(),
+        revenue: row.revenue,
+        gross_profit: row.gross_profit,
+        operating_income: row.operating_income,
+        net_income: row.net_income,
+        operating_cash_flow: row.operating_cash_flow,
+        cash_and_equivalents: row.cash_and_equivalents,
+        net_cash: row.net_cash,
+        // 单季 EPS：标为未年化，禁止 price/eps 反推 PE；估值用 pe_ttm。
+        eps: row.eps,
+        eps_annualized: Some(false),
+        pe: row.pe_ttm,
+        revenue_growth: pct_change(row.revenue, row.revenue_prior),
+        gross_margin: pct_of(row.gross_profit, row.revenue),
+        operating_margin: pct_of(row.operating_income, row.revenue),
+        net_margin: pct_of(row.net_income, row.revenue),
+        profit_growth: pct_change(row.net_income, row.net_income_prior),
+        period: row.period_label.clone().or_else(|| row.period_end.clone()),
+        ..Default::default()
+    }
 }
 
 impl ResearchPorts for ApiResearchPorts {
@@ -699,6 +731,28 @@ impl ResearchPorts for ApiResearchPorts {
                 Err(error.to_string())
             }
         }
+    }
+
+    async fn load_fundamentals(&self, ticker: &str) -> Option<LoadedFundamentals> {
+        let service = self.state.fundamentals.as_ref()?;
+        let result = service.fetch(ticker).await;
+        if !result.provider_ok {
+            return None;
+        }
+        let row = result.latest()?;
+        let company_name = match self.state.fmp_search.as_ref() {
+            Some(search) => search
+                .exact_us_hit(ticker)
+                .await
+                .map(|hit| hit.name)
+                .filter(|name| !name.is_empty()),
+            None => None,
+        };
+        Some(LoadedFundamentals {
+            pe_ttm: row.pe_ttm,
+            company_name,
+            financials: financials_from_fmp_row(row),
+        })
     }
 
     async fn complete_answer(&self, system: &str, user: &str, user_id: &str) -> Option<String> {
@@ -852,12 +906,16 @@ pub async fn run() {
             None
         }
     };
-    let quotes = pool
-        .clone()
-        .map(|pool| QuoteService::new(pool, config.data_sources).expect("build quote service"));
+    let quotes = pool.clone().map(|pool| {
+        QuoteService::new(pool, config.data_sources.clone()).expect("build quote service")
+    });
+    let fundamentals = FundamentalsService::new(config.data_sources.clone()).ok();
+    let fmp_search = FmpSearchService::new(config.data_sources.clone()).ok();
     let app = router(AppState {
         pool,
         quotes,
+        fundamentals,
+        fmp_search,
         auth_disabled: config.auth_disabled,
         auth_disabled_user_id: config.auth_disabled_user_id,
         secure_cookie: config.secure_cookie,
@@ -989,6 +1047,8 @@ mod tests {
         let app = router(AppState {
             pool: Some(pool),
             quotes: None,
+            fundamentals: None,
+            fmp_search: None,
             auth_disabled: false,
             auth_disabled_user_id: "local".into(),
             secure_cookie: false,

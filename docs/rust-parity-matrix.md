@@ -122,8 +122,8 @@ All nine schedules are defined and can execute activities, but no atomic claim/l
 | Finnhub quote | `finnhubQuoteAdapter` | `echo-data::QuoteService` | rust-accepted | quote/router/quality tests | keep | #43 | Decimal 映射、质量门、熔断、写库已存在。 |
 | Yahoo quote | `yahooQuoteAdapter` | `echo-data::QuoteService` | rust-accepted | quote/router/quality tests | keep | #43 | 同上；商用模式必须遵守授权门。 |
 | PostgreSQL quote read | `postgresQuoteAdapter` | `MarketRepository` | replaced | repository tests | keep | #43 | 已由 Rust DB repository 承接。 |
-| FMP fundamentals | `fmpFundamentalsAdapter` | — | pending | — | keep | Phase 2 | 配置含 `FMP_API_KEY`，但没有 consumer。 |
-| FMP company search | `fmpSearchAdapter` | — | pending | — | keep | Phase 2 | resolve/verify 必需链路之一。 |
+| FMP fundamentals | `fmpFundamentalsAdapter` | `echo-data::FundamentalsService` | rust-accepted | fixture + commercial/HK gates | keep | Phase 2 | US-only stable 三表；商用模式拒绝；`ResearchPorts::load_fundamentals` 已接线。 |
+| FMP company search | `fmpSearchAdapter` | `echo-data::FmpSearchService` | skeleton | normalize/filter unit tests | keep | Phase 2 | search-symbol/name + 美股主板过滤；完整 resolve/verify/建档链未完成。 |
 | Tavily evidence search | `tavilySearchAdapter` | — | pending | — | keep | Phase 2 | 配置含 `TAVILY_API_KEY`，但没有 consumer。 |
 | Finnhub earnings calendar | `finnhubCalendarAdapter` | — | pending | — | keep | Phase 2 | 日历/业绩数据端口未迁移。 |
 | Finnhub peers | `finnhubPeersAdapter` | — | pending | — | keep | Phase 2 | 同业比较事实未迁移。 |

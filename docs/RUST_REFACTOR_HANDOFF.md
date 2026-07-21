@@ -61,7 +61,7 @@ git switch -c codex/rust-parity-foundation
 - `echo-application/src/research.rs` 明确自称“骨架”，目前主要 re-export 领域意图，没有统一的 `ResearchService` 用例编排。
 - 关键取数、估值、模型、护栏和落库仍集中在 `echo-api/src/lib.rs`，API 边界过重，application 层没有真正接管用例。
 - Web 发送 `AskRequest::minimal`，不会提供财务字段；服务端当前只会自动补行情快照，不会从 DB 或外部源自动补完整财报、同业、网页证据、公告和业绩日历。因此真实 Web 研究通常只有价格/PE 等少量事实。
-- `FMP_API_KEY`、`TAVILY_API_KEY` 已进入配置结构，但当前 Rust 数据层没有实际消费相应 fundamentals/search/evidence 适配器。
+- `FMP_API_KEY` 已由 `echo-data::FundamentalsService` / `FmpSearchService` 消费（美股三表 + 搜索候选）；`TAVILY_API_KEY` 仍无 evidence consumer。完整公司 resolve/verify/建档链与 postgres fundamentals 仍待 Phase 2。
 - 请求仍允许客户端直接提交财务数字；正式研究链不应把未验证的客户端数字当作可信事实。
 - 对比意图仍会被识别，但当前请求和事实组装只有一个 ticker，没有已隔离的第二家公司完整事实腿。
 

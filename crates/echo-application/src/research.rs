@@ -52,7 +52,15 @@ pub struct PersistResearchSession {
     pub turn_count: Option<i32>,
 }
 
-/// 研究副作用端口——DB / 行情 / 模型 / 落库都从这里注入。
+/// 外部财务事实补数结果——请求体缺数时由端口注入；`pe_ttm` 优先于行情 PE。
+#[derive(Clone, Debug, Default)]
+pub struct LoadedFundamentals {
+    pub financials: Financials,
+    pub pe_ttm: Option<rust_decimal::Decimal>,
+    pub company_name: Option<String>,
+}
+
+/// 研究副作用端口——DB / 行情 / 财务 / 模型 / 落库都从这里注入。
 pub trait ResearchPorts: Send + Sync {
     fn load_company_market(
         &self,
@@ -60,6 +68,12 @@ pub trait ResearchPorts: Send + Sync {
     ) -> impl Future<Output = Option<(ResolvedCompany, MarketSnapshot)>> + Send;
 
     fn refresh_quote(&self, ticker: &str) -> impl Future<Output = Result<(), String>> + Send;
+
+    /// 请求体未带财务数字时补数。失败/缺源返回 `None`（保持未核到）。
+    fn load_fundamentals(
+        &self,
+        ticker: &str,
+    ) -> impl Future<Output = Option<LoadedFundamentals>> + Send;
 
     fn complete_answer(
         &self,
@@ -126,7 +140,7 @@ impl ResearchService {
                 }
             }
         }
-        let financials = Financials {
+        let mut financials = Financials {
             provider_ok: req.revenue.is_some() || req.eps.is_some(),
             eps: req.eps,
             eps_annualized: req.eps_annualized,
@@ -141,6 +155,17 @@ impl ResearchService {
             currency: req.reporting_currency.clone(),
             ..Default::default()
         };
+        if !financials.provider_ok {
+            if let Some(loaded) = ports.load_fundamentals(&req.ticker).await {
+                financials = loaded.financials;
+                if market.pe.is_none() {
+                    market.pe = loaded.pe_ttm;
+                }
+                if company.name_zh.is_none() {
+                    company.name_zh = loaded.company_name;
+                }
+            }
+        }
         ResearchFacts {
             company,
             market,
@@ -456,6 +481,7 @@ mod tests {
     struct FakePorts {
         market: Option<(ResolvedCompany, MarketSnapshot)>,
         refresh_ok: bool,
+        fundamentals: Option<LoadedFundamentals>,
         answer: Option<String>,
         stream_chunks: Vec<String>,
         stream_fail: Option<String>,
@@ -478,6 +504,10 @@ mod tests {
             } else {
                 Err("unavailable".into())
             }
+        }
+
+        async fn load_fundamentals(&self, _ticker: &str) -> Option<LoadedFundamentals> {
+            self.fundamentals.clone()
         }
 
         async fn complete_answer(
@@ -610,6 +640,64 @@ mod tests {
         let saved = ports.saved.lock().expect("lock");
         assert_eq!(saved.len(), 1);
         assert_eq!(saved[0].company_name.as_deref(), Some("英伟达"));
+    }
+
+    #[tokio::test]
+    async fn fundamentals_port_fills_when_request_has_no_financials() {
+        let ports = FakePorts {
+            fundamentals: Some(LoadedFundamentals {
+                financials: Financials {
+                    provider_ok: true,
+                    revenue: Some(dec!(100)),
+                    eps: Some(dec!(1.5)),
+                    eps_annualized: Some(false),
+                    ..Default::default()
+                },
+                pe_ttm: Some(dec!(28)),
+                company_name: Some("Apple Inc.".into()),
+            }),
+            answer: Some("ok".into()),
+            ..FakePorts::default()
+        };
+        let req = AskRequest {
+            question: "估值".into(),
+            ticker: "AAPL".into(),
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let facts = ResearchService::assemble_facts(&ports, &req).await;
+        assert!(facts.financials.provider_ok);
+        assert_eq!(facts.financials.revenue, Some(dec!(100)));
+        assert_eq!(facts.financials.eps_annualized, Some(false));
+        assert_eq!(facts.market.pe, Some(dec!(28)));
+        assert_eq!(facts.company.name_zh.as_deref(), Some("Apple Inc."));
+    }
+
+    #[tokio::test]
+    async fn request_financials_win_over_fundamentals_port() {
+        let ports = FakePorts {
+            fundamentals: Some(LoadedFundamentals {
+                financials: Financials {
+                    provider_ok: true,
+                    revenue: Some(dec!(1)),
+                    ..Default::default()
+                },
+                pe_ttm: Some(dec!(99)),
+                company_name: Some("ignored".into()),
+            }),
+            ..FakePorts::default()
+        };
+        let req = AskRequest {
+            question: "估值".into(),
+            ticker: "AAPL".into(),
+            revenue: Some(dec!(50)),
+            pe: Some(dec!(20)),
+            ..Default::default()
+        };
+        let facts = ResearchService::assemble_facts(&ports, &req).await;
+        assert_eq!(facts.financials.revenue, Some(dec!(50)));
+        assert_eq!(facts.market.pe, Some(dec!(20)));
+        assert!(facts.company.name_zh.is_none());
     }
 
     #[tokio::test]
