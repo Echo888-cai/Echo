@@ -4,16 +4,20 @@
 //! 提示词 → 生成 → 护栏 → 持久化。端口用假实现即可做无 IO 单测。
 
 use crate::answer_prompt::{AnswerContext, build_system_prompt, build_user_prompt};
+use crate::model_gateway::{ModelStreamEvent, ModelStreamStart};
 use crate::{DecisionPanel, ResolvedCompany, build_panel};
 use echo_contracts::{
-    AnswerSource, AskRequest, AskResponse, AssetStageView, GuardView, MethodBandView, RouteView,
-    ValuationView,
+    AnswerSource, AskRequest, AskResponse, AssetStageView, GuardView, MethodBandView,
+    ResearchStreamDelta, ResearchStreamError, ResearchStreamEvent, ResearchStreamFinal,
+    ResearchStreamGuard, ResearchStreamMeta, ResearchStreamStage, ResearchStreamStageName,
+    RouteView, ValuationView,
 };
 use echo_domain::{
     AssetStage, Company, Financials, MarketSnapshot, RegistrySources, ResearchRoute,
     build_facts_registry, build_soft_note, route_research_intent, verify_answer_numbers,
 };
 use std::future::Future;
+use tokio::sync::mpsc;
 
 pub use echo_domain::intent::{
     ResearchDepth, ResearchIntent, classify_research_intent, plan_research_stages,
@@ -63,6 +67,14 @@ pub trait ResearchPorts: Send + Sync {
         user: &str,
         user_id: &str,
     ) -> impl Future<Output = Option<String>> + Send;
+
+    /// 流式作答。返回 [`ModelStreamStart::Unavailable`] 时编排层走 structured unavailable。
+    fn stream_answer(
+        &self,
+        system: String,
+        user: String,
+        user_id: String,
+    ) -> impl Future<Output = ModelStreamStart> + Send;
 
     fn save_session(
         &self,
@@ -164,60 +176,12 @@ impl ResearchService {
             }
         };
 
-        let fact_guard = answer.as_deref().map(|draft| {
-            let registry = build_facts_registry(&RegistrySources {
-                ticker: &req.ticker,
-                native_currency: req
-                    .reporting_currency
-                    .as_deref()
-                    .or(req.quote_currency.as_deref()),
-                market: Some(&facts.market),
-                financials: Some(&facts.financials),
-                valuation: Some(&panel.valuation),
-                ..Default::default()
-            });
-            let report = verify_answer_numbers(draft, &registry);
-            GuardView {
-                total: report.checked.len(),
-                pass: report.pass_count(),
-                soft: report.soft_count,
-                hard: report.hard_count,
-                has_hard_fail: report.has_hard_fail(),
-                soft_note: build_soft_note(&report),
-            }
-        });
+        let fact_guard = answer
+            .as_deref()
+            .map(|draft| guard_view(&req, &facts, &panel, draft));
 
-        let response = AskResponse {
-            ticker: panel.ticker.clone(),
-            route: route_view(&route),
-            data_completeness: panel.data_completeness,
-            connected_sources: panel
-                .connected_sources
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect(),
-            valuation: valuation_view(&panel),
-            answer: answer.clone(),
-            answer_source,
-            fact_guard,
-        };
-
-        let mut persisted = false;
-        let session = PersistResearchSession {
-            ticker: req.ticker.clone(),
-            company_name: facts.company.name_zh.clone(),
-            question: Some(req.question.clone()),
-            report_markdown: response.answer.clone(),
-            decision_panel: serde_json::to_value(&response.valuation).ok(),
-            full_research: response.answer.clone(),
-            data_sources: Some(
-                serde_json::json!({ "connected": response.connected_sources.clone() }),
-            ),
-            turn_count: Some(1),
-        };
-        if ports.save_session(user_id, session).await.is_ok() {
-            persisted = true;
-        }
+        let response = build_ask_response(&panel, &route, answer, answer_source, fact_guard);
+        let persisted = persist_outcome(ports, user_id, &req, &facts, &response).await;
 
         ResearchOutcome {
             response,
@@ -226,6 +190,213 @@ impl ResearchService {
             persisted,
         }
     }
+
+    /// 类型化流式研究：事件顺序为 stage → meta → generating → delta* → verifying → guard →
+    /// persisting → final；模型失败则 error 且不落库。
+    pub fn ask_stream<P>(
+        ports: P,
+        user_id: String,
+        req: AskRequest,
+    ) -> mpsc::Receiver<ResearchStreamEvent>
+    where
+        P: ResearchPorts + Send + Sync + 'static,
+    {
+        let (tx, rx) = mpsc::channel(32);
+        tokio::spawn(async move {
+            if let Err(message) = drive_stream(&ports, &user_id, req, &tx).await {
+                let _ = tx
+                    .send(ResearchStreamEvent::Error(ResearchStreamError { message }))
+                    .await;
+            }
+        });
+        rx
+    }
+}
+
+async fn drive_stream<P: ResearchPorts>(
+    ports: &P,
+    user_id: &str,
+    req: AskRequest,
+    tx: &mpsc::Sender<ResearchStreamEvent>,
+) -> Result<(), String> {
+    let send = |event: ResearchStreamEvent| async {
+        tx.send(event)
+            .await
+            .map_err(|_| "stream consumer dropped".to_string())
+    };
+
+    send(ResearchStreamEvent::Stage(ResearchStreamStage {
+        name: ResearchStreamStageName::Assembling,
+    }))
+    .await?;
+
+    let route = route_research_intent(&req.question);
+    let facts = ResearchService::assemble_facts(ports, &req).await;
+    let panel = build_panel(&facts.company, &facts.market, &facts.financials, None);
+
+    send(ResearchStreamEvent::Meta(ResearchStreamMeta {
+        ticker: panel.ticker.clone(),
+        route: route_view(&route),
+        data_completeness: panel.data_completeness,
+        connected_sources: panel
+            .connected_sources
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+        valuation: valuation_view(&panel),
+    }))
+    .await?;
+
+    let (answer, answer_source) = if let Some(draft) = req.draft_answer.clone() {
+        send(ResearchStreamEvent::Stage(ResearchStreamStage {
+            name: ResearchStreamStageName::Generating,
+        }))
+        .await?;
+        send(ResearchStreamEvent::Delta(ResearchStreamDelta {
+            text: draft.clone(),
+        }))
+        .await?;
+        (Some(draft), AnswerSource::Draft)
+    } else {
+        send(ResearchStreamEvent::Stage(ResearchStreamStage {
+            name: ResearchStreamStageName::Generating,
+        }))
+        .await?;
+        let system = build_system_prompt();
+        let user_prompt = build_user_prompt(&AnswerContext {
+            question: &req.question,
+            name_zh: facts.company.name_zh.as_deref(),
+            panel: &panel,
+            market: &facts.market,
+            financials: &facts.financials,
+        });
+        match ports
+            .stream_answer(system, user_prompt, user_id.to_string())
+            .await
+        {
+            ModelStreamStart::Unavailable => (None, AnswerSource::Unavailable),
+            ModelStreamStart::Ready(mut model_rx) => {
+                let mut accumulated = String::new();
+                while let Some(event) = model_rx.recv().await {
+                    match event {
+                        ModelStreamEvent::Delta(text) => {
+                            accumulated.push_str(&text);
+                            send(ResearchStreamEvent::Delta(ResearchStreamDelta { text })).await?;
+                        }
+                        ModelStreamEvent::Completed => {
+                            break;
+                        }
+                        ModelStreamEvent::Failed { message } => {
+                            return Err(message);
+                        }
+                    }
+                }
+                if accumulated.is_empty() {
+                    (None, AnswerSource::Unavailable)
+                } else {
+                    (Some(accumulated), AnswerSource::Generated)
+                }
+            }
+        }
+    };
+
+    send(ResearchStreamEvent::Stage(ResearchStreamStage {
+        name: ResearchStreamStageName::Verifying,
+    }))
+    .await?;
+
+    let fact_guard = answer
+        .as_deref()
+        .map(|draft| guard_view(&req, &facts, &panel, draft));
+    send(ResearchStreamEvent::Guard(ResearchStreamGuard {
+        fact_guard: fact_guard.clone(),
+    }))
+    .await?;
+
+    let response = build_ask_response(&panel, &route, answer, answer_source, fact_guard);
+
+    send(ResearchStreamEvent::Stage(ResearchStreamStage {
+        name: ResearchStreamStageName::Persisting,
+    }))
+    .await?;
+    let persisted = persist_outcome(ports, user_id, &req, &facts, &response).await;
+    send(ResearchStreamEvent::Final(ResearchStreamFinal {
+        response,
+        persisted,
+    }))
+    .await?;
+    Ok(())
+}
+
+fn guard_view(
+    req: &AskRequest,
+    facts: &ResearchFacts,
+    panel: &DecisionPanel,
+    draft: &str,
+) -> GuardView {
+    let registry = build_facts_registry(&RegistrySources {
+        ticker: &req.ticker,
+        native_currency: req
+            .reporting_currency
+            .as_deref()
+            .or(req.quote_currency.as_deref()),
+        market: Some(&facts.market),
+        financials: Some(&facts.financials),
+        valuation: Some(&panel.valuation),
+        ..Default::default()
+    });
+    let report = verify_answer_numbers(draft, &registry);
+    GuardView {
+        total: report.checked.len(),
+        pass: report.pass_count(),
+        soft: report.soft_count,
+        hard: report.hard_count,
+        has_hard_fail: report.has_hard_fail(),
+        soft_note: build_soft_note(&report),
+    }
+}
+
+fn build_ask_response(
+    panel: &DecisionPanel,
+    route: &ResearchRoute,
+    answer: Option<String>,
+    answer_source: AnswerSource,
+    fact_guard: Option<GuardView>,
+) -> AskResponse {
+    AskResponse {
+        ticker: panel.ticker.clone(),
+        route: route_view(route),
+        data_completeness: panel.data_completeness,
+        connected_sources: panel
+            .connected_sources
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+        valuation: valuation_view(panel),
+        answer,
+        answer_source,
+        fact_guard,
+    }
+}
+
+async fn persist_outcome<P: ResearchPorts>(
+    ports: &P,
+    user_id: &str,
+    req: &AskRequest,
+    facts: &ResearchFacts,
+    response: &AskResponse,
+) -> bool {
+    let session = PersistResearchSession {
+        ticker: req.ticker.clone(),
+        company_name: facts.company.name_zh.clone(),
+        question: Some(req.question.clone()),
+        report_markdown: response.answer.clone(),
+        decision_panel: serde_json::to_value(&response.valuation).ok(),
+        full_research: response.answer.clone(),
+        data_sources: Some(serde_json::json!({ "connected": response.connected_sources.clone() })),
+        turn_count: Some(1),
+    };
+    ports.save_session(user_id, session).await.is_ok()
 }
 
 fn route_view(route: &ResearchRoute) -> RouteView {
@@ -286,6 +457,9 @@ mod tests {
         market: Option<(ResolvedCompany, MarketSnapshot)>,
         refresh_ok: bool,
         answer: Option<String>,
+        stream_chunks: Vec<String>,
+        stream_fail: Option<String>,
+        stream_unavailable: bool,
         saved: Mutex<Vec<PersistResearchSession>>,
         fail_save: bool,
     }
@@ -315,6 +489,31 @@ mod tests {
             self.answer.clone()
         }
 
+        async fn stream_answer(
+            &self,
+            _system: String,
+            _user: String,
+            _user_id: String,
+        ) -> ModelStreamStart {
+            if self.stream_unavailable {
+                return ModelStreamStart::Unavailable;
+            }
+            let (tx, rx) = mpsc::channel(8);
+            let chunks = self.stream_chunks.clone();
+            let fail = self.stream_fail.clone();
+            tokio::spawn(async move {
+                for chunk in chunks {
+                    let _ = tx.send(ModelStreamEvent::Delta(chunk)).await;
+                }
+                if let Some(message) = fail {
+                    let _ = tx.send(ModelStreamEvent::Failed { message }).await;
+                } else {
+                    let _ = tx.send(ModelStreamEvent::Completed).await;
+                }
+            });
+            ModelStreamStart::Ready(rx)
+        }
+
         async fn save_session(
             &self,
             _user_id: &str,
@@ -326,6 +525,16 @@ mod tests {
             self.saved.lock().expect("lock").push(session);
             Ok(())
         }
+    }
+
+    async fn collect_stream(
+        mut rx: mpsc::Receiver<ResearchStreamEvent>,
+    ) -> Vec<ResearchStreamEvent> {
+        let mut out = Vec::new();
+        while let Some(event) = rx.recv().await {
+            out.push(event);
+        }
+        out
     }
 
     #[tokio::test]
@@ -401,5 +610,65 @@ mod tests {
         let saved = ports.saved.lock().expect("lock");
         assert_eq!(saved.len(), 1);
         assert_eq!(saved[0].company_name.as_deref(), Some("英伟达"));
+    }
+
+    #[tokio::test]
+    async fn typed_stream_emits_guard_and_final_after_deltas() {
+        let ports = FakePorts {
+            stream_chunks: vec!["现价约 ".into(), "100。".into()],
+            ..FakePorts::default()
+        };
+        let req = AskRequest::minimal("股价怎么样", "AAPL");
+        let events = collect_stream(ResearchService::ask_stream(ports, "u1".into(), req)).await;
+        let names: Vec<_> = events.iter().map(ResearchStreamEvent::event_name).collect();
+        assert_eq!(
+            names,
+            vec![
+                "stage", "meta", "stage", "delta", "delta", "stage", "guard", "stage", "final"
+            ]
+        );
+        let ResearchStreamEvent::Final(final_event) = events.last().expect("final") else {
+            panic!("expected final");
+        };
+        assert_eq!(final_event.response.answer.as_deref(), Some("现价约 100。"));
+        assert!(final_event.persisted);
+        assert_eq!(final_event.response.answer_source, AnswerSource::Generated);
+    }
+
+    #[tokio::test]
+    async fn typed_stream_failure_skips_persist() {
+        let ports = FakePorts {
+            stream_chunks: vec!["半句".into()],
+            stream_fail: Some("provider down".into()),
+            ..FakePorts::default()
+        };
+        let req = AskRequest::minimal("护城河", "0700.HK");
+        let events = collect_stream(ResearchService::ask_stream(ports, "u1".into(), req)).await;
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ResearchStreamEvent::Error(_)))
+        );
+        assert!(
+            events
+                .iter()
+                .all(|e| !matches!(e, ResearchStreamEvent::Final(_)))
+        );
+    }
+
+    #[tokio::test]
+    async fn typed_stream_save_failure_still_finalizes() {
+        let ports = FakePorts {
+            stream_chunks: vec!["全文".into()],
+            fail_save: true,
+            ..FakePorts::default()
+        };
+        let req = AskRequest::minimal("商业模式", "0700.HK");
+        let events = collect_stream(ResearchService::ask_stream(ports, "u1".into(), req)).await;
+        let ResearchStreamEvent::Final(final_event) = events.last().expect("final") else {
+            panic!("expected final");
+        };
+        assert!(!final_event.persisted);
+        assert_eq!(final_event.response.answer.as_deref(), Some("全文"));
     }
 }

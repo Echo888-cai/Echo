@@ -54,7 +54,7 @@ The baseline contained 45 REST surfaces: `/healthz` plus 44 registered REST cont
 | Submit feedback | `POST /api/feedback` | — | pending | — | keep | Phase 3 | `feedback` 表无完整 Rust repository/API。 |
 | Parse document | `POST /api/parse-document` | — | pending | — | keep | Phase 3 | 文件/文档解析及其安全边界未迁移。 |
 | Research answer | `POST /api/ask` | `ResearchService` + `echo-api` adapter | skeleton | application fake ports + API | keep | #44 | 编排已收口 application；完整取数/hard-fail/客户端事实隔离未完。 |
-| Research SSE | historical SSE on ask | `POST /api/ask/stream` | skeleton | partial | keep | Phase 4 | 仅文本 chunk；缺类型化 meta/delta/guard/final、终检与落库；Web 未消费。 |
+| Research SSE | historical SSE on ask | `POST /api/ask/stream` typed events | skeleton | application stream tests + contract tags | keep | typed-research-stream | meta/stage/delta/guard/final/error 已落地并在 final 后落库；Web 仍走非流式；缺取消传播 |
 | Chat alias | `POST /api/chat` | Unified `POST /api/ask` | replaced | ask contract tests | keep | #44 / Phase 3 | 统一研究入口可替代独立 chat；需 ADR/兼容说明。 |
 | Generate deep report | `POST /api/report/generate` | — | pending | — | keep | Phase 3–4 | 独立深度报告契约未迁移。 |
 | Discover | `POST /api/discover` | — | product-decide | — | product-decide | Product / ADR | 是否保留“发现”工作流未裁决。 |
