@@ -8,16 +8,24 @@ description = "Use-case orchestration for the research pipeline"
 
 [dependencies]
 echo-domain.workspace = true
+echo-contracts.workspace = true
 echo-db.workspace = true
 echo-finance-core.workspace = true
 rust_decimal.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 reqwest.workspace = true
 tokio.workspace = true
 futures-util.workspace = true
+base64.workspace = true
+chrono.workspace = true
+hex.workspace = true
+rand.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+scrypt = { version = "0.11", default-features = false }
 
 [dev-dependencies]
 # 只在写映射测试时用来构造 MarketRow.valid_time；不进入应用层公开 API。
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
 rust_decimal_macros.workspace = true

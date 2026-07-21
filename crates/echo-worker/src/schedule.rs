@@ -1,16 +1,15 @@
-//! 调度注册表与到期判定——绞杀 Temporal 的 `register-schedules.ts`。
+//! 调度注册表与到期判定。
 //!
 //! 9 个后台作业按 cron 触发。**到期判定是可恢复的纯函数**：给定「上次运行时刻」与「现在」，
 //! 用 cron 算出上次之后的下一触发点，若已 ≤ 现在即为到期。worker 重启后从 `scheduler_state`
-//! 拉回 last_run 重建这张表，错过的作业照样补跑——恢复门禁（记忆：Temporal 恢复测试）的核心。
+//! 拉回 last_run 重建这张表，错过的作业照样补跑。
 //!
-//! 作业**活动体**（digest/证伪巡检/业绩复盘…）依赖尚未迁完的 Rust 编排，此处先立可恢复的调度骨架，
-//! 活动随 `echo-application` 逐个搬入——每搬一个补一条恢复测试才允许摘对应 TS 工作流。
+//! 作业活动体由 `activities` 模块执行，并在每次运行后记录结果。
 
 use chrono::{DateTime, Utc};
 use std::str::FromStr;
 
-/// 一类后台作业。派发时按此分流到具体活动（活动体待接，见模块头）。
+/// 一类后台作业。派发时按此分流到具体活动。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobKind {
     PremarketDigest,
@@ -32,7 +31,7 @@ pub struct Schedule {
     pub job: JobKind,
 }
 
-/// 9 条调度，逐字对齐 `register-schedules.ts`（cron 为标准 5 段：分 时 日 月 周）。
+/// 9 条调度（cron 为标准 5 段：分 时 日 月 周）。
 pub const SCHEDULES: &[Schedule] = &[
     Schedule {
         id: "echo-premarket-digest",
@@ -85,7 +84,7 @@ pub const SCHEDULES: &[Schedule] = &[
 /// 秒位。解析失败视为「从不触发」（返回 false）——宁可不跑，不误派。
 ///
 /// 无 `last_run`（作业从未跑过）时以「现在」为基准判断当下这一刻是否恰为触发点，避免首启即把
-/// 历史全部补跑一遍（对齐 Temporal「首次注册不回填」的语义）。
+/// 历史全部补跑一遍（首次注册不回填）。
 #[must_use]
 pub fn is_due(cron: &str, last_run: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
     let with_seconds = format!("0 {cron}");

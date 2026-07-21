@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "HTTP/SSE boundary (axum) — replaces the Hono+tRPC /api surface"
+description = "HTTP/SSE boundary and authentication service built with axum"
 
 [[bin]]
 name = "echo-api"
@@ -12,12 +12,19 @@ path = "src/main.rs"
 
 [dependencies]
 echo-application.workspace = true
+echo-config.workspace = true
+echo-contracts.workspace = true
 echo-domain.workspace = true
 echo-db.workspace = true
+echo-data.workspace = true
+echo-observability.workspace = true
 rust_decimal.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 futures-util.workspace = true
+tracing.workspace = true
 axum = "0.7"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Background workflows (earnings review, falsifier patrol) — replaces the Temporal worker"
+description = "Recoverable background workflows for market data and research review"
 
 [[bin]]
 name = "echo-worker"
@@ -12,8 +12,14 @@ path = "src/main.rs"
 
 [dependencies]
 echo-domain.workspace = true
+echo-config.workspace = true
 echo-db.workspace = true
+echo-data.workspace = true
+echo-observability.workspace = true
+rust_decimal.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+tracing.workspace = true
+chrono.workspace = true
 # cron 表达式解析与下一触发时刻计算——不手搓 cron 解析器。
 cron = "0.12"

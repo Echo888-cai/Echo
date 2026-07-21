@@ -1,12 +1,10 @@
-//! 模型网关——绞杀 `packages/application/src/modelGateway.ts`。
+//! 模型网关——统一的 OpenAI 兼容 HTTP 客户端。
 //!
 //! OpenAI 兼容协议（DeepSeek 主 → OpenAI 备 → 通用），`POST /chat/completions`。
 //! 本轮先把**非流式核心**接通并强类型化：provider 选择、请求体构造、作答提取、JSON 解析
-//! 都做到与 TS 逐字对齐并有纯函数单测。刻意留下的显式 seam（不静默假装接了）：
-//!   * 流式 SSE 增量下发——随 `echo-api` 的 SSE 管道接上（`readStreamedCompletion` 对应物）；
-//!   * `llm_audit` 落库——随 `echo-db` 的 llm_audit 仓储接上（TS 里的 `insertLlmAudit`）。
+//! 都有强类型结构与纯函数单测。流式 SSE 与审计落库分别由 API 与数据库层负责。
 //!
-//! 失败一律返回 `None`（对齐 TS「失败返回 null 而不是抛错」），由编排层落到「未核到」。
+//! 失败一律返回 `None`，由编排层落到「未核到」。
 
 use std::time::Duration;
 

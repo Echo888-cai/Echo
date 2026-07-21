@@ -1,7 +1,6 @@
 //! 用例编排——研究链路的骨架（取数 → 估值 → 作答 → 护栏 → 落库）。
 //!
-//! 迁移自 `packages/application/src/research.ts`。本轮先把**纯编排 + 估值**接通并强类型化，
-//! 取数（DB/行情/网页）与模型网关会随 `echo-db`、`echo-api` 逐步接入。
+//! 研究用例以强类型结构串起取数、估值、作答、护栏与持久化。
 //!
 //! 关键修复（对应本次诊断的研究质量根因）：`ResearchRequest` 显式携带**被解析出的单一公司**，
 //! 决策面板与作答上下文都以它为唯一事实主体——跨公司的历史/记忆一律只作代词承接，
@@ -11,11 +10,13 @@ use echo_domain::{Company, Financials, MarketSnapshot, PeerAnchor, Valuation, di
 use rust_decimal::Decimal;
 
 pub mod answer_prompt;
+pub mod auth;
 pub mod from_db;
 pub mod model_gateway;
 pub mod research;
 
 pub use answer_prompt::{AnswerContext, build_system_prompt, build_user_prompt};
+pub use auth::{AuthError, AuthService, Session, hash_password, verify_password};
 pub use from_db::{market_snapshot_from_rows, resolved_company_from_rows};
 pub use model_gateway::{
     AnswerKind, ModelAnswer, ModelAnswerOptions, OwnedAuditContext, ProviderConfig, model_answer,

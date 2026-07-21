@@ -1,4 +1,4 @@
-//! 持久化与租户 RLS（PostgreSQL / sqlx）——迁移自 `packages/db`（Drizzle）。
+//! 持久化与租户 RLS（PostgreSQL / sqlx）。
 //!
 //! 规则：金额/股数/比率一律 `NUMERIC` ↔ `rust_decimal::Decimal`（红线 4）；双时态表保留
 //! valid_time（业务时间）与 knowledge_time（系统时间）。私有数据同时经**应用层租户过滤**
@@ -12,6 +12,18 @@ use rust_decimal::Decimal;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{FromRow, Postgres, Transaction};
 
+mod migrations;
+mod repositories;
+pub use migrations::{Migration, migrate, migration_checksum, migrations};
+pub use repositories::{
+    AuthRepository, AuthSessionRow, CompanySearchRow, EarningsCandidateRow, NewNotification,
+    NewUser, NotificationRow, NotificationsRepository, OperationsRepository, PortfolioPositionRow,
+    PortfolioRepository, PortfolioSnapshotResult, PortfolioUpsert, PreferencesPatch,
+    PreferencesRepository, ReminderProfileRow, ResearchSessionRepository, ResearchSessionRow,
+    ResearchSessionSummaryRow, SaveResearchSession, UserPreferencesRow, UserRow, WatchEntryRow,
+    WatchRuleRow, WatchlistRepository, normalize_ticker,
+};
+
 // 连接池类型对上层再导出，让 echo-api 等消费方不必直接钉 sqlx 版本（工作区单一事实源在此收口）。
 pub use sqlx::postgres::PgPool as Pool;
 
@@ -20,6 +32,17 @@ pub use sqlx::postgres::PgPool as Pool;
 pub enum DbError {
     #[error("database error: {0}")]
     Sqlx(#[from] sqlx::Error),
+    #[error("已应用迁移内容发生变化: {0}")]
+    ChangedMigration(String),
+    #[error("租户资源冲突: {0}")]
+    TenantConflict(String),
+}
+
+impl DbError {
+    #[must_use]
+    pub fn is_row_not_found(&self) -> bool {
+        matches!(self, Self::Sqlx(sqlx::Error::RowNotFound))
+    }
 }
 
 pub type Result<T> = std::result::Result<T, DbError>;
@@ -139,6 +162,20 @@ impl<'a> SchedulerStateRepository<'a> {
         Ok(rows)
     }
 
+    /// 首次见到作业时建立持久游标。`last_run_at=now()` 表示“从注册时刻向后观察”，避免首启回填
+    /// 全部历史，同时保证下一次 cron 边界能被发现；冲突时绝不覆盖真实运行状态。
+    pub async fn register_job(&self, job_id: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO scheduler_state (job_id, last_run_at, last_status, last_detail) \
+             VALUES ($1, now(), 'registered', '等待首次调度') \
+             ON CONFLICT (job_id) DO NOTHING",
+        )
+        .bind(job_id)
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// upsert 一条运行记录（作业跑完/失败都记，last_run_at=now）。job_id 冲突即更新——恢复安全。
     pub async fn record_run(&self, job_id: &str, status: &str, detail: Option<&str>) -> Result<()> {
         sqlx::query(
@@ -228,6 +265,26 @@ pub struct MarketRepository<'a> {
     pool: &'a PgPool,
 }
 
+#[derive(Clone, Debug)]
+pub struct MarketSnapshotWrite {
+    pub ticker: String,
+    pub price: Option<Decimal>,
+    pub previous_close: Option<Decimal>,
+    pub change: Option<Decimal>,
+    pub change_percent: Option<Decimal>,
+    pub open: Option<Decimal>,
+    pub high: Option<Decimal>,
+    pub low: Option<Decimal>,
+    pub volume: Option<Decimal>,
+    pub market_cap: Option<Decimal>,
+    pub pe: Option<Decimal>,
+    pub dividend_yield: Option<Decimal>,
+    pub week_52_high: Option<Decimal>,
+    pub week_52_low: Option<Decimal>,
+    pub source: String,
+    pub valid_time: chrono::DateTime<chrono::Utc>,
+}
+
 impl<'a> MarketRepository<'a> {
     #[must_use]
     pub fn new(pool: &'a PgPool) -> Self {
@@ -244,6 +301,59 @@ impl<'a> MarketRepository<'a> {
         .fetch_optional(self.pool)
         .await?;
         Ok(row)
+    }
+
+    /// 通过质量门后的完整行情快照一次写入。公司行不存在时只建最小身份壳，名称保持 ticker，
+    /// 以后经已验证的公司解析再补全；绝不伪造公司中文名。
+    pub async fn insert_snapshot(&self, value: &MarketSnapshotWrite) -> Result<()> {
+        let ticker = value.ticker.trim().to_ascii_uppercase();
+        let currency = if ticker.ends_with(".HK") {
+            "HKD"
+        } else {
+            "USD"
+        };
+        let exchange = if ticker.ends_with(".HK") {
+            "HKEX"
+        } else {
+            "US"
+        };
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO companies (ticker, name_zh, name_en, exchange, currency) \
+             VALUES ($1, $1, CASE WHEN $2 = 'US' THEN $1 ELSE NULL END, $2, $3) \
+             ON CONFLICT (ticker) DO NOTHING",
+        )
+        .bind(&ticker)
+        .bind(exchange)
+        .bind(currency)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO market_snapshots \
+             (ticker, price, previous_close, change, change_percent, open, high, low, volume, \
+              market_cap, pe, dividend_yield, week_52_high, week_52_low, source, valid_time) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+        )
+        .bind(&ticker)
+        .bind(value.price)
+        .bind(value.previous_close)
+        .bind(value.change)
+        .bind(value.change_percent)
+        .bind(value.open)
+        .bind(value.high)
+        .bind(value.low)
+        .bind(value.volume)
+        .bind(value.market_cap)
+        .bind(value.pe)
+        .bind(value.dividend_yield)
+        .bind(value.week_52_high)
+        .bind(value.week_52_low)
+        .bind(&value.source)
+        .bind(value.valid_time)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
     }
 }
 
@@ -283,6 +393,14 @@ mod tests {
         let pool = super::connect(&url, 2).await.expect("connect");
         let repo = super::SchedulerStateRepository::new(&pool);
         let probe_id = "echo-verify-probe";
+
+        repo.register_job(probe_id).await.expect("register");
+        let registered = repo.all().await.expect("registered all");
+        let first = registered
+            .iter()
+            .find(|r| r.job_id == probe_id)
+            .expect("registered row present");
+        assert_eq!(first.last_status.as_deref(), Some("registered"));
 
         repo.record_run(probe_id, "ok", Some("live probe"))
             .await

@@ -7,19 +7,14 @@
 # Operating-system and editor files
 .DS_Store
 
-# Dependencies, caches, logs and test output
-node_modules/
-.cache/
+# Caches, logs and test output
 *.log
 coverage/
-playwright-report/
 test-results/
 
-# Build and generated artifacts
+# Rust/WASM build and generated artifacts
 dist/
 target/
-packages/finance-native/*.node
-packages/contracts/openapi.json
 
 # Local data and infrastructure state
 backups/

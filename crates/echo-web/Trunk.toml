@@ -2,7 +2,7 @@
 target = "index.html"
 
 [serve]
-# dev 端口错开 apps/web(React 仍占 5190) 与 echo-api(4180)；把 /api 代理到 echo-api，前端不跨域直连。
+# 开发端口与 axum API 分离；同源 /api 请求由 Trunk 代理到 axum。
 port = 5191
 open = false
 
