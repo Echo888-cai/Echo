@@ -21,12 +21,12 @@ use axum::{
     routing::{get, post},
 };
 use echo_application::model_gateway::{
-    AuditContext, ModelAnswerOptions, OwnedAuditContext, model_answer, model_answer_stream,
+    AuditContext, ModelAnswerOptions, ModelStreamStart, OwnedAuditContext, model_answer,
+    model_answer_stream,
 };
 use echo_application::{
-    AnswerContext, AuthError, AuthService, PersistResearchSession, ResearchPorts, ResearchService,
-    ResolvedCompany, build_panel, build_system_prompt, build_user_prompt,
-    market_snapshot_from_rows, resolved_company_from_rows,
+    AuthError, AuthService, PersistResearchSession, ResearchPorts, ResearchService,
+    ResolvedCompany, market_snapshot_from_rows, resolved_company_from_rows,
 };
 use echo_config::ApiConfig;
 use echo_contracts::{
@@ -37,8 +37,8 @@ use echo_contracts::{
     NotificationReadRequest, NotificationsListResponse, PortfolioListResponse, PortfolioPosition,
     PortfolioUpsertRequest, PreferencesResponse, PreferencesUpdateRequest, PublicUser,
     ResearchSessionDetail, ResearchSessionResponse, ResearchSessionSummary,
-    ResearchSessionsResponse, TickerQuery, UnreadResponse, UserPreferences, UserRole, WatchEntry,
-    WatchListResponse, WatchMutationRequest,
+    ResearchSessionsResponse, ResearchStreamEvent, TickerQuery, UnreadResponse, UserPreferences,
+    UserRole, WatchEntry, WatchListResponse, WatchMutationRequest,
 };
 use echo_data::QuoteService;
 use echo_db::{
@@ -665,11 +665,12 @@ async fn research_sessions_clear(
 }
 
 /// HTTP 边界上的研究端口适配：DB 补数、行情刷新、模型生成、会话落库。
-struct ApiResearchPorts<'a> {
-    state: &'a AppState,
+/// 持有 `AppState` 所有权，以便流式用例在 SSE 生命周期内驱动。
+struct ApiResearchPorts {
+    state: AppState,
 }
 
-impl ResearchPorts for ApiResearchPorts<'_> {
+impl ResearchPorts for ApiResearchPorts {
     async fn load_company_market(&self, ticker: &str) -> Option<(ResolvedCompany, MarketSnapshot)> {
         let pool = self.state.pool.as_ref()?;
         let company_row = CompanyRepository::new(pool)
@@ -711,6 +712,19 @@ impl ResearchPorts for ApiResearchPorts<'_> {
             .map(|generated| generated.content)
     }
 
+    async fn stream_answer(
+        &self,
+        system: String,
+        user: String,
+        user_id: String,
+    ) -> ModelStreamStart {
+        let audit = self.state.pool.as_ref().map(|pool| OwnedAuditContext {
+            pool: pool.clone(),
+            user_id,
+        });
+        model_answer_stream(system, user, ModelAnswerOptions::default(), audit)
+    }
+
     async fn save_session(
         &self,
         user_id: &str,
@@ -743,7 +757,9 @@ async fn ask(
     Extension(current_user): Extension<PublicUser>,
     Json(req): Json<AskRequest>,
 ) -> Json<AskResponse> {
-    let ports = ApiResearchPorts { state: &state };
+    let ports = ApiResearchPorts {
+        state: state.clone(),
+    };
     let outcome = ResearchService::ask(&ports, &current_user.id, req.clone()).await;
     if !outcome.persisted && state.pool.is_some() {
         warn!(ticker = req.ticker, "研究会话落库失败，保留本轮响应");
@@ -751,31 +767,27 @@ async fn ask(
     Json(outcome.response)
 }
 
-/// 流式作答：`POST /api/ask/stream` —— 事实组装与非流式共用 `ResearchService`；
-/// SSE 仍只吐正文块。生成完再跑护栏并落库是下一段 typed-stream seam。
+/// 流式作答：`POST /api/ask/stream` —— 类型化 SSE（meta/stage/delta/guard/final/error）；
+/// 仅在干净完成后跑护栏并落库，由 `final.persisted` 报告落库结果。
 async fn ask_stream(
     State(state): State<AppState>,
     Extension(current_user): Extension<PublicUser>,
     Json(req): Json<AskRequest>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let ports = ApiResearchPorts { state: &state };
-    let facts = ResearchService::assemble_facts(&ports, &req).await;
-    let panel = build_panel(&facts.company, &facts.market, &facts.financials, None);
-
-    let system = build_system_prompt();
-    let user = build_user_prompt(&AnswerContext {
-        question: &req.question,
-        name_zh: facts.company.name_zh.as_deref(),
-        panel: &panel,
-        market: &facts.market,
-        financials: &facts.financials,
+    let ports = ApiResearchPorts { state };
+    let rx = ResearchService::ask_stream(ports, current_user.id, req);
+    let stream = ReceiverStream::new(rx).map(|event: ResearchStreamEvent| {
+        let name = event.event_name();
+        let data = serde_json::to_string(&event).unwrap_or_else(|_| {
+            serde_json::to_string(&ResearchStreamEvent::Error(
+                echo_contracts::ResearchStreamError {
+                    message: "failed to serialize stream event".into(),
+                },
+            ))
+            .expect("error event serializes")
+        });
+        Ok(Event::default().event(name).data(data))
     });
-    let audit = state.pool.as_ref().map(|pool| OwnedAuditContext {
-        pool: pool.clone(),
-        user_id: current_user.id,
-    });
-    let rx = model_answer_stream(system, user, ModelAnswerOptions::default(), audit);
-    let stream = ReceiverStream::new(rx).map(|chunk| Ok(Event::default().data(chunk)));
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
