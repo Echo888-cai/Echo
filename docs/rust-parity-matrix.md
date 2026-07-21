@@ -54,7 +54,7 @@ The baseline contained 45 REST surfaces: `/healthz` plus 44 registered REST cont
 | Submit feedback | `POST /api/feedback` | — | pending | — | keep | Phase 3 | `feedback` 表无完整 Rust repository/API。 |
 | Parse document | `POST /api/parse-document` | — | pending | — | keep | Phase 3 | 文件/文档解析及其安全边界未迁移。 |
 | Research answer | `POST /api/ask` | `ResearchService` + `echo-api` adapter | skeleton | application fake ports + API | keep | #44 | 编排已收口 application；完整取数/hard-fail/客户端事实隔离未完。 |
-| Research SSE | historical SSE on ask | `POST /api/ask/stream` typed events | skeleton | application stream tests + contract tags | keep | typed-research-stream | meta/stage/delta/guard/final/error 已落地并在 final 后落库；Web 仍走非流式；缺取消传播 |
+| Research SSE | historical SSE on ask | `POST /api/ask/stream` typed events | rust-accepted | application stream tests + contract tags + Web 手动浏览器验证 | keep | web-typed-stream | meta/stage/delta/guard/final/error 已落地并在 final 后落库；Web 已消费，取消经 `AbortController` 传播、服务端断流落 `cancelled` 审计。 |
 | Chat alias | `POST /api/chat` | Unified `POST /api/ask` | replaced | ask contract tests | keep | #44 / Phase 3 | 统一研究入口可替代独立 chat；需 ADR/兼容说明。 |
 | Generate deep report | `POST /api/report/generate` | — | pending | — | keep | Phase 3–4 | 独立深度报告契约未迁移。 |
 | Discover | `POST /api/discover` | — | product-decide | — | product-decide | Product / ADR | 是否保留“发现”工作流未裁决。 |
@@ -91,7 +91,7 @@ The baseline contained 45 REST surfaces: `/healthz` plus 44 registered REST cont
 | Capability | Old surface | Rust landing | Status | Tests | Product decision | Owner/PR | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Login/register | `/login` | `echo-web::LoginPage` | rust-accepted | Rust WebDriver E2E currently ignored | keep | #43 | 基础登录、注册可用；需解除 E2E ignore。 |
-| Research | `/`, `/research` | `ResearchPage` | skeleton | component tests absent; E2E ignored | keep | Phase 4 | 非流式 ask；缺 SSE、取消、重试、阶段反馈、来源卡、历史继续及深链接。 |
+| Research | `/`, `/research` | `ResearchPage` | skeleton | component tests absent; E2E ignored; Web 手动浏览器验证 | keep | Phase 4 | 已接类型化 SSE：阶段反馈、打字机 delta、护栏徽标、取消与原地重试；仍缺来源卡、会话历史继续及深链接（P1 后续切片）。 |
 | Watch list | `/watch` | `WatchPage` | skeleton | component tests absent | keep | Phase 4 | 基础自选增删；缺 desk、规则、事件。 |
 | Stock detail | `/watch/:ticker` | — | pending | — | keep | Phase 4 | 无详情页、引用证据、事件与规则管理。 |
 | Portfolio | `/portfolio` | `PortfolioPage` | skeleton | component tests absent | keep | Phase 4 | 基础 CRUD；缺实时市值、盈亏、风险、复盘、历史曲线。 |

@@ -424,7 +424,18 @@ pub fn model_answer_stream(
                     SseFrame::Delta(delta) => {
                         if let Some(block) = coalescer.push(&delta) {
                             if tx.send(ModelStreamEvent::Delta(block)).await.is_err() {
-                                return; // 接收端已丢弃，停读
+                                // 接收端已丢弃（客户端取消/断开）——停读前落一条 cancelled 审计，
+                                // 否则这次真实发生过的模型调用在审计表里完全不可见。
+                                if let Some(ctx) = &audit {
+                                    ctx.record(make_entry(
+                                        "cancelled",
+                                        None,
+                                        input_tokens,
+                                        output_tokens,
+                                    ))
+                                    .await;
+                                }
+                                return;
                             }
                         }
                     }

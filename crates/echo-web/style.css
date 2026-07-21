@@ -560,6 +560,49 @@ body::after {
   font-size: 13px;
 }
 
+/* ── Streaming stage / cancel / retry ── */
+.answer-mark i.pulse {
+  animation: stage-pulse 1.4s ease-in-out infinite;
+}
+@keyframes stage-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .5; transform: scale(1.35); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .answer-mark i.pulse { animation: none; }
+}
+
+.stage-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.stage-dot {
+  width: 6px; height: 6px; flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--cyan);
+  box-shadow: 0 0 0 3px rgba(130,231,238,.16);
+  animation: stage-pulse 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .stage-dot { animation: none; }
+}
+
+.stream-cancel, .stream-retry {
+  margin-top: 14px;
+  padding: 6px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.2s var(--ease-out), border-color 0.2s var(--ease-out);
+}
+.stream-cancel:hover { color: #ffb0b0; border-color: rgba(255,107,107,.35); }
+.stream-retry:hover { color: var(--cyan); border-color: rgba(130,231,238,.35); }
+
 /* ── Animations ── */
 @keyframes riseIn {
   from { opacity: 0; transform: translateY(10px); }
