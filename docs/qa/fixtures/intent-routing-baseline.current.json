@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "suite": "intent-routing",
+  "recorded_at": "2026-07-21",
+  "git_baseline": "dc4b75c",
+  "total_cases": 275,
+  "intent_checks": 101,
+  "intent_failures": 0,
+  "deferred_fields": {
+    "comparison": 9,
+    "discovery": 10,
+    "dual_leg": 9,
+    "hk_ticker": 83,
+    "multi_holding": 7,
+    "strong_company": 32,
+    "us_ticker": 48
+  },
+  "notes": [
+    "Intent assertions run via cargo test -p echo-domain --test intent_routing_corpus.",
+    "Deferred fields require company-identity / resolve ports before enabling.",
+    "Silent case deletion is forbidden: case_count must remain 275."
+  ]
+}

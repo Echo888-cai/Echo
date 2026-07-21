@@ -10,6 +10,28 @@ cargo check -p echo-web --target wasm32-unknown-unknown
 cargo xtask web
 ```
 
+## 离线研究语料（Phase 0 恢复）
+
+迁移前 `scripts/quality/agent-qa/corpus.ts`（275 条）与 `live.ts`（15 条）已恢复为语言中立 fixture：
+
+- `docs/qa/fixtures/intent-routing-corpus.json`
+- `docs/qa/fixtures/live-research-probes.json`
+- `docs/qa/fixtures/agent-qa-baseline.historical.json`
+- `docs/qa/fixtures/migration-checksums.json`（`0001`–`0010` 冻结）
+- `docs/qa/fixtures/api-json-snapshots.json`
+
+跑意图路由回归（不允许静默删 case）：
+
+```bash
+cargo test -p echo-domain --test intent_routing_corpus
+```
+
+当前 runner 断言 `intent`；ticker / discovery / dual-listing 等字段记为 deferred，待公司身份端口迁入 domain 后启用。Live probes 仅作目录，声明式全链路门禁在后续阶段接入。
+
+能力平价状态见 [../rust-parity-matrix.md](../rust-parity-matrix.md)。
+
+## 浏览器 E2E
+
 需要真实浏览器时，先启动 WebDriver、`echo-api` 与 Trunk，再运行：
 
 ```bash

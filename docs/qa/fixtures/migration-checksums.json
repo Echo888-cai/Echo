@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "frozen_through": "0010_drop_legacy_instruments.sql",
+  "policy": "Migrations 0001-0010 are immutable; new changes only as 0011+.",
+  "migrations": [
+    {
+      "file": "0001_init.sql",
+      "sha256": "6d6ab3117c7703b4a2e0e547a854ee017ca7a797dd500f0c1556c1d3b99319cc",
+      "bytes": 28158
+    },
+    {
+      "file": "0002_tenant_rls.sql",
+      "sha256": "a46eea6f2a18000ced52de7819d0a38711c26f290578fbdded5ad1786534e7f4",
+      "bytes": 5329
+    },
+    {
+      "file": "0003_auth_session_boundary.sql",
+      "sha256": "279fb8c66a95a273956eb32bc82f1b3270c8dfaf5588889e509e9958d46b6698",
+      "bytes": 1565
+    },
+    {
+      "file": "0004_rate_limit_buckets.sql",
+      "sha256": "41e891d297990dc6ea6bd6c98c5c8ac6b6db2ec51e99187c107a29c679ffb51d",
+      "bytes": 425
+    },
+    {
+      "file": "0005_research_snapshots_daily_unique.sql",
+      "sha256": "9dba2851f291792398fac64356eb251ca784869cc3bcb97daa78a734ebe2d58f",
+      "bytes": 987
+    },
+    {
+      "file": "0006_drop_cn_financials.sql",
+      "sha256": "1db48521f2a5f629a6f5637425dee989b2bb8c592fd2ab2f53d1289d55fb8ccd",
+      "bytes": 638
+    },
+    {
+      "file": "0007_add_fcf_column.sql",
+      "sha256": "131522827bd1ed684873a51cbd9a7d8414dc6c562a2691542de2ff3f3c318730",
+      "bytes": 75
+    },
+    {
+      "file": "0008_p4_enhancements.sql",
+      "sha256": "1df7a6c7582b7e1cc23eb479b027934662d93e02bad52d7638ab553a656a290e",
+      "bytes": 2493
+    },
+    {
+      "file": "0009_p5_team_audit_billing.sql",
+      "sha256": "a4671b77a756f99f707576c58811e730fb68fcdbc186ad15eeb882198a5acea9",
+      "bytes": 3525
+    },
+    {
+      "file": "0010_drop_legacy_instruments.sql",
+      "sha256": "ecb5dd0a52101bba15b7560807ea0ed73aea8e321b26aff6588421cbe13ae4a2",
+      "bytes": 5158
+    }
+  ]
+}

@@ -1,6 +1,6 @@
-//! 用例编排——研究链路的骨架（取数 → 估值 → 作答 → 护栏 → 落库）。
+//! 用例编排——研究链路（取数 → 估值 → 作答 → 护栏 → 落库）。
 //!
-//! 研究用例以强类型结构串起取数、估值、作答、护栏与持久化。
+//! HTTP 边界只做鉴权与序列化；非流式研究由 [`research::ResearchService`] 统一编排。
 //!
 //! 关键修复（对应本次诊断的研究质量根因）：`ResearchRequest` 显式携带**被解析出的单一公司**，
 //! 决策面板与作答上下文都以它为唯一事实主体——跨公司的历史/记忆一律只作代词承接，
@@ -21,6 +21,10 @@ pub use from_db::{market_snapshot_from_rows, resolved_company_from_rows};
 pub use model_gateway::{
     AnswerKind, ModelAnswer, ModelAnswerOptions, OwnedAuditContext, ProviderConfig, model_answer,
     model_answer_stream, parse_json_object, provider_config,
+};
+pub use research::{
+    CompareResearchFacts, PersistResearchSession, ResearchFacts, ResearchOutcome, ResearchPorts,
+    ResearchService,
 };
 
 /// 一轮研究请求——公司是必到字段（由公司解析闭环在边界处兑现），history 只用于代词承接。

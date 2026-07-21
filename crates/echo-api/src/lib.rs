@@ -24,20 +24,21 @@ use echo_application::model_gateway::{
     AuditContext, ModelAnswerOptions, OwnedAuditContext, model_answer, model_answer_stream,
 };
 use echo_application::{
-    AnswerContext, AuthError, AuthService, ResolvedCompany, build_panel, build_system_prompt,
-    build_user_prompt, market_snapshot_from_rows, resolved_company_from_rows,
+    AnswerContext, AuthError, AuthService, PersistResearchSession, ResearchPorts, ResearchService,
+    ResolvedCompany, build_panel, build_system_prompt, build_user_prompt,
+    market_snapshot_from_rows, resolved_company_from_rows,
 };
 use echo_config::ApiConfig;
 use echo_contracts::{
-    AnswerSource, AskRequest, AskResponse, AssetStageView, AuthInviteRequest, AuthInviteResponse,
-    AuthLoginRequest, AuthLogoutResponse, AuthMeResponse, AuthRegisterRequest, AuthUserResponse,
+    AskRequest, AskResponse, AuthInviteRequest, AuthInviteResponse, AuthLoginRequest,
+    AuthLogoutResponse, AuthMeResponse, AuthRegisterRequest, AuthUserResponse,
     ChangedCountResponse, CompanySearchItem, CompanySearchQuery, CompanySearchResponse,
-    ErrorResponse, GuardView, HealthResponse, ListQuery, MethodBandView, MutationResponse,
-    Notification, NotificationReadRequest, NotificationsListResponse, PortfolioListResponse,
-    PortfolioPosition, PortfolioUpsertRequest, PreferencesResponse, PreferencesUpdateRequest,
-    PublicUser, ResearchSessionDetail, ResearchSessionResponse, ResearchSessionSummary,
-    ResearchSessionsResponse, RouteView, TickerQuery, UnreadResponse, UserPreferences, UserRole,
-    ValuationView, WatchEntry, WatchListResponse, WatchMutationRequest,
+    ErrorResponse, HealthResponse, ListQuery, MutationResponse, Notification,
+    NotificationReadRequest, NotificationsListResponse, PortfolioListResponse, PortfolioPosition,
+    PortfolioUpsertRequest, PreferencesResponse, PreferencesUpdateRequest, PublicUser,
+    ResearchSessionDetail, ResearchSessionResponse, ResearchSessionSummary,
+    ResearchSessionsResponse, TickerQuery, UnreadResponse, UserPreferences, UserRole, WatchEntry,
+    WatchListResponse, WatchMutationRequest,
 };
 use echo_data::QuoteService;
 use echo_db::{
@@ -45,10 +46,7 @@ use echo_db::{
     PortfolioUpsert, PreferencesPatch, PreferencesRepository, ResearchSessionRepository,
     SaveResearchSession, UserPreferencesRow, WatchlistRepository,
 };
-use echo_domain::{
-    AssetStage, Company, Financials, MarketSnapshot, RegistrySources, Valuation,
-    build_facts_registry, build_soft_note, route_research_intent, verify_answer_numbers,
-};
+use echo_domain::MarketSnapshot;
 use futures_util::Stream;
 use std::convert::Infallible;
 use tokio_stream::StreamExt;
@@ -666,115 +664,78 @@ async fn research_sessions_clear(
     Ok(Json(ChangedCountResponse { changed }))
 }
 
-fn valuation_view(valuation: Valuation) -> ValuationView {
-    let stage = valuation.stage.map(|stage| match stage {
-        AssetStage::Profitable => AssetStageView::Profitable,
-        AssetStage::LossGrowth => AssetStageView::LossGrowth,
-        AssetStage::Loss => AssetStageView::Loss,
-        AssetStage::Unknown => AssetStageView::Unknown,
-    });
-    ValuationView {
-        method: valuation.method,
-        bear: valuation.bear,
-        base: valuation.base,
-        bull: valuation.bull,
-        upside: valuation.upside,
-        downside: valuation.downside,
-        current_price: valuation.current_price,
-        methods: valuation.methods,
-        method_detail: valuation
-            .method_detail
-            .into_iter()
-            .map(|band| MethodBandView {
-                name: band.name,
-                bear: band.bear,
-                base: band.base,
-                bull: band.bull,
-            })
-            .collect(),
-        key_assumptions: valuation.key_assumptions,
-        sensitivity: valuation.sensitivity,
-        stage_aware: valuation.stage_aware,
-        stage,
-        data_suspect: valuation.data_suspect,
-        cannot_value_reason: valuation.cannot_value_reason,
+/// HTTP 边界上的研究端口适配：DB 补数、行情刷新、模型生成、会话落库。
+struct ApiResearchPorts<'a> {
+    state: &'a AppState,
+}
+
+impl ResearchPorts for ApiResearchPorts<'_> {
+    async fn load_company_market(&self, ticker: &str) -> Option<(ResolvedCompany, MarketSnapshot)> {
+        let pool = self.state.pool.as_ref()?;
+        let company_row = CompanyRepository::new(pool)
+            .by_ticker(ticker)
+            .await
+            .ok()??;
+        let market_row = MarketRepository::new(pool)
+            .latest_snapshot(ticker)
+            .await
+            .ok()??;
+        let snapshot = market_snapshot_from_rows(&company_row, &market_row);
+        let resolved = resolved_company_from_rows(&company_row, Some(&market_row));
+        Some((resolved, snapshot))
     }
-}
 
-/// DB 补数：请求体没带价格且配了库时，从 `echo-db` 拉本公司身份 + 最新快照，经应用层映射折成
-/// 领域事实。仍是**单一公司**——只按本请求的 ticker 取一家，绝不掺别家数字。缺行情就返回 `None`，
-/// 保持"未核到"语义，不用陈旧/占位价冒充（记忆：缺数断口）。
-async fn db_fill(pool: &Pool, ticker: &str) -> Option<(ResolvedCompany, MarketSnapshot)> {
-    let company_row = CompanyRepository::new(pool)
-        .by_ticker(ticker)
-        .await
-        .ok()??;
-    let market_row = MarketRepository::new(pool)
-        .latest_snapshot(ticker)
-        .await
-        .ok()??;
-    let snapshot = market_snapshot_from_rows(&company_row, &market_row);
-    let resolved = resolved_company_from_rows(&company_row, Some(&market_row));
-    Some((resolved, snapshot))
-}
-
-/// 组装本公司的单一事实源（company/market/financials）——请求体优先，缺价格且配了库时用 DB 最新
-/// 快照兜底。`/api/ask` 与 `/api/ask/stream` 共用，保证两条路吃同一份事实，绝不掺别家数字。
-async fn assemble_facts(
-    state: &AppState,
-    req: &AskRequest,
-) -> (ResolvedCompany, MarketSnapshot, Financials) {
-    let mut company = ResolvedCompany {
-        ticker: req.ticker.clone(),
-        name_zh: req.name_zh.clone(),
-        company: Company {
-            price: req.price,
-            pe: req.pe,
-            ..Default::default()
-        },
-    };
-    let mut market = MarketSnapshot {
-        price: req.price,
-        pe: req.pe,
-        market_cap: req.market_cap,
-        currency: req.quote_currency.clone(),
-        change_percent: req.change_percent,
-        ..Default::default()
-    };
-    if market.price.is_none() {
-        if let Some(pool) = &state.pool {
-            if let Some((resolved, snapshot)) = db_fill(pool, &req.ticker).await {
-                company = resolved;
-                market = snapshot;
-            } else if let Some(quotes) = &state.quotes {
-                match quotes.refresh(&req.ticker).await {
-                    Ok(_) => {
-                        if let Some((resolved, snapshot)) = db_fill(pool, &req.ticker).await {
-                            company = resolved;
-                            market = snapshot;
-                        }
-                    }
-                    Err(error) => warn!(ticker = req.ticker, error = %error, "实时行情未核到"),
-                }
+    async fn refresh_quote(&self, ticker: &str) -> Result<(), String> {
+        let quotes = self
+            .state
+            .quotes
+            .as_ref()
+            .ok_or_else(|| "quote service unavailable".to_string())?;
+        match quotes.refresh(ticker).await {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                warn!(ticker, error = %error, "实时行情未核到");
+                Err(error.to_string())
             }
         }
     }
-    let financials = Financials {
-        provider_ok: req.revenue.is_some() || req.eps.is_some(),
-        eps: req.eps,
-        eps_annualized: req.eps_annualized,
-        net_margin: req.net_margin,
-        gross_margin: req.gross_margin,
-        revenue: req.revenue,
-        revenue_growth: req.revenue_growth,
-        net_income: req.net_income,
-        shares_outstanding: req.shares_outstanding,
-        free_cash_flow: req.free_cash_flow,
-        net_cash: req.net_cash,
-        currency: req.reporting_currency.clone(),
-        ..Default::default()
-    };
-    (company, market, financials)
+
+    async fn complete_answer(&self, system: &str, user: &str, user_id: &str) -> Option<String> {
+        let audit = self
+            .state
+            .pool
+            .as_ref()
+            .map(|pool| AuditContext { pool, user_id });
+        model_answer(system, user, ModelAnswerOptions::default(), audit)
+            .await
+            .map(|generated| generated.content)
+    }
+
+    async fn save_session(
+        &self,
+        user_id: &str,
+        session: PersistResearchSession,
+    ) -> Result<(), String> {
+        let Some(pool) = &self.state.pool else {
+            return Ok(());
+        };
+        let save = SaveResearchSession {
+            ticker: session.ticker,
+            company_name: session.company_name,
+            question: session.question,
+            report_markdown: session.report_markdown,
+            decision_panel: session.decision_panel,
+            full_research: session.full_research,
+            data_sources: session.data_sources,
+            turn_count: session.turn_count,
+            ..Default::default()
+        };
+        ResearchSessionRepository::new(pool)
+            .save(user_id, &save)
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
 }
 
 async fn ask(
@@ -782,132 +743,33 @@ async fn ask(
     Extension(current_user): Extension<PublicUser>,
     Json(req): Json<AskRequest>,
 ) -> Json<AskResponse> {
-    // 1) 意图路由（确定性首轮；置信度 < 0.7 时应用层再请模型，那步随网关接入）。
-    let route = route_research_intent(&req.question);
-
-    // 2) 组装本公司的单一事实源。
-    let (company, market, financials) = assemble_facts(&state, &req).await;
-
-    // 3) 定点估值 + 决策面板。
-    let panel = build_panel(&company, &market, &financials, None);
-
-    // 4) 答案：客户端给了草稿就用草稿；否则配了 provider 就用领域事实构造提示词、经网关生成。
-    //    生成的答案同样要过下面的数字护栏——生成路径不是护栏的旁路。
-    let (answer, answer_source) = match req.draft_answer.clone() {
-        Some(draft) => (Some(draft), AnswerSource::Draft),
-        None => {
-            let system = build_system_prompt();
-            let user_prompt = build_user_prompt(&AnswerContext {
-                question: &req.question,
-                name_zh: company.name_zh.as_deref(),
-                panel: &panel,
-                market: &market,
-                financials: &financials,
-            });
-            // 配了库就把 LLM 调用审计落库（best-effort，绝不阻断作答）；用户身份暂用 "local"，
-            // 待 auth 边界迁到 Rust 后接真实租户。
-            let audit = state.pool.as_ref().map(|pool| AuditContext {
-                pool,
-                user_id: &current_user.id,
-            });
-            match model_answer(&system, &user_prompt, ModelAnswerOptions::default(), audit).await {
-                Some(generated) => (Some(generated.content), AnswerSource::Generated),
-                None => (None, AnswerSource::Unavailable),
-            }
-        }
-    };
-
-    // 5) 数字护栏（有答案就跑，草稿或生成一视同仁）：只登记本公司事实，逐条核对。
-    let fact_guard = answer.as_deref().map(|draft| {
-        let registry = build_facts_registry(&RegistrySources {
-            ticker: &req.ticker,
-            native_currency: req
-                .reporting_currency
-                .as_deref()
-                .or(req.quote_currency.as_deref()),
-            market: Some(&market),
-            financials: Some(&financials),
-            valuation: Some(&panel.valuation),
-            ..Default::default()
-        });
-        let report = verify_answer_numbers(draft, &registry);
-        GuardView {
-            total: report.checked.len(),
-            pass: report.pass_count(),
-            soft: report.soft_count,
-            hard: report.hard_count,
-            has_hard_fail: report.has_hard_fail(),
-            soft_note: build_soft_note(&report),
-        }
-    });
-
-    let response = AskResponse {
-        ticker: panel.ticker,
-        route: RouteView {
-            intent: route.intent.as_str().to_string(),
-            depth: route.depth.as_str().to_string(),
-            confidence: route.confidence,
-            multi_part: route.multi_part,
-            answer_style: route.answer_style.to_string(),
-            plan: route.plan.into_iter().map(str::to_string).collect(),
-        },
-        data_completeness: panel.data_completeness,
-        connected_sources: panel
-            .connected_sources
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
-        valuation: valuation_view(panel.valuation),
-        answer,
-        answer_source,
-        fact_guard,
-    };
-    if let Some(pool) = &state.pool {
-        let save = SaveResearchSession {
-            ticker: req.ticker.clone(),
-            company_name: company.name_zh.clone(),
-            question: Some(req.question.clone()),
-            report_markdown: response.answer.clone(),
-            decision_panel: serde_json::to_value(&response.valuation).ok(),
-            full_research: response.answer.clone(),
-            data_sources: Some(
-                serde_json::json!({ "connected": response.connected_sources.clone() }),
-            ),
-            turn_count: Some(1),
-            ..Default::default()
-        };
-        if let Err(error) = ResearchSessionRepository::new(pool)
-            .save(&current_user.id, &save)
-            .await
-        {
-            warn!(error = %error, ticker = req.ticker, "研究会话落库失败，保留本轮响应");
-        }
+    let ports = ApiResearchPorts { state: &state };
+    let outcome = ResearchService::ask(&ports, &current_user.id, req.clone()).await;
+    if !outcome.persisted && state.pool.is_some() {
+        warn!(ticker = req.ticker, "研究会话落库失败，保留本轮响应");
     }
-    Json(response)
+    Json(outcome.response)
 }
 
-/// 流式作答：`POST /api/ask/stream` —— 同一份单公司事实构造提示词，经网关流式生成，把合并后的
-/// 正文块作为 SSE `data:` 事件边生成边下发（对齐 TS 的 token 流式作答体验）。无 provider 时流为空。
-///
-/// 显式 seam：流式路径当前只吐正文块；生成完再跑数字护栏、把 factGuard 结果作为收尾事件推下去，
-/// 是下一段（对齐 TS「先流 token 再事后 fact-check」）。故 hard-fail 的事后拦截随该 seam 接上。
+/// 流式作答：`POST /api/ask/stream` —— 事实组装与非流式共用 `ResearchService`；
+/// SSE 仍只吐正文块。生成完再跑护栏并落库是下一段 typed-stream seam。
 async fn ask_stream(
     State(state): State<AppState>,
     Extension(current_user): Extension<PublicUser>,
     Json(req): Json<AskRequest>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let (company, market, financials) = assemble_facts(&state, &req).await;
-    let panel = build_panel(&company, &market, &financials, None);
+    let ports = ApiResearchPorts { state: &state };
+    let facts = ResearchService::assemble_facts(&ports, &req).await;
+    let panel = build_panel(&facts.company, &facts.market, &facts.financials, None);
 
     let system = build_system_prompt();
     let user = build_user_prompt(&AnswerContext {
         question: &req.question,
-        name_zh: company.name_zh.as_deref(),
+        name_zh: facts.company.name_zh.as_deref(),
         panel: &panel,
-        market: &market,
-        financials: &financials,
+        market: &facts.market,
+        financials: &facts.financials,
     });
-    // 流式审计要在 'static 后台任务里落，故用拥有所有权的上下文（池是 Arc，克隆廉价）。
     let audit = state.pool.as_ref().map(|pool| OwnedAuditContext {
         pool: pool.clone(),
         user_id: current_user.id,
@@ -999,6 +861,7 @@ pub async fn run() {
 mod tests {
     use super::*;
     use axum::body::{Body, to_bytes};
+    use echo_contracts::AnswerSource;
     use tower::ServiceExt;
 
     #[test]
