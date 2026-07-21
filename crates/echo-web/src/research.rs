@@ -220,6 +220,7 @@ fn attach_stream(
     };
 
     let handle = api::post_stream("/api/ask/stream", &req, on_event, on_error);
+    schedule_stream_timeout(id, set_thread, handle.clone());
     set_thread.update(|v| {
         if let Some(turn) = v.iter_mut().find(|t| t.id == id) {
             if turn.status.is_streaming() {
@@ -227,6 +228,40 @@ fn attach_stream(
             }
         }
     });
+}
+
+/// 超时态——流在固定窗口内没到终态（Final/Error），视为卡死，主动取消并转失败可重试。
+/// 一次性定时器，不随事件重置：多阶段研究本就该在这个窗口内跑完，卡死比慢更值得暴露。
+#[cfg(target_arch = "wasm32")]
+fn schedule_stream_timeout(id: u64, set_thread: WriteSignal<Vec<Turn>>, handle: api::StreamHandle) {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::prelude::Closure;
+
+    let closure = Closure::once(move || {
+        set_thread.update(|v| {
+            if let Some(turn) = v.iter_mut().find(|t| t.id == id) {
+                if turn.status.is_streaming() {
+                    handle.cancel();
+                    turn.status =
+                        TurnStatus::Failed("研究响应超时（120 秒无返回），请重试。".to_string());
+                    turn.handle = None;
+                }
+            }
+        });
+    });
+    let _ = leptos::window().set_timeout_with_callback_and_timeout_and_arguments_0(
+        closure.as_ref().unchecked_ref(),
+        120_000,
+    );
+    closure.forget();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn schedule_stream_timeout(
+    _id: u64,
+    _set_thread: WriteSignal<Vec<Turn>>,
+    _handle: api::StreamHandle,
+) {
 }
 
 // ── Components ────────────────────────────────────────────────────────────
@@ -518,6 +553,7 @@ fn HistorySidebar(
                                     <button
                                         class="session-item-delete"
                                         title="删除"
+                                        aria-label="删除该研究记录"
                                         on:click=move |ev| {
                                             ev.stop_propagation();
                                             on_delete.call(del_id.clone());
@@ -847,9 +883,19 @@ pub fn ResearchPage(
                                 class="company-input"
                                 prop:value=company_query
                                 on:input=on_query_input
-                                on:keydown=move |ev| if ev.key() == "Enter" { submit() }
+                                on:keydown=move |ev| {
+                                    if ev.key() == "Enter" {
+                                        submit();
+                                    } else if ev.key() == "Escape" && !candidates.get_untracked().is_empty() {
+                                        ev.stop_propagation();
+                                        set_candidates.set(Vec::new());
+                                    }
+                                }
                                 placeholder="研究对象，如 苹果 / AAPL / 9988.HK"
                                 disabled=resolving
+                                role="combobox"
+                                aria-expanded=move || !candidates.get().is_empty()
+                                aria-autocomplete="list"
                             />
                             {move || if resolving.get() {
                                 view! { <span class="company-status">"核实中…"</span> }.into_view()
@@ -864,7 +910,7 @@ pub fn ResearchPage(
                                     view! {}.into_view()
                                 } else {
                                     view! {
-                                        <div class="company-dropdown">
+                                        <div class="company-dropdown" role="listbox">
                                             {items.into_iter().map(|item| {
                                                 let label = company_display(&item.name_zh, item.name_en.as_deref(), &item.ticker);
                                                 let industry = item.industry.clone();
@@ -873,6 +919,7 @@ pub fn ResearchPage(
                                                     <button
                                                         type="button"
                                                         class="company-item"
+                                                        role="option"
                                                         on:click=move |_| select_candidate(pick.clone())
                                                     >
                                                         <span class="company-item-name">{label}</span>
@@ -890,6 +937,7 @@ pub fn ResearchPage(
                             on:click=move |_| submit()
                             disabled=move || pending() || resolving.get()
                             title="发送（Enter）"
+                            aria-label="发送研究请求"
                         >
                             {move || if pending() || resolving.get() { "…" } else { "↑" }}
                         </button>

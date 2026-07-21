@@ -34,6 +34,15 @@
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* 键盘可达性——自定义按钮/输入普遍覆盖了默认样式，统一补一圈可见的键盘焦点环，
+   不依赖各组件各自记得写。鼠标点击不触发（:focus-visible 只在键盘导航时命中）。 */
+a:focus-visible, button:focus-visible, input:focus-visible,
+textarea:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 /* ── Page background (auth-page style) ── */
 body {
   min-height: 100dvh;
