@@ -7,9 +7,10 @@ use echo_contracts::{
 };
 use leptos::*;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Page {
-    Research,
+    /// 研究页——可选携带会话 id，对应深链 `/research/:session_id`。
+    Research(Option<String>),
     Watch,
     Portfolio,
     Settings,
@@ -17,32 +18,42 @@ enum Page {
 
 impl Page {
     #[cfg(target_arch = "wasm32")]
-    const fn path(self) -> &'static str {
+    fn path(&self) -> String {
         match self {
-            Self::Research => "/research",
-            Self::Watch => "/watch",
-            Self::Portfolio => "/portfolio",
-            Self::Settings => "/settings",
+            Self::Research(None) => "/research".to_string(),
+            Self::Research(Some(id)) => format!("/research/{id}"),
+            Self::Watch => "/watch".to_string(),
+            Self::Portfolio => "/portfolio".to_string(),
+            Self::Settings => "/settings".to_string(),
         }
     }
 
-    const fn label(self) -> &'static str {
+    const fn label(&self) -> &'static str {
         match self {
-            Self::Research => "研究",
+            Self::Research(_) => "研究",
             Self::Watch => "自选",
             Self::Portfolio => "持仓",
             Self::Settings => "设置",
         }
     }
+
+    /// 导航栏高亮只看落在哪个 tab，不看研究页携带的具体会话 id。
+    fn same_tab(&self, other: &Page) -> bool {
+        std::mem::discriminant(self) == std::mem::discriminant(other)
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
 fn page_from_path(path: &str) -> Page {
+    if let Some(rest) = path.strip_prefix("/research/") {
+        let id = rest.trim_matches('/');
+        return Page::Research((!id.is_empty()).then(|| id.to_string()));
+    }
     match path {
         "/watch" => Page::Watch,
         "/portfolio" => Page::Portfolio,
         "/settings" => Page::Settings,
-        _ => Page::Research,
+        _ => Page::Research(None),
     }
 }
 
@@ -53,14 +64,16 @@ fn initial_page() -> Page {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn initial_page() -> Page {
-    Page::Research
+    Page::Research(None)
 }
 
 fn navigate(set_page: WriteSignal<Page>, page: Page) {
+    #[cfg(target_arch = "wasm32")]
+    let path = page.path();
     set_page.set(page);
     #[cfg(target_arch = "wasm32")]
     if let Ok(history) = leptos::window().history() {
-        let _ = history.push_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(page.path()));
+        let _ = history.push_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&path));
     }
 }
 
@@ -94,11 +107,14 @@ pub fn Workspace(user: PublicUser, on_auth_changed: Callback<()>) -> impl IntoVi
         .display_name
         .clone()
         .unwrap_or_else(|| user.username.clone());
+    let on_research_navigate = Callback::new(move |session_id: Option<String>| {
+        navigate(set_page, Page::Research(session_id))
+    });
 
     view! {
         <div class="app-shell">
             <header class="echo-topbar workspace-topbar">
-                <button class="echo-brand brand-button" on:click=move |_| navigate(set_page, Page::Research)>
+                <button class="echo-brand brand-button" on:click=move |_| navigate(set_page, Page::Research(None))>
                     <div class="echo-brand-mark">
                         <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
                             <path d="M6 26 L16 6 L26 26" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -109,13 +125,17 @@ pub fn Workspace(user: PublicUser, on_auth_changed: Callback<()>) -> impl IntoVi
                     <span class="echo-brand-sub">"Research"</span>
                 </button>
                 <nav class="workspace-nav" aria-label="主导航">
-                    {[Page::Research, Page::Watch, Page::Portfolio, Page::Settings]
+                    {[Page::Research(None), Page::Watch, Page::Portfolio, Page::Settings]
                         .into_iter()
-                        .map(|item| view! {
-                            <button
-                                class=move || if page.get() == item { "nav-item is-active" } else { "nav-item" }
-                                on:click=move |_| navigate(set_page, item)
-                            >{item.label()}</button>
+                        .map(|item| {
+                            let item_for_class = item.clone();
+                            let item_for_click = item.clone();
+                            view! {
+                                <button
+                                    class=move || if page.get().same_tab(&item_for_class) { "nav-item is-active" } else { "nav-item" }
+                                    on:click=move |_| navigate(set_page, item_for_click.clone())
+                                >{item.label()}</button>
+                            }
                         })
                         .collect_view()}
                 </nav>
@@ -127,8 +147,10 @@ pub fn Workspace(user: PublicUser, on_auth_changed: Callback<()>) -> impl IntoVi
             </header>
             <section class="workspace-stage">
                 {move || match page.get() {
-                    Page::Research => view! { <ResearchPage /> }.into_view(),
-                    Page::Watch => view! { <WatchPage on_research=Callback::new(move |_| navigate(set_page, Page::Research)) /> }.into_view(),
+                    Page::Research(session_id) => view! {
+                        <ResearchPage initial_session=session_id on_navigate=on_research_navigate />
+                    }.into_view(),
+                    Page::Watch => view! { <WatchPage on_research=Callback::new(move |_| navigate(set_page, Page::Research(None))) /> }.into_view(),
                     Page::Portfolio => view! { <PortfolioPage /> }.into_view(),
                     Page::Settings => view! { <SettingsPage /> }.into_view(),
                 }}
