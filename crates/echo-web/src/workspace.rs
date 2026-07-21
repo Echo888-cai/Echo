@@ -37,18 +37,18 @@ impl Page {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn initial_page() -> Page {
-    match leptos::window()
-        .location()
-        .pathname()
-        .unwrap_or_default()
-        .as_str()
-    {
+fn page_from_path(path: &str) -> Page {
+    match path {
         "/watch" => Page::Watch,
         "/portfolio" => Page::Portfolio,
         "/settings" => Page::Settings,
         _ => Page::Research,
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn initial_page() -> Page {
+    page_from_path(&leptos::window().location().pathname().unwrap_or_default())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -64,9 +64,24 @@ fn navigate(set_page: WriteSignal<Page>, page: Page) {
     }
 }
 
+/// 监听浏览器前进/后退——`navigate` 只 `push_state` 不够，URL 变了页面得跟着变，
+/// 否则后退键在地址栏里动了但视图纹丝不动。
+#[cfg(target_arch = "wasm32")]
+fn install_popstate_listener(set_page: WriteSignal<Page>) {
+    let handle = leptos::window_event_listener(leptos::ev::popstate, move |_| {
+        let path = leptos::window().location().pathname().unwrap_or_default();
+        set_page.set(page_from_path(&path));
+    });
+    on_cleanup(move || handle.remove());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn install_popstate_listener(_set_page: WriteSignal<Page>) {}
+
 #[component]
 pub fn Workspace(user: PublicUser, on_auth_changed: Callback<()>) -> impl IntoView {
     let (page, set_page) = create_signal(initial_page());
+    install_popstate_listener(set_page);
     let logout = create_action(|_: &()| async {
         api::post::<_, AuthLogoutResponse>("/api/auth/logout", &serde_json::json!({})).await
     });
