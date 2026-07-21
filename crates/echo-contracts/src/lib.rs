@@ -183,6 +183,84 @@ pub struct AskResponse {
     pub fact_guard: Option<GuardView>,
 }
 
+/// 类型化研究 SSE 事件。`type` 字段与 Axum `event:` 名对齐。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum ResearchStreamEvent {
+    Meta(ResearchStreamMeta),
+    Stage(ResearchStreamStage),
+    Delta(ResearchStreamDelta),
+    Guard(ResearchStreamGuard),
+    Final(ResearchStreamFinal),
+    Error(ResearchStreamError),
+}
+
+impl ResearchStreamEvent {
+    /// SSE `event:` 名（与 serde tag 一致）。
+    #[must_use]
+    pub fn event_name(&self) -> &'static str {
+        match self {
+            Self::Meta(_) => "meta",
+            Self::Stage(_) => "stage",
+            Self::Delta(_) => "delta",
+            Self::Guard(_) => "guard",
+            Self::Final(_) => "final",
+            Self::Error(_) => "error",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchStreamMeta {
+    pub ticker: String,
+    pub route: RouteView,
+    pub data_completeness: u8,
+    pub connected_sources: Vec<String>,
+    pub valuation: ValuationView,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResearchStreamStageName {
+    Assembling,
+    Generating,
+    Verifying,
+    Persisting,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchStreamStage {
+    pub name: ResearchStreamStageName,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchStreamDelta {
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchStreamGuard {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fact_guard: Option<GuardView>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchStreamFinal {
+    pub response: AskResponse,
+    pub persisted: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchStreamError {
+    pub message: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum UserRole {
@@ -545,5 +623,56 @@ mod tests {
             serde_json::to_string(&AnswerSource::Unavailable).expect("serialize"),
             r#""unavailable""#
         );
+    }
+
+    #[test]
+    fn research_stream_event_tags_are_stable() {
+        let meta = ResearchStreamEvent::Meta(ResearchStreamMeta {
+            ticker: "AAPL".into(),
+            route: RouteView {
+                intent: "valuation".into(),
+                depth: "brief".into(),
+                confidence: 0.9,
+                multi_part: false,
+                answer_style: "direct".into(),
+                plan: vec!["routing".into()],
+            },
+            data_completeness: 20,
+            connected_sources: vec!["实时行情".into()],
+            valuation: ValuationView {
+                method: "unavailable".into(),
+                bear: None,
+                base: None,
+                bull: None,
+                upside: None,
+                downside: None,
+                current_price: None,
+                methods: vec![],
+                method_detail: vec![],
+                key_assumptions: vec![],
+                sensitivity: vec![],
+                stage_aware: false,
+                stage: None,
+                data_suspect: false,
+                cannot_value_reason: None,
+            },
+        });
+        let json = serde_json::to_value(&meta).expect("serialize");
+        assert_eq!(json["type"], "meta");
+        assert_eq!(json["data"]["ticker"], "AAPL");
+        assert_eq!(meta.event_name(), "meta");
+
+        let delta = ResearchStreamEvent::Delta(ResearchStreamDelta {
+            text: "现价".into(),
+        });
+        let encoded = serde_json::to_string(&delta).expect("serialize");
+        let decoded: ResearchStreamEvent = serde_json::from_str(&encoded).expect("roundtrip");
+        assert_eq!(decoded, delta);
+
+        let err = serde_json::from_str::<ResearchStreamEvent>(
+            r#"{"type":"delta","data":{"text":"x","extra":1}}"#,
+        )
+        .expect_err("unknown field");
+        assert!(err.to_string().contains("unknown field"));
     }
 }
