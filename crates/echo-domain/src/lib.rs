@@ -8,11 +8,21 @@
 //!
 //! 领域核保持无副作用，可在服务端与浏览器端复用并独立测试。
 
+pub mod company_aliases;
+pub mod company_identity;
 pub mod derivations;
 pub mod fact_guard;
 pub mod intent;
 pub mod valuation;
 
+pub use company_aliases::{
+    CompanyAlias, HK_COMPANY_ALIASES, HK_US_LINKS, HkUsLink, HkUsLinkKind, US_COMPANY_ALIASES,
+    adr_for_hk, dual_listing_by_name, dual_listing_by_ticker, dual_listings, match_hk_alias,
+    match_us_alias,
+};
+pub use company_identity::{
+    common_non_tickers, extract_hk_ticker, extract_us_ticker_token, normalize_question_text,
+};
 pub use derivations::{AnnualEps, FilingRow, derive_annual_eps, pct_change, pct_of};
 pub use fact_guard::{
     FactsRegistry, Position, RegistrySources, Verdict, VerifyReport, build_facts_registry,

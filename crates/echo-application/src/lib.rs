@@ -11,12 +11,17 @@ use rust_decimal::Decimal;
 
 pub mod answer_prompt;
 pub mod auth;
+pub mod company_resolve;
 pub mod from_db;
 pub mod model_gateway;
 pub mod research;
 
 pub use answer_prompt::{AnswerContext, build_system_prompt, build_user_prompt};
 pub use auth::{AuthError, AuthService, Session, hash_password, verify_password};
+pub use company_resolve::{
+    CompanyResolvePorts, CompanyResolveService, DbCompanyHit, ExternalSymbolHit, ResolveResult,
+    ResolveSource, ResolveSuggestion, ResolvedListing, VerifyResult, VerifyStatus,
+};
 pub use from_db::{market_snapshot_from_rows, resolved_company_from_rows};
 pub use model_gateway::{
     AnswerKind, ModelAnswer, ModelAnswerOptions, ModelStreamEvent, ModelStreamStart,
