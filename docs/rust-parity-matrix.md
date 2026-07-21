@@ -125,7 +125,7 @@ All nine schedules are defined and can execute activities, but no atomic claim/l
 | FMP fundamentals | `fmpFundamentalsAdapter` | `echo-data::FundamentalsService` | rust-accepted | fixture + commercial/HK gates | keep | Phase 2 | US-only stable 三表；商用模式拒绝；`ResearchPorts::load_fundamentals` 已接线。 |
 | FMP company search | `fmpSearchAdapter` | `echo-data::FmpSearchService` | rust-accepted | normalize/filter + resolve ports | keep | Phase 2 | resolve/verify 已消费；研究链路建档 ensure 仍待接。 |
 | Company resolve/verify | `companyResolution` | `CompanyResolveService` + `/api/companies/{resolve,verify}` + ask ensure | rust-accepted | alias/identity + research-entry tests | keep | Phase 2 | `/api/ask` 验证后 `ensure`；仍无 LLM 兜底。 |
-| Tavily evidence search | `tavilySearchAdapter` | — | pending | — | keep | Phase 2 | 配置含 `TAVILY_API_KEY`，但没有 consumer。 |
+| Tavily evidence search | `tavilySearchAdapter` | — | pending | — | keep | Phase 2 | `TAVILY_API_KEY` 已从 `echo-config` 移除（无 consumer、额度已耗尽）；P2 选定证据供应商时按届时选型与 consumer 同 PR 重新加入。 |
 | Finnhub earnings calendar | `finnhubCalendarAdapter` | — | pending | — | keep | Phase 2 | 日历/业绩数据端口未迁移。 |
 | Finnhub peers | `finnhubPeersAdapter` | — | pending | — | keep | Phase 2 | 同业比较事实未迁移。 |
 | HK ADR/calendar | `hkAdrCalendarAdapter` | — | pending | — | keep | Phase 2 | 港股/ADR 日期与映射链缺失。 |

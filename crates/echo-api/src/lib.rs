@@ -21,8 +21,8 @@ use axum::{
     routing::{get, post},
 };
 use echo_application::model_gateway::{
-    AuditContext, ModelAnswerOptions, ModelStreamStart, OwnedAuditContext, model_answer,
-    model_answer_stream,
+    AuditContext, ModelAnswerOptions, ModelStreamStart, OwnedAuditContext, ProviderConfig,
+    model_answer, model_answer_stream,
 };
 use echo_application::{
     AuthError, AuthService, CompanyResolvePorts, CompanyResolveService, DbCompanyHit,
@@ -72,6 +72,7 @@ pub struct AppState {
     auth_disabled: bool,
     auth_disabled_user_id: String,
     secure_cookie: bool,
+    model_provider: Option<ProviderConfig>,
 }
 
 impl AppState {
@@ -85,6 +86,7 @@ impl AppState {
             auth_disabled: true,
             auth_disabled_user_id: "local".into(),
             secure_cookie: false,
+            model_provider: None,
         }
     }
 }
@@ -921,9 +923,15 @@ impl ResearchPorts for ApiResearchPorts {
             .pool
             .as_ref()
             .map(|pool| AuditContext { pool, user_id });
-        model_answer(system, user, ModelAnswerOptions::default(), audit)
-            .await
-            .map(|generated| generated.content)
+        model_answer(
+            system,
+            user,
+            ModelAnswerOptions::default(),
+            self.state.model_provider.as_ref(),
+            audit,
+        )
+        .await
+        .map(|generated| generated.content)
     }
 
     async fn stream_answer(
@@ -936,7 +944,13 @@ impl ResearchPorts for ApiResearchPorts {
             pool: pool.clone(),
             user_id,
         });
-        model_answer_stream(system, user, ModelAnswerOptions::default(), audit)
+        model_answer_stream(
+            system,
+            user,
+            ModelAnswerOptions::default(),
+            self.state.model_provider.clone(),
+            audit,
+        )
     }
 
     async fn save_session(
@@ -1083,6 +1097,7 @@ pub async fn run() {
         auth_disabled: config.auth_disabled,
         auth_disabled_user_id: config.auth_disabled_user_id,
         secure_cookie: config.secure_cookie,
+        model_provider: config.model_provider,
     });
     let listener = tokio::net::TcpListener::bind(listen_addr)
         .await
@@ -1216,6 +1231,7 @@ mod tests {
             auth_disabled: false,
             auth_disabled_user_id: "local".into(),
             secure_cookie: false,
+            model_provider: None,
         });
 
         let register = AuthRegisterRequest {

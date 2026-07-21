@@ -717,6 +717,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "chrono",
+ "echo-config",
  "echo-contracts",
  "echo-data",
  "echo-db",
