@@ -391,6 +391,9 @@ mod tests {
             return;
         };
         let pool = super::connect(&url, 2).await.expect("connect");
+        if std::env::var("ECHO_SKIP_TEST_MIGRATE").ok().as_deref() != Some("1") {
+            super::migrate(&pool).await.expect("migrate");
+        }
         let repo = super::SchedulerStateRepository::new(&pool);
         let probe_id = "echo-verify-probe";
 

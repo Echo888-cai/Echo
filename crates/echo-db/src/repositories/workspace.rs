@@ -705,7 +705,9 @@ mod tests {
     async fn live_workspace_repositories_enforce_tenant_and_deletion() {
         let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
         let pool = crate::connect(&database_url, 3).await.expect("connect");
-        crate::migrate(&pool).await.expect("migrate");
+        if std::env::var("ECHO_SKIP_TEST_MIGRATE").ok().as_deref() != Some("1") {
+            crate::migrate(&pool).await.expect("migrate");
+        }
         user(&pool, "user_a").await;
         user(&pool, "user_b").await;
 
