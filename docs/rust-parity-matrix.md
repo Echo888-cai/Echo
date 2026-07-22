@@ -4,7 +4,7 @@
 >
 > Migration baseline: `dc4b75c^` / `eb3b766`. Historical TypeScript/React/Python code is behavior-only reference and must not be restored as a runtime.
 >
-> Last inventoried: 2026-07-21 · Updated for #44 (ResearchService / QA fixtures) and #45 (CI live DB).
+> Last inventoried: 2026-07-22 · Updated for #44 (ResearchService / QA fixtures), #45 (CI live DB), and the PeerAnchor peer-comparable wiring (§3/§6 Finnhub peers).
 
 ## 1. Purpose and update rules
 
@@ -127,7 +127,7 @@ All nine schedules are defined and can execute activities, but no atomic claim/l
 | Company resolve/verify | `companyResolution` | `CompanyResolveService` + `/api/companies/{resolve,verify}` + ask ensure | rust-accepted | alias/identity + research-entry tests | keep | Phase 2 | `/api/ask` 验证后 `ensure`；仍无 LLM 兜底。 |
 | Tavily evidence search | `tavilySearchAdapter` | — | pending | — | keep | Phase 2 | `TAVILY_API_KEY` 已从 `echo-config` 移除（无 consumer、额度已耗尽）；P2 选定证据供应商时按届时选型与 consumer 同 PR 重新加入。 |
 | Finnhub earnings calendar | `finnhubCalendarAdapter` | — | pending | — | keep | Phase 2 | 日历/业绩数据端口未迁移。 |
-| Finnhub peers | `finnhubPeersAdapter` | — | pending | — | keep | Phase 2 | 同业比较事实未迁移。 |
+| Finnhub peers | `finnhubPeersAdapter` | `echo-data::PeersService` + `ResearchPorts::load_peers` | skeleton | adapter fixtures + application orchestration test | keep | Phase 2 | 同业候选 ticker + 复用 `FundamentalsService` 取每家 `pe_ttm`，接回 `echo-domain::valuation` 早已存在但从未被喂数据的 `PeerAnchor` PE 锚点（`compute_valuation`/`build_panel` 调用点此前硬编码 `None`）。仅接了 PE 法；EV/Sales 同业锚点（亏损股情景）仍需每家完整营收/净现金/股本，留作后续独立切片。HK 同业因 FMP fundamentals US-only 门禁大概率样本不足，如实返回 `None`，不是本次要修的缺口。 |
 | HK ADR/calendar | `hkAdrCalendarAdapter` | — | pending | — | keep | Phase 2 | 港股/ADR 日期与映射链缺失。 |
 | PostgreSQL calendar | `postgresCalendarAdapter` | — | pending | — | keep | Phase 2–3 | `earnings_calendar` 缺完整 Rust repository。 |
 | PostgreSQL filings | `postgresFilingsAdapter` | — | pending | — | keep | Phase 2–3 | filing/公告读模型未迁移。 |
@@ -192,8 +192,8 @@ These are P0 blockers from the handoff. Dockerfiles or Terraform resources alone
 | Status | Count |
 | --- | ---: |
 | rust-accepted | 32 |
-| skeleton | 27 |
-| pending | 36 |
+| skeleton | 28 |
+| pending | 35 |
 | replaced | 2 |
 | retire-candidate | 0 |
 | blocked | 9 |
