@@ -2,7 +2,9 @@
 //! 共用 `echo-contracts`，页面与 API 模型由 Rust 类型共同约束。
 
 mod api;
+mod compare;
 mod markdown;
+mod profiles;
 mod research;
 mod workspace;
 

@@ -76,6 +76,28 @@ pub async fn patch<I: Serialize + ?Sized, O: DeserializeOwned>(
 }
 
 #[cfg(target_arch = "wasm32")]
+pub async fn put<I: Serialize + ?Sized, O: DeserializeOwned>(
+    path: &str,
+    input: &I,
+) -> Result<O, String> {
+    let response = gloo_net::http::Request::put(path)
+        .json(input)
+        .map_err(|error| format!("请求编码失败：{error}"))?
+        .send()
+        .await
+        .map_err(|error| format!("请求失败：{error}"))?;
+    decode(response).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn put<I: Serialize + ?Sized, O: DeserializeOwned>(
+    _path: &str,
+    _input: &I,
+) -> Result<O, String> {
+    Err("网络请求只在 WASM 浏览器目标执行".into())
+}
+
+#[cfg(target_arch = "wasm32")]
 pub async fn delete<O: DeserializeOwned>(path: &str) -> Result<O, String> {
     let response = gloo_net::http::Request::delete(path)
         .send()
@@ -204,6 +226,37 @@ pub fn post_stream<I: Serialize + ?Sized>(
     on_error("网络请求只在 WASM 浏览器目标执行".into());
     StreamHandle
 }
+
+/// 触发浏览器把一段文本以文件形式下载——纯客户端 Blob + `<a download>`，不经服务端往返，
+/// 不引入任何 JS 依赖。
+#[cfg(target_arch = "wasm32")]
+pub fn download_text_file(filename: &str, mime: &str, content: &str) {
+    use wasm_bindgen::JsCast;
+
+    let parts = js_sys::Array::new();
+    parts.push(&wasm_bindgen::JsValue::from_str(content));
+    let options = web_sys::BlobPropertyBag::new();
+    options.set_type(mime);
+    let Ok(blob) = web_sys::Blob::new_with_str_sequence_and_options(&parts, &options) else {
+        return;
+    };
+    let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) else {
+        return;
+    };
+    if let Some(document) = leptos::window().document() {
+        if let Ok(element) = document.create_element("a") {
+            if let Ok(anchor) = element.dyn_into::<web_sys::HtmlAnchorElement>() {
+                anchor.set_href(&url);
+                anchor.set_download(filename);
+                anchor.click();
+            }
+        }
+    }
+    let _ = web_sys::Url::revoke_object_url(&url);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn download_text_file(_filename: &str, _mime: &str, _content: &str) {}
 
 /// 找到下一帧结尾（`\n\n`），返回其后一个字节的偏移，供 `drain` 一次取走整帧（含分隔符）。
 #[cfg(target_arch = "wasm32")]

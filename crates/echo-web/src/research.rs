@@ -9,8 +9,8 @@
 use crate::api;
 use echo_contracts::{
     AskRequest, AskResponse, CompanyResolveResponse, CompanySearchItem, CompanySearchResponse,
-    Decimal, EarningsCalendarView, GuardView, MutationResponse, ResearchSessionDetail,
-    ResearchSessionResponse, ResearchSessionsResponse, ResearchStreamEvent,
+    Decimal, EarningsCalendarView, GuardView, MutationResponse, ReportGenerateResponse,
+    ResearchSessionDetail, ResearchSessionResponse, ResearchSessionsResponse, ResearchStreamEvent,
     ResearchStreamStageName, RouteView, ValuationView,
 };
 use leptos::*;
@@ -34,6 +34,9 @@ enum TurnStatus {
     Loaded(ResearchSessionDetail),
     Failed(String),
     Cancelled,
+    /// 深度报告——非流式单请求（`POST /api/report/generate`），进行中/完成两态。
+    ReportPending,
+    ReportDone(ReportGenerateResponse),
 }
 
 impl TurnStatus {
@@ -53,6 +56,11 @@ impl TurnStatus {
     fn is_streaming(&self) -> bool {
         matches!(self, Self::Streaming { .. })
     }
+
+    /// 占用提交通道——流式研究进行中，或深度报告正在生成。
+    fn is_busy(&self) -> bool {
+        matches!(self, Self::Streaming { .. } | Self::ReportPending)
+    }
 }
 
 /// 一条对话轮——用户问题 + 助手作答的当前状态。
@@ -65,6 +73,8 @@ struct Turn {
     status: TurnStatus,
     /// 仍在流式进行时持有取消句柄；终态后清空，避免悬空取消一个已结束的请求。
     handle: Option<api::StreamHandle>,
+    /// 深度报告 turn 失败后重试要走 `fire_report`，不能落回默认的 SSE 问答通道。
+    is_report: bool,
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -93,7 +103,7 @@ fn stage_label(stage: Option<ResearchStreamStageName>) -> &'static str {
     }
 }
 
-fn decimal_text(value: Option<Decimal>) -> String {
+pub(crate) fn decimal_text(value: Option<Decimal>) -> String {
     value
         .map(|decimal| decimal.normalize().to_string())
         .unwrap_or_else(|| "—".to_string())
@@ -130,6 +140,7 @@ fn start_turn(
             ticker: ticker.clone(),
             status: TurnStatus::streaming_default(),
             handle: None,
+            is_report: false,
         });
     });
     attach_stream(
@@ -143,7 +154,8 @@ fn start_turn(
     );
 }
 
-/// 重试：把已存在的 turn（取消/失败终态）原地重置为 streaming，而不是追加新 turn。
+/// 重试：把已存在的 turn（取消/失败终态）原地重置，而不是追加新 turn——按 `is_report`
+/// 分流回原来的通道（SSE 问答 或 一次性深度报告），不会把报告失败重试成问答。
 fn retry_turn(
     id: u64,
     question: String,
@@ -153,21 +165,44 @@ fn retry_turn(
     set_session_id: WriteSignal<Option<String>>,
     on_persisted: Callback<()>,
 ) {
-    set_thread.update(|v| {
-        if let Some(turn) = v.iter_mut().find(|t| t.id == id) {
-            turn.status = TurnStatus::streaming_default();
-            turn.handle = None;
-        }
-    });
-    attach_stream(
-        id,
-        question,
-        ticker,
-        session_id,
-        set_thread,
-        set_session_id,
-        on_persisted,
-    );
+    let is_report = set_thread
+        .try_update(|v| {
+            let is_report = v
+                .iter()
+                .find(|t| t.id == id)
+                .is_some_and(|turn| turn.is_report);
+            if let Some(turn) = v.iter_mut().find(|t| t.id == id) {
+                turn.status = if is_report {
+                    TurnStatus::ReportPending
+                } else {
+                    TurnStatus::streaming_default()
+                };
+                turn.handle = None;
+            }
+            is_report
+        })
+        .unwrap_or(false);
+    if is_report {
+        fire_report_request(
+            id,
+            question,
+            ticker,
+            session_id,
+            set_thread,
+            set_session_id,
+            on_persisted,
+        );
+    } else {
+        attach_stream(
+            id,
+            question,
+            ticker,
+            session_id,
+            set_thread,
+            set_session_id,
+            on_persisted,
+        );
+    }
 }
 
 /// 把一次研究请求接到类型化 SSE 流上：事件回来后按 `id` 精确回填对应 turn，
@@ -262,6 +297,73 @@ fn attach_stream(
     });
 }
 
+/// 推入一条深度报告 turn 并发起非流式请求（`POST /api/report/generate`）——与研究问答共用
+/// composer/thread，但走单请求 JSON，不接 SSE。
+fn fire_report(
+    id: u64,
+    question: String,
+    ticker: String,
+    session_id: Option<String>,
+    set_thread: WriteSignal<Vec<Turn>>,
+    set_session_id: WriteSignal<Option<String>>,
+    on_persisted: Callback<()>,
+) {
+    set_thread.update(|v| {
+        v.push(Turn {
+            id,
+            question: question.clone(),
+            ticker: ticker.clone(),
+            status: TurnStatus::ReportPending,
+            handle: None,
+            is_report: true,
+        });
+    });
+    fire_report_request(
+        id,
+        question,
+        ticker,
+        session_id,
+        set_thread,
+        set_session_id,
+        on_persisted,
+    );
+}
+
+/// 深度报告的实际请求发送——不推入 turn，供首次提交与重试共用。
+fn fire_report_request(
+    id: u64,
+    question: String,
+    ticker: String,
+    session_id: Option<String>,
+    set_thread: WriteSignal<Vec<Turn>>,
+    set_session_id: WriteSignal<Option<String>>,
+    on_persisted: Callback<()>,
+) {
+    let mut req = AskRequest::minimal(question, ticker);
+    req.session_id = session_id;
+    leptos::spawn_local(async move {
+        let outcome = api::post::<_, ReportGenerateResponse>("/api/report/generate", &req).await;
+        set_thread.update(|v| {
+            let Some(turn) = v.iter_mut().find(|t| t.id == id) else {
+                return;
+            };
+            if !matches!(turn.status, TurnStatus::ReportPending) {
+                return;
+            }
+            match outcome {
+                Ok(response) => {
+                    if response.session_id.is_some() {
+                        set_session_id.set(response.session_id.clone());
+                    }
+                    turn.status = TurnStatus::ReportDone(response);
+                    on_persisted.call(());
+                }
+                Err(message) => turn.status = TurnStatus::Failed(message),
+            }
+        });
+    });
+}
+
 /// 超时态——流在固定窗口内没到终态（Final/Error），视为卡死，主动取消并转失败可重试。
 /// 一次性定时器，不随事件重置：多阶段研究本就该在这个窗口内跑完，卡死比慢更值得暴露。
 #[cfg(target_arch = "wasm32")]
@@ -300,7 +402,7 @@ fn schedule_stream_timeout(
 
 /// 估值三段带（bear / base / bull）。
 #[component]
-fn ValuationBand(v: ValuationView) -> impl IntoView {
+pub(crate) fn ValuationBand(v: ValuationView) -> impl IntoView {
     if let Some(reason) = v.cannot_value_reason.clone() {
         return view! {
             <div class="valuation-block">
@@ -340,7 +442,7 @@ fn ValuationBand(v: ValuationView) -> impl IntoView {
 
 /// 路由意图 / 深度 / 置信度三个 chip——meta 到达即可展示，final 到达后原样复用。
 #[component]
-fn RouteChips(route: RouteView) -> impl IntoView {
+pub(crate) fn RouteChips(route: RouteView) -> impl IntoView {
     let conf = (route.confidence * 100.0).round() as u32;
     view! {
         <div class="ac-chips">
@@ -352,7 +454,7 @@ fn RouteChips(route: RouteView) -> impl IntoView {
 }
 
 #[component]
-fn CompletenessRow(completeness: u8) -> impl IntoView {
+pub(crate) fn CompletenessRow(completeness: u8) -> impl IntoView {
     view! {
         <div class="completeness-row">
             <div class="completeness-bar">
@@ -364,7 +466,7 @@ fn CompletenessRow(completeness: u8) -> impl IntoView {
 }
 
 #[component]
-fn DataSources(sources: Vec<String>) -> impl IntoView {
+pub(crate) fn DataSources(sources: Vec<String>) -> impl IntoView {
     if sources.is_empty() {
         return ().into_view();
     }
@@ -379,7 +481,7 @@ fn DataSources(sources: Vec<String>) -> impl IntoView {
 }
 
 #[component]
-fn GuardBadge(guard: GuardView) -> impl IntoView {
+pub(crate) fn GuardBadge(guard: GuardView) -> impl IntoView {
     let cls = if guard.has_hard_fail {
         "fact-guard has-hard"
     } else {
@@ -550,6 +652,55 @@ fn HistoryCard(detail: ResearchSessionDetail) -> impl IntoView {
     }
 }
 
+/// 深度报告生成中——非流式单请求，无逐字增量，只给一个进行中提示。
+#[component]
+fn ReportPendingCard() -> impl IntoView {
+    view! {
+        <div class="answer-card">
+            <div class="answer-brand">
+                <div class="answer-mark">
+                    <i class="pulse"></i>
+                    <span>"ECHO RESEARCH · 深度报告"</span>
+                </div>
+            </div>
+            <p class="working-text">"正在生成深度报告…"</p>
+        </div>
+    }
+}
+
+/// 深度报告完成态——固定七段结构的 Markdown + 复用的估值带/护栏，外加客户端导出。
+#[component]
+fn ReportCard(res: ReportGenerateResponse) -> impl IntoView {
+    let html = crate::markdown::render(&res.markdown);
+    let filename = format!("{}-深度报告.md", res.ticker);
+    let markdown = res.markdown.clone();
+    let download =
+        move |_| api::download_text_file(&filename, "text/markdown;charset=utf-8", &markdown);
+    view! {
+        <div class="answer-card">
+            <div class="answer-brand">
+                <div class="answer-mark">
+                    <i></i>
+                    <span>"ECHO RESEARCH · 深度报告"</span>
+                </div>
+                <RouteChips route=res.route.clone() />
+            </div>
+
+            <ValuationBand v=res.valuation.clone() />
+            {res.earnings.clone().map(|e| view! { <EarningsBadge earnings=e /> })}
+
+            <div class="answer-text-section">
+                <p class="answer-source-label">"报告 · " {res.mode.as_str()}</p>
+                <div class="answer-text" inner_html=html></div>
+            </div>
+
+            {res.fact_guard.clone().map(|g| view! { <GuardBadge guard=g /> })}
+
+            <button class="stream-retry" on:click=download>"下载 Markdown"</button>
+        </div>
+    }
+}
+
 #[component]
 fn RetryableMessage(message: String, cancelled: bool, on_retry: Callback<()>) -> impl IntoView {
     let label = if cancelled {
@@ -624,6 +775,13 @@ fn HistorySidebar(
     }
 }
 
+/// 提交走哪条通道——常规问答（SSE）还是一次性深度报告生成。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SubmitMode {
+    Ask,
+    Report,
+}
+
 #[component]
 pub fn ResearchPage(
     initial_session: Option<String>,
@@ -681,6 +839,7 @@ pub fn ResearchPage(
                             ticker: session.ticker.clone().unwrap_or_default(),
                             status: TurnStatus::Loaded(session),
                             handle: None,
+                            is_report: false,
                         }]);
                     }
                     None => {
@@ -715,8 +874,8 @@ pub fn ResearchPage(
         }
     });
 
-    // 任一轮仍在流式进行时视为 pending——禁止再次提交，避免并发请求的结果错位。
-    let pending = move || thread.get().iter().any(|turn| turn.status.is_streaming());
+    // 任一轮仍在流式研究或深度报告生成中都视为 pending——禁止再次提交，避免并发请求的结果错位。
+    let pending = move || thread.get().iter().any(|turn| turn.status.is_busy());
     let on_persisted = Callback::new(move |_| sessions.refetch());
 
     // 研究对象输入变化——本地 DB 候选（便宜）实时查，旧一代请求用 gen 挡掉不覆盖新结果。
@@ -754,37 +913,53 @@ pub fn ResearchPage(
     };
 
     // 确认好的候选（点选或 resolve 验证成功）才真正起一轮研究；输入框和确认态一并清空。
-    let fire_turn = move |target_ticker: String| {
+    let fire = move |mode: SubmitMode, target_ticker: String| {
         let q = question.get().trim().to_string();
+        let q = if q.is_empty() && mode == SubmitMode::Report {
+            "生成深度研究报告".to_string()
+        } else {
+            q
+        };
         if q.is_empty() {
             return;
         }
         let id = next_id.get();
         set_next_id.set(id + 1);
-        start_turn(
-            id,
-            q,
-            target_ticker,
-            current_session_id.get(),
-            set_thread,
-            set_current_session_id,
-            on_persisted,
-        );
+        match mode {
+            SubmitMode::Ask => start_turn(
+                id,
+                q,
+                target_ticker,
+                current_session_id.get(),
+                set_thread,
+                set_current_session_id,
+                on_persisted,
+            ),
+            SubmitMode::Report => fire_report(
+                id,
+                q,
+                target_ticker,
+                current_session_id.get(),
+                set_thread,
+                set_current_session_id,
+                on_persisted,
+            ),
+        }
         set_question.set(String::new());
         set_company_query.set(String::new());
         set_resolved.set(None);
         set_candidates.set(Vec::new());
     };
 
-    let submit = move || {
+    let submit = move |mode: SubmitMode| {
         if pending() || resolving.get() {
             return;
         }
-        if question.get().trim().is_empty() {
+        if mode == SubmitMode::Ask && question.get().trim().is_empty() {
             return;
         }
         if let Some((target_ticker, _)) = resolved.get() {
-            fire_turn(target_ticker);
+            fire(mode, target_ticker);
             return;
         }
         let query = company_query.get().trim().to_string();
@@ -800,7 +975,7 @@ pub fn ResearchPage(
             set_resolving.set(false);
             match outcome {
                 Ok(response) => match response.company {
-                    Some(company) => fire_turn(company.ticker),
+                    Some(company) => fire(mode, company.ticker),
                     None => set_resolve_error.set(Some(format!(
                         "未能把「{query}」识别为可研究的公司，请换个更准确的名称或代码。"
                     ))),
@@ -910,6 +1085,8 @@ pub fn ResearchPage(
                                     }
                                     TurnStatus::Done(response) => view! { <DoneCard res=response /> }.into_view(),
                                     TurnStatus::Loaded(detail) => view! { <HistoryCard detail=detail /> }.into_view(),
+                                    TurnStatus::ReportPending => view! { <ReportPendingCard /> }.into_view(),
+                                    TurnStatus::ReportDone(response) => view! { <ReportCard res=response /> }.into_view(),
                                     TurnStatus::Failed(message) => view! {
                                         <RetryableMessage message=message cancelled=false on_retry=on_retry />
                                     }.into_view(),
@@ -946,7 +1123,7 @@ pub fn ResearchPage(
                         on:keydown=move |ev| {
                             if ev.key() == "Enter" && !ev.shift_key() {
                                 ev.prevent_default();
-                                submit();
+                                submit(SubmitMode::Ask);
                             }
                         }
                         placeholder="研究一家美股 / 港股科技公司……"
@@ -960,7 +1137,7 @@ pub fn ResearchPage(
                                 on:input=on_query_input
                                 on:keydown=move |ev| {
                                     if ev.key() == "Enter" {
-                                        submit();
+                                        submit(SubmitMode::Ask);
                                     } else if ev.key() == "Escape" && !candidates.get_untracked().is_empty() {
                                         ev.stop_propagation();
                                         set_candidates.set(Vec::new());
@@ -1008,8 +1185,15 @@ pub fn ResearchPage(
                             }}
                         </div>
                         <button
+                            class="composer-report"
+                            on:click=move |_| submit(SubmitMode::Report)
+                            disabled=move || pending() || resolving.get()
+                            title="生成深度报告"
+                            aria-label="生成深度研究报告"
+                        >"深度报告"</button>
+                        <button
                             class="composer-send"
-                            on:click=move |_| submit()
+                            on:click=move |_| submit(SubmitMode::Ask)
                             disabled=move || pending() || resolving.get()
                             title="发送（Enter）"
                             aria-label="发送研究请求"

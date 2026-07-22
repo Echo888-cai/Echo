@@ -1,4 +1,4 @@
-use crate::{api, research::ResearchPage};
+use crate::{api, compare::ComparePage, profiles::ProfilesPage, research::ResearchPage};
 use echo_contracts::{
     AuthLoginRequest, AuthLogoutResponse, AuthRegisterRequest, AuthUserResponse,
     ChangedCountResponse, Decimal, MutationResponse, NotificationReadRequest,
@@ -11,6 +11,8 @@ use leptos::*;
 enum Page {
     /// 研究页——可选携带会话 id，对应深链 `/research/:session_id`。
     Research(Option<String>),
+    Compare,
+    Profiles,
     Watch,
     Portfolio,
     Settings,
@@ -22,6 +24,8 @@ impl Page {
         match self {
             Self::Research(None) => "/research".to_string(),
             Self::Research(Some(id)) => format!("/research/{id}"),
+            Self::Compare => "/compare".to_string(),
+            Self::Profiles => "/profiles".to_string(),
             Self::Watch => "/watch".to_string(),
             Self::Portfolio => "/portfolio".to_string(),
             Self::Settings => "/settings".to_string(),
@@ -31,6 +35,8 @@ impl Page {
     const fn label(&self) -> &'static str {
         match self {
             Self::Research(_) => "研究",
+            Self::Compare => "对比",
+            Self::Profiles => "档案",
             Self::Watch => "自选",
             Self::Portfolio => "持仓",
             Self::Settings => "设置",
@@ -50,6 +56,8 @@ fn page_from_path(path: &str) -> Page {
         return Page::Research((!id.is_empty()).then(|| id.to_string()));
     }
     match path {
+        "/compare" => Page::Compare,
+        "/profiles" => Page::Profiles,
         "/watch" => Page::Watch,
         "/portfolio" => Page::Portfolio,
         "/settings" => Page::Settings,
@@ -125,7 +133,7 @@ pub fn Workspace(user: PublicUser, on_auth_changed: Callback<()>) -> impl IntoVi
                     <span class="echo-brand-sub">"Research"</span>
                 </button>
                 <nav class="workspace-nav" aria-label="主导航">
-                    {[Page::Research(None), Page::Watch, Page::Portfolio, Page::Settings]
+                    {[Page::Research(None), Page::Compare, Page::Profiles, Page::Watch, Page::Portfolio, Page::Settings]
                         .into_iter()
                         .map(|item| {
                             let item_for_class = item.clone();
@@ -150,6 +158,8 @@ pub fn Workspace(user: PublicUser, on_auth_changed: Callback<()>) -> impl IntoVi
                     Page::Research(session_id) => view! {
                         <ResearchPage initial_session=session_id on_navigate=on_research_navigate />
                     }.into_view(),
+                    Page::Compare => view! { <ComparePage /> }.into_view(),
+                    Page::Profiles => view! { <ProfilesPage /> }.into_view(),
                     Page::Watch => view! { <WatchPage on_research=Callback::new(move |_| navigate(set_page, Page::Research(None))) /> }.into_view(),
                     Page::Portfolio => view! { <PortfolioPage /> }.into_view(),
                     Page::Settings => view! { <SettingsPage /> }.into_view(),
