@@ -219,8 +219,20 @@ rust-parity-matrix 变更记录）。
    worker-lease 的中途被杀死——避免容器滚动更新把租约晾到过期才被下一实例接手）共用同一套
    SIGTERM/SIGINT 信号处理。真实进程验证：`cargo run` 起两个进程，`kill -TERM` 后确认停机日志
    打印、进程干净退出（非僵死/非崩溃）。fmt/clippy(-D warnings)/test(全绿)/wasm check 门禁全过。
-2. `backup-s3-upload`：`echo-postgres-backup` 当前仅 `pg_dump` 到本地目录，未读
-   `ECHO_BACKUP_BUCKET`、未上传 S3——下一切片。
+2. `backup-s3-upload` ✅已接：`echo-postgres-backup` 在本地 `pg_dump` 成功落盘后（本地文件
+   仍是备份唯一真源），若配置了 `ECHO_BACKUP_BUCKET`/`ECHO_BACKUP_REGION`/`AWS_ACCESS_KEY_ID`/
+   `AWS_SECRET_ACCESS_KEY`（`echo-config::BackupConfig`，四项均非空才算配置完整）则镜像上传
+   到 S3——同 email 的镜像通道策略：未配置诚实降级为仅本地备份，配置了但上传失败也不推翻
+   已完成的本地备份，只把失败信息写进活动结果字符串。直连 S3 REST API 手签 SigV4
+   （`echo-data::BackupStorageService`），没用官方 `aws-sdk-s3`——它的传递依赖
+   `aws-sdk-sts` 1.9x 要求 rustc 1.88，高于本仓库 `rust-toolchain.toml`/CI 钉的 1.85，
+   工具链升级是跨切片的基础设施决定，不在本次范围内顺带做；SigV4 用工作区已有的
+   `hmac`/`sha2`/`hex`（RustCrypto 同源，无新增 MSRV 风险）手工实现，单一 PUT Object
+   请求，算法边界小。验证分两层：①签名算法用独立 Python `hmac`/`hashlib` 脚本重算同一组
+   固定输入（AKIDEXAMPLE 系列示例凭据），逐字节比对签名密钥与完整 Authorization 头，
+   证明两套互不共享代码的实现算出同一结果；②真实端到端跑 `cargo test -p echo-worker --
+   --ignored`，对活库真实 `pg_dump` 落盘，验证未配置 `ECHO_BACKUP_BUCKET` 时诚实降级为
+   `S3=未配置`（真实 S3 桶/凭据需用户本人在 AWS 侧配置后才能验证上传成功路径，见 §2.2）。
 3. HTTPS、密钥注入、OTLP、CI 真浏览器 E2E、镜像 smoke、S3 备份恢复演练：待续，部分需要用户
    本人操作云账号/证书（见 §2.2）。
 

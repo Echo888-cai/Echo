@@ -71,6 +71,48 @@ impl EmailConfig {
     }
 }
 
+/// pg_dump 产物的 S3 镜像通道配置——bucket/region/access key/secret key 四项都非空才算配置
+/// 完整，否则整体视为未配置（诚实降级到仅本地备份，不拿半截配置去尝试签名请求）。
+/// 故意不实现 `Debug`，避免密钥进日志。本 crate 是唯一读取 `AWS_*` 环境变量的地方——
+/// `echo-data` 只拿到已解析好的结构体，不直接散读环境。
+#[derive(Clone)]
+pub struct BackupConfig {
+    pub bucket: String,
+    pub region: String,
+    pub prefix: String,
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: Option<String>,
+}
+
+impl BackupConfig {
+    #[must_use]
+    pub fn from_env() -> Option<Self> {
+        Self::from_lookup(&mut |key| std::env::var(key).ok())
+    }
+
+    fn from_lookup<F>(lookup: &mut F) -> Option<Self>
+    where
+        F: FnMut(&str) -> Option<String>,
+    {
+        let bucket = non_empty(lookup("ECHO_BACKUP_BUCKET"))?;
+        let region = non_empty(lookup("ECHO_BACKUP_REGION"))?;
+        let access_key_id = non_empty(lookup("AWS_ACCESS_KEY_ID"))?;
+        let secret_access_key = non_empty(lookup("AWS_SECRET_ACCESS_KEY"))?;
+        let session_token = non_empty(lookup("AWS_SESSION_TOKEN"));
+        let prefix =
+            non_empty(lookup("ECHO_BACKUP_S3_PREFIX")).unwrap_or_else(|| "postgres".into());
+        Some(Self {
+            bucket,
+            region,
+            prefix,
+            access_key_id,
+            secret_access_key,
+            session_token,
+        })
+    }
+}
+
 /// 模型 provider 配置——两层：DeepSeek 具名预设（默认 base/model，可用 `DEEPSEEK_BASE_URL`/
 /// `DEEPSEEK_MODEL` 覆盖），否则退到通用 `MODEL_*` 覆盖层（指向任意 OpenAI 兼容端点，
 /// 包括 OpenAI 本身——不再单独维护一套 `OPENAI_*` 预设，二者是同一形状的端点）。
@@ -218,6 +260,7 @@ pub struct WorkerConfig {
     pub max_connections: u32,
     pub tick_seconds: u64,
     pub backup_dir: String,
+    pub backup_s3: Option<BackupConfig>,
     pub data_sources: DataSourceConfig,
     pub email: Option<EmailConfig>,
 }
@@ -245,12 +288,14 @@ impl WorkerConfig {
         )?;
         let data_sources = DataSourceConfig::from_lookup(&mut lookup);
         let email = EmailConfig::from_lookup(&mut lookup);
+        let backup_s3 = BackupConfig::from_lookup(&mut lookup);
         Ok(Self {
             database_url,
             max_connections,
             tick_seconds,
             backup_dir: non_empty(lookup("ECHO_BACKUP_DIR"))
                 .unwrap_or_else(|| "backups/postgres".into()),
+            backup_s3,
             data_sources,
             email,
         })

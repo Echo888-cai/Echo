@@ -114,9 +114,11 @@ async fn main() {
         pool.clone(),
         config.data_sources,
         config.email,
+        config.backup_s3,
         config.database_url,
         config.backup_dir,
     )
+    .await
     .expect("build worker activities");
     let worker_id = worker_identity();
     info!(

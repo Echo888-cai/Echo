@@ -1,5 +1,7 @@
 use chrono::{Datelike, Utc};
-use echo_data::{EmailService, HistoricalValuationService, QuoteService, looks_like_email};
+use echo_data::{
+    BackupStorageService, EmailService, HistoricalValuationService, QuoteService, looks_like_email,
+};
 use echo_db::{
     AuthRepository, NewNotification, NotificationsRepository, OperationsRepository, Pool,
     PortfolioRepository,
@@ -35,15 +37,17 @@ pub struct Activities {
     quotes: QuoteService,
     historical_valuation: HistoricalValuationService,
     email: Option<EmailService>,
+    backup_storage: Option<BackupStorageService>,
     database_url: String,
     backup_dir: PathBuf,
 }
 
 impl Activities {
-    pub fn new(
+    pub async fn new(
         pool: Pool,
         data_sources: echo_config::DataSourceConfig,
         email: Option<echo_config::EmailConfig>,
+        backup_s3: Option<echo_config::BackupConfig>,
         database_url: String,
         backup_dir: String,
     ) -> Result<Self, ActivityError> {
@@ -58,10 +62,12 @@ impl Activities {
                 None
             }
         });
+        let backup_storage = backup_s3.map(BackupStorageService::new);
         Ok(Self {
             quotes: QuoteService::new(pool.clone(), data_sources.clone())?,
             historical_valuation: HistoricalValuationService::new(pool.clone(), data_sources)?,
             email,
+            backup_storage,
             pool,
             database_url,
             backup_dir,
@@ -540,7 +546,19 @@ impl Activities {
                     .collect(),
             ));
         }
-        Ok(format!("备份={}", path.display()))
+        // 本地 dump 是备份的唯一真源；S3 只是镜像通道，同 EmailService 的镜像策略——
+        // 只在本地已真正落盘后才尝试，未配置或失败都不推翻已完成的本地备份，只诚实报告状态。
+        let s3_status = match &self.backup_storage {
+            None => "未配置".to_string(),
+            Some(storage) => match storage.upload(&path).await {
+                Ok(uri) => uri,
+                Err(error) => {
+                    warn!(error = %error, backup = %path.display(), "S3 备份镜像上传失败，本地备份已保留");
+                    format!("上传失败: {error}")
+                }
+            },
+        };
+        Ok(format!("备份={} S3={s3_status}", path.display()))
     }
 
     async fn notify(
@@ -580,9 +598,11 @@ mod tests {
             pool,
             echo_config::DataSourceConfig::default(),
             None,
+            None,
             url,
             "backups/postgres".into(),
         )
+        .await
         .expect("build activities");
 
         let digest = activities
@@ -601,5 +621,19 @@ mod tests {
             .await
             .expect("earnings review also sweeps event_earnings rules");
         assert!(earnings.contains("候选="), "earnings={earnings}");
+
+        // 真实 pg_dump 对活库跑一次备份（IMPROVEMENT_PLAN §4 P5-1 backup-s3-upload）：
+        // 本测试没配 ECHO_BACKUP_BUCKET，验证的正是"未配置就诚实降级为仅本地备份"这条路径，
+        // 不是 S3 上传本身（S3 上传的正确性由 backup.rs 里对独立 Python SigV4 实现的单测覆盖，
+        // 真实凭据/桶需要用户本人在 AWS 侧配置后才能端到端跑通）。
+        let backup = activities
+            .run(JobKind::PostgresBackup)
+            .await
+            .expect("pg_dump runs against real DATABASE_URL and produces a local dump file");
+        assert!(backup.contains("备份="), "backup={backup}");
+        assert!(
+            backup.contains("S3=未配置"),
+            "未配置 ECHO_BACKUP_BUCKET 时应诚实降级，backup={backup}"
+        );
     }
 }

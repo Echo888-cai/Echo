@@ -79,6 +79,11 @@ lettre = { version = "0.11", default-features = false, features = [
     "smtp-transport",
     "builder",
 ] }
+# 备份归档 S3 镜像通道：官方 aws-sdk-s3/aws-config 传递依赖（aws-sdk-sts 1.9x）要求
+# rustc 1.88，高于本仓库 1.85 底线（rust-toolchain.toml / CI 均钉 1.85，不在本次单一
+# 能力切片里顺带升级工具链）；改用 reqwest 直连 S3 REST API + 手签 SigV4（hmac/sha2/hex
+# 已在工作区内，RustCrypto 同源，无新增 MSRV 风险）。
+hmac = "0.12"
 
 [profile.release]
 lto = "thin"

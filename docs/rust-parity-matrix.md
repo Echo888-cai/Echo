@@ -124,7 +124,7 @@ All nine schedules are defined and dispatch through a shared `try_claim`/`record
 | Earnings review | `echo-earnings-review` | `JobKind::EarningsReview` | skeleton | schedule/activity unit tests + live 测试（P4-2） | keep | Phase 5 | lease 已接；财务/日历数据面已迁（filings+calendar，P2）；仍缺该 job 自身端到端告警链验证。 |
 | Position alert | `echo-position-alert` | `JobKind::PositionAlert` | skeleton | schedule/activity unit tests | keep | Phase 5 | lease 已接；可计算基础阈值；需真实 RLS、重试测试。 |
 | Review reminder | `echo-review-reminder` | `JobKind::ReviewReminder` | skeleton | schedule/activity unit tests | keep | Phase 5 | lease 已接；提醒活动存在，产品复盘 UI/API（`GET /api/portfolio/review`）不完整。 |
-| PostgreSQL backup | `echo-postgres-backup` | `JobKind::PostgresBackup` | skeleton | activity unit tests | keep | Phase 5 | lease 已接；当前仅 `pg_dump` 至本地目录；未读 `ECHO_BACKUP_BUCKET`、未上传 S3——P5 首个切片。 |
+| PostgreSQL backup | `echo-postgres-backup` | `JobKind::PostgresBackup` | skeleton | activity unit tests + SigV4 signing 单测（对照独立 Python 实现）+ 真库端到端（`--ignored`，验证 S3 未配置诚实降级） | keep | P5-1 | lease 已接；`pg_dump` 至本地目录（唯一真源）后，若配置 `ECHO_BACKUP_BUCKET` 等四项则镜像上传 S3（`echo-data::BackupStorageService`，手签 SigV4，未走官方 SDK——见 IMPROVEMENT_PLAN §4 P5-1 注记）；真实 S3 桶/凭据上传成功路径需用户本人配置 AWS 后验证，本地只验证到"未配置→诚实降级"这条路径与签名算法本身。 |
 
 ## 6. Data adapter parity
 
