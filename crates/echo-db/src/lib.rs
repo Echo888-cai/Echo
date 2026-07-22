@@ -185,6 +185,7 @@ impl<'a> SchedulerStateRepository<'a> {
     }
 
     /// upsert 一条运行记录（作业跑完/失败都记，last_run_at=now）。job_id 冲突即更新——恢复安全。
+    /// 同时释放 `try_claim` 持有的租约：跑完（无论成败）就该立刻让位给下一跳，不必等租约到期。
     pub async fn record_run(&self, job_id: &str, status: &str, detail: Option<&str>) -> Result<()> {
         sqlx::query(
             "INSERT INTO scheduler_state (job_id, last_run_at, last_status, last_detail) \
@@ -192,7 +193,9 @@ impl<'a> SchedulerStateRepository<'a> {
              ON CONFLICT (job_id) DO UPDATE SET \
                last_run_at = excluded.last_run_at, \
                last_status = excluded.last_status, \
-               last_detail = excluded.last_detail",
+               last_detail = excluded.last_detail, \
+               locked_until = NULL, \
+               locked_by = NULL",
         )
         .bind(job_id)
         .bind(status)
@@ -200,6 +203,29 @@ impl<'a> SchedulerStateRepository<'a> {
         .execute(self.pool)
         .await?;
         Ok(())
+    }
+
+    /// 原子抢占一个作业的执行权（worker-lease，IMPROVEMENT_PLAN §4 P4-1）：只有租约为空或已
+    /// 过期时才能抢到，`UPDATE ... WHERE` 的行级锁天然保证多实例并发调用只有一个成功——
+    /// 不需要显式 `SELECT ... FOR UPDATE`，单行 upsert 场景下二者等价。抢占失败即另一实例
+    /// 正在跑或刚跑完，本实例这一跳跳过该作业。
+    pub async fn try_claim(
+        &self,
+        job_id: &str,
+        worker_id: &str,
+        lease_seconds: i64,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE scheduler_state \
+             SET locked_until = now() + ($2 * interval '1 second'), locked_by = $3 \
+             WHERE job_id = $1 AND (locked_until IS NULL OR locked_until < now())",
+        )
+        .bind(job_id)
+        .bind(lease_seconds)
+        .bind(worker_id)
+        .execute(self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
     }
 }
 
@@ -745,6 +771,70 @@ mod tests {
         );
 
         // 清理探针，不留污染。
+        sqlx::query("DELETE FROM scheduler_state WHERE job_id = $1")
+            .bind(probe_id)
+            .execute(&pool)
+            .await
+            .expect("cleanup probe");
+    }
+
+    /// 活库集成：worker-lease 原子抢占（IMPROVEMENT_PLAN §4 P4-1）。证明"第二个实例在租约有效期内
+    /// 抢不到、`record_run` 会释放锁、锁过期后能重新抢到"三件事——这正是多 worker 部署下防止
+    /// 同一 job 被重复执行所依赖的不变量。默认 `#[ignore]`，手动跑：`cargo test -p echo-db -- --ignored`。
+    #[tokio::test]
+    #[ignore = "需要活库 DATABASE_URL"]
+    async fn live_scheduler_lease_claim_round_trip() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            return;
+        };
+        let pool = super::connect(&url, 2).await.expect("connect");
+        if std::env::var("ECHO_SKIP_TEST_MIGRATE").ok().as_deref() != Some("1") {
+            super::migrate(&pool).await.expect("migrate");
+        }
+        let repo = super::SchedulerStateRepository::new(&pool);
+        let probe_id = "echo-verify-lease-probe";
+        repo.register_job(probe_id).await.expect("register");
+
+        // 实例 A 抢到租约。
+        let claimed_a = repo
+            .try_claim(probe_id, "worker-a", 60)
+            .await
+            .expect("claim a");
+        assert!(claimed_a, "首次抢占应成功");
+
+        // 实例 B 在租约有效期内抢同一 job——必须失败，不能两个实例同时跑同一作业。
+        let claimed_b = repo
+            .try_claim(probe_id, "worker-b", 60)
+            .await
+            .expect("claim b");
+        assert!(!claimed_b, "租约未过期时第二个实例不应抢到");
+
+        // A 跑完调 record_run——应同时释放锁，B 立刻能抢到，不必等 60s 租约到期。
+        repo.record_run(probe_id, "ok", Some("lease probe"))
+            .await
+            .expect("record_run releases lease");
+        let claimed_b_after_release = repo
+            .try_claim(probe_id, "worker-b", 60)
+            .await
+            .expect("claim b after release");
+        assert!(claimed_b_after_release, "record_run 后锁应已释放，B 能抢到");
+        repo.record_run(probe_id, "ok", Some("release b"))
+            .await
+            .expect("release b's claim before expiry scenario");
+
+        // 租约过期（用负秒数模拟已过期）后，即便没调 record_run，别的实例也能重新抢到——
+        // 覆盖"持锁进程崩溃"场景，不会永久卡死这个 job。
+        let claimed_c = repo
+            .try_claim(probe_id, "worker-c", -1)
+            .await
+            .expect("claim c expires immediately");
+        assert!(claimed_c, "锁已释放，C 应能抢到（即便租约设为已过期）");
+        let claimed_d = repo
+            .try_claim(probe_id, "worker-d", 60)
+            .await
+            .expect("claim d");
+        assert!(claimed_d, "过期租约应可被下一个实例重新抢占");
+
         sqlx::query("DELETE FROM scheduler_state WHERE job_id = $1")
             .bind(probe_id)
             .execute(&pool)

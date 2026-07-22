@@ -7,7 +7,8 @@
 > Last inventoried: 2026-07-22 · Updated for #44 (ResearchService / QA fixtures), #45 (CI live DB),
 > P2-4 (api-hardening: rate limit / readiness / Origin / body limit), P2-3 remainder
 > (comp_peers 同业锚点接线), P2 remainder (company_filings 公告读模型接线, migration 0011), and
-> P3-2 (company_profiles repository/API 接线；Web 编辑页与自动沉淀仍 pending)。
+> P3-2 (company_profiles repository/API + Web 编辑页接线；自动沉淀仍 pending), Web 对比视图/
+> 深度报告导出接线, P4-1 (worker-lease claim/lease 接线)。
 
 ## 1. Purpose and update rules
 
@@ -60,7 +61,7 @@ The baseline contained 45 REST surfaces: `/healthz` plus 44 registered REST cont
 | Research answer | `POST /api/ask` | `ResearchService` + `echo-api` adapter | skeleton | application fake ports + API | keep | #44 | 编排已收口 application；完整取数/hard-fail/客户端事实隔离未完。 |
 | Research SSE | historical SSE on ask | `POST /api/ask/stream` typed events | rust-accepted | application stream tests + contract tags + Web 手动浏览器验证 | keep | web-typed-stream | meta/stage/delta/guard/final/error 已落地并在 final 后落库；Web 已消费，取消经 `AbortController` 传播、服务端断流落 `cancelled` 审计。 |
 | Chat alias | `POST /api/chat` | Unified `POST /api/ask` | replaced | ask contract tests | keep | #44 / Phase 3 | 统一研究入口可替代独立 chat；需 ADR/兼容说明。 |
-| Generate deep report | `POST /api/report/generate` | `ReportService` + `echo-api` adapter | rust-accepted | application unit tests（本地兜底/模型路径/落库）+ 纯核路径真实 HTTP 端到端验证 | keep | IMPROVEMENT_PLAN §4 P3-3 | 与 `/api/ask` 共用 `assemble_facts`/`build_panel`/护栏；报告专属提示词固定七段结构，模型不可用或输出过短退化为本地确定性报告，落库归位同一研究会话。Web 导出视图未做。 |
+| Generate deep report | `POST /api/report/generate` | `ReportService` + `echo-api` adapter + `echo-web::research::ReportCard` | rust-accepted | application unit tests（本地兜底/模型路径/落库）+ 纯核路径真实 HTTP 端到端验证 + Web 端真实生成/下载实测（AAPL 完整七段报告） | keep | IMPROVEMENT_PLAN §4 P3-3 | 与 `/api/ask` 共用 `assemble_facts`/`build_panel`/护栏；报告专属提示词固定七段结构，模型不可用或输出短于 200 字退化为本地确定性报告，落库归位同一研究会话。Web 视图/导出已接（研究页 composer 按钮，客户端 Blob 下载 `.md`）。 |
 | Discover | `POST /api/discover` | — | product-decide | — | product-decide | Product / ADR | 是否保留“发现”工作流未裁决。 |
 | Events digest | `GET /api/events/digest` | Worker digest 内部活动 | pending | worker activity tests only | keep | Phase 3 | Worker 可发摘要，不等价用户读取 API。 |
 | Ingest HK financials | `POST /api/hk-financials/ingest` | — | pending | — | keep | Phase 2–3 | HKEX/filing ingestion 未迁移。 |
@@ -81,7 +82,7 @@ The baseline contained 45 REST surfaces: `/healthz` plus 44 registered REST cont
 | Delete portfolio position | `DELETE /api/portfolio` | `PortfolioRepository::delete` | rust-accepted | repository/API + CI live | keep | #43 / #45 | 按用户与 ticker 删除。 |
 | List company profiles | `GET /api/company/profiles` | `GET /api/profiles`（`echo-db::CompanyProfileRepository::list`） | rust-accepted | 真库 tenant-isolation 单测 + live HTTP round-trip（CI 见 rust-parity-matrix 惯例，本地真库手测） | keep | P3-2 | 路由名从 `/api/company/profiles` 改为 `/api/profiles`（与既有 `/api/research/sessions` 等新命名对齐）。 |
 | Company profile | `GET /api/company/profile` | `GET /api/profiles/:ticker`（`echo-db::CompanyProfileRepository::get`） | rust-accepted | 同上 | keep | P3-2 | 详情含 bull/bear/monitors/falsifiers 数组 + 估值带；`profile_md` 字段保留（Rust 侧尚未生成，只读写既有值）。 |
-| Delete company profile | `DELETE /api/company/profile` | `DELETE /api/profiles/:ticker`（`echo-db::CompanyProfileRepository::delete`） | rust-accepted | 同上 | keep | P3-2 | 同上。写路径新增 `PUT /api/profiles/:ticker`（原 TS 版无对应端点，供手动建档/编辑；自动从研究会话沉淀仍 pending，见下一行）。 |
+| Delete company profile | `DELETE /api/company/profile` | `DELETE /api/profiles/:ticker`（`echo-db::CompanyProfileRepository::delete`） | rust-accepted | 同上 | keep | P3-2 | 同上。写路径新增 `PUT /api/profiles/:ticker`（原 TS 版无对应端点，供手动建档/编辑；自动从研究会话沉淀仍 pending，见下一行）。Web 编辑页已接（`echo-web::profiles::ProfilesPage`，真库端到端验证：PUT 后 `company_profiles.thesis` 真实落值）。 |
 | Auto-populate profile from research | — | — | pending | — | keep | P3-2 remainder | 每轮研究自动沉淀 thesis/bull/bear 到档案——需要先定语义（哪些字段从答案抽取、抽取规则），产品判断，未做。当前只有手动编辑 API。 |
 | Company review | `GET /api/company/review` | — | pending | — | keep | Phase 3–4 | 画像 review/scorecard 未迁移。 |
 | Research scorecard | `GET /api/research/scorecard` | — | pending | — | keep | Phase 3–4 | 研究质量/资产 scorecard 未迁移。 |
@@ -90,7 +91,7 @@ The baseline contained 45 REST surfaces: `/healthz` plus 44 registered REST cont
 | Clear research sessions | `DELETE /api/research/sessions` | `ResearchSessionRepository::clear` | rust-accepted | repository/API tests | keep | #43 | 同上。 |
 | Get research session | `GET /api/research/sessions/:id` | `ResearchSessionRepository::get` | rust-accepted | repository/API + CI live | keep | #43 / #45 | 不等价多轮 conversation。 |
 | Delete research session | `DELETE /api/research/sessions/:id` | `ResearchSessionRepository::delete` | rust-accepted | repository/API + CI live | keep | #43 / #45 | 同上。 |
-| Compare research (双主体对比) | `POST /api/compare` | `ResearchService::compare` | rust-accepted | application 单测 + 真库/真 FMP/真模型端到端（AAPL vs MSFT，双腿 0 hard fail）| keep | P3-1 | 架构判断已定：分别验证不合并 registry；不落库、不支持多轮；Web 对比视图未做。已知 `fact_guard.rs` 货币标签窗口在两数字紧邻时可能误吞邻居标签（预置代码限制，非本次引入）。 |
+| Compare research (双主体对比) | `POST /api/compare` | `ResearchService::compare` + `echo-web::compare::ComparePage` | rust-accepted | application 单测 + 真库/真 FMP/真模型端到端（AAPL vs MSFT，双腿 0 hard fail，Web 双栏渲染实测）| keep | P3-1 | 架构判断已定：分别验证不合并 registry；不落库、不支持多轮；Web 对比视图已接。已知 `fact_guard.rs` 货币标签窗口在两数字紧邻时可能误吞邻居标签（预置代码限制，非本次引入）。 |
 
 ## 4. Web page parity
 
@@ -151,7 +152,7 @@ All nine schedules are defined and can execute activities, but no atomic claim/l
 | Preferences | `userPreferencesRepository` | `PreferencesRepository` | rust-accepted | repository/API + CI live | keep | #43 / #45 | 通知偏好已落地。 |
 | Notifications | `notificationsRepository` | `NotificationsRepository` | rust-accepted | repository/API tests | keep | #43 | 去重咽喉存在。 |
 | Research sessions | `researchSessionsRepository` | `ResearchSessionRepository` | rust-accepted | repository/API + CI live + 真库端到端（多轮续问同一行）| keep | #43 / #45 / P3-4 | 多轮续问同一行已接线（`session_id` 归位 + `turn_count`/`thread_json` 累加）；facts/guard 版本链仍缺。 |
-| Scheduler state | scheduler repository | `SchedulerStateRepository` | skeleton | schedule tests + CI live | keep | #45 / Phase 5 | 有运行记录，无 claim/lease、失败游标和 status API。 |
+| Scheduler state | scheduler repository | `SchedulerStateRepository` | skeleton | schedule tests + CI live + `try_claim`/`record_run` 真库端到端（见 P4-1） | keep | #45 / P4-1 | 有运行记录 + claim/lease（`locked_until`/`locked_by`，migration 0012）；失败游标和 status API 仍缺。 |
 | Operations/rules/snapshots | worker repositories | `OperationsRepository` | skeleton | activity tests | keep | #43 | Worker 内部读取存在；公开 API 与后台 RLS 仍不足。 |
 | LLM audit | `llmAuditRepository` | partial DB implementation | skeleton | unit tests | keep | Phase 1, 3 | stream final 状态和全链路追溯未闭环。 |
 | Data-source fields/canary | canary repositories | — | pending | — | keep | Phase 2 | 缺新鲜度、授权元数据、供应商 canary repository。 |
@@ -187,7 +188,7 @@ These are P0 blockers from the handoff. Dockerfiles or Terraform resources alone
 | HTTPS and secure cookies | ALB/domain/certificate | partial cookie flag | blocked | — | keep | Phase 5 | 缺 ACM、443、域名、HSTS。 |
 | Runtime secret injection | Secrets Manager | config parses keys | blocked | — | keep | Phase 5 | Terraform 未注入模型与数据源密钥。 |
 | S3 backup and restore | `ECHO_BACKUP_BUCKET` | local `pg_dump` | blocked | no S3/restore drill | keep | Phase 5 | Worker 不读取 bucket。 |
-| Multi-worker safety | ECS desired count 2–8 | due-time scheduler only | blocked | no dual-worker test | keep | Phase 5 | 缺 claim/lease。 |
+| Multi-worker safety | ECS desired count 2–8 | `SchedulerStateRepository::try_claim`（原子 `UPDATE ... WHERE` 抢占） | rust-accepted | `live_scheduler_lease_claim_round_trip`（真库：第二实例抢不到、`record_run` 释放锁、过期租约可被重新抢占） | keep | P4-1 | 15 分钟租约兜底崩溃恢复；ECS desired count 仍需 Phase 5 部署验证多实例真实场景。 |
 | Observability | OTEL Terraform config | tracing logs only | blocked | — | keep | Phase 5 | OTLP exporter 未安装。 |
 | Research/API rate limiting | WAF/table claim | `echo-db::RateLimitRepository` + ask/ask_stream 中间件 | rust-accepted | 见上方 Rate limits 行 | keep | P2-4 | 见上方 Rate limits 行。 |
 | API safety/readiness | production boundary | Origin 校验 + readiness + body 上限 + 限流中间件 | rust-accepted | API 单测 + 真库端到端手测 | keep | P2-4 | `enforce_origin`（缺 Origin 放行、Origin 存在必须在白名单）+ `/ready`（真连 DB）+ `DefaultBodyLimit::max(512KiB)`；优雅停机仍 pending（Phase 5）。 |

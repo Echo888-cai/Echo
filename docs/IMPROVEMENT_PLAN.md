@@ -148,14 +148,18 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
    数字可能误吞前一个的货币标签——对比研究场景比单公司场景更容易触发；调研时用真实文本
    复现过，已用更长间隔的答案文本绕开，但护栏本身未修（不在本次架构判断范围内，需要时另开
    小 PR：把货币标签窗口从"字符距离"改成"就近原则"或要求标签与数字之间不能跨越另一个数字）。
-   **仍未做**：Web 对比视图（两个 ticker 解析 + 结果双栏渲染，需要新页面/路由，属机械接线，
-   非架构判断）、对比会话落库/续问（需要先定"对比会话"在 `research_sessions` 单 ticker schema
-   下怎么存，或要不要新表）。
+   ✅ **Web 对比视图已接**（`echo-web::compare::ComparePage`，双 ticker 输入 + 独立双栏渲染，
+   两腿的估值/护栏卡片各自独立，绝不混排；真实端到端验证：AAPL vs MSFT 利润质量对比，
+   两栏各自 26 项核对/25 soft/0 hard，模型作答正确分别引用双方数字）。**仍未做**：对比会话
+   落库/续问（需要先定"对比会话"在 `research_sessions` 单 ticker schema 下怎么存，或要不要
+   新表——产品判断，非本次范围）。
 2. `company-profiles` ✅已接 repository/API（`echo-db::CompanyProfileRepository` + `GET/PUT/DELETE
    /api/profiles[/:ticker]`，真库 tenant-isolation 单测 + live HTTP 验证：建档→部分更新保留
-   未传字段→turn_count 按轮次递增→删除不复活）。**仍 pending**：Web 编辑页（产品级 UX 决定，
-   未做）；研究会话自动沉淀 thesis/bull/bear 到档案（需先定"从答案抽取什么、怎么抽"的语义，
-   产品判断，未做——当前只有手动 PUT 编辑）。
+   未传字段→turn_count 按轮次递增→删除不复活）。✅ **Web 编辑页已接**（`echo-web::profiles::
+   ProfilesPage`，列表+详情编辑表单，thesis/bull/bear/monitors/falsifiers/自由笔记；真库端到端
+   验证：编辑 AAPL 档案 thesis 字段，PUT 后 `company_profiles` 表真实落值）。**仍 pending**：
+   研究会话自动沉淀 thesis/bull/bear 到档案（需先定"从答案抽取什么、怎么抽"的语义，产品判断，
+   未做——当前只有手动 PUT 编辑）。
 3. `deep-report` ✅已接生成（`POST /api/report/generate`，`echo-application::ReportService::generate`
    与 `/api/ask` 共用同一条 `assemble_facts`/`build_panel` 取数管线——不是另起一条编排，
    只在提示词与产物形态上分叉：`build_report_prompt` 复用与聊天回答同一份 `facts_block`
@@ -167,8 +171,9 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
    同一份 `FactsRegistry`。落库复用 `PersistResearchSession`，`session_id` 续接同一研究会话。
    真实端到端验证：纯核路径（无 DB/无模型配置）真实 HTTP 调用 AAPL 请求，本地兜底 0.1s
    出带真实数字的完整 Markdown 报告，估值区间正确算出，fact_guard 9 项核对 6 pass/3
-   soft/0 hard fail，会话落库返回 session_id。**仍未做**：Web 报告视图/导出（新页面/路由，
-   机械接线，非架构判断，未做）。
+   soft/0 hard fail，会话落库返回 session_id。✅ **Web 报告视图/导出已接**（研究页 composer 加
+   "深度报告"按钮，复用同一对话 thread 渲染报告卡片；客户端 Blob+`<a download>` 导出 `.md`，
+   零 JS 依赖；真实端到端验证：AAPL 深度报告页面渲染完整七段结构，落库归位研究历史）。
 4. `multi-turn` ✅已接（`echo_contracts::AskRequest.session_id` + `AskResponse.session_id`；
    `ResearchPorts::load_prior_turns` 读回本会话此前几轮问答，`answer_prompt` 拼一段明确标注
    "仅供代词/实体承接、不得引用其中数字"的历史块，`fact_guard` 仍只用本轮现取事实核数——
@@ -178,7 +183,12 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
    `turn_count` 2、`thread_json` 累积两轮问答，未污染其他会话）。
 
 ### P4 · 主动研究（简报触达）
-1. `worker-lease`：`SELECT ... FOR UPDATE SKIP LOCKED` + `locked_until`，job 幂等；完成前 worker 单实例。
+1. `worker-lease` ✅已接（`scheduler_state` 加 `locked_until`/`locked_by`，migration 0012；
+   `SchedulerStateRepository::try_claim` 用原子 `UPDATE ... WHERE (locked_until IS NULL OR
+   locked_until < now())` 抢占——单行 upsert 场景下与 `SELECT ... FOR UPDATE SKIP LOCKED`
+   等价，`dispatch` 前先抢锁，抢不到即跳过；`record_run` 完成时同步释放锁，崩溃未释放的锁
+   靠 15 分钟租约自然过期兜底。真库端到端验证：第二实例在租约内抢不到、`record_run` 后立即
+   能抢到、租约过期后能被第三个实例重新抢占）。
 2. `digest-to-user`：盘前/盘后简报进通知面板 + 邮件（通知必须过偏好/免打扰/去重咽喉）。
 3. `watch-rules`：自选规则（价格/估值分位/事件触发）+ desk 视图 + 触发通知。
 
