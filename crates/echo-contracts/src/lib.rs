@@ -67,6 +67,10 @@ pub struct AskRequest {
     pub net_cash: Option<Decimal>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub draft_answer: Option<String>,
+    /// 已有会话 id——续问同一研究会话（同 ticker 追问）时带上，落库归位同一行、
+    /// 历史只用于代词/实体承接，不作为本轮数字核对依据。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 impl AskRequest {
@@ -209,6 +213,10 @@ pub struct AskResponse {
     pub earnings: Option<EarningsCalendarView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub filings: Vec<FilingView>,
+    /// 本轮落库归属的会话 id——落库失败且是新会话时为 `None`；Web 拿到后带回下一轮
+    /// `AskRequest.session_id` 即可续接同一研究会话。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// 类型化研究 SSE 事件。`type` 字段与 Axum `event:` 名对齐。

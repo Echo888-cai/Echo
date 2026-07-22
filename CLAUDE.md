@@ -1,5 +1,6 @@
 # Echo Research 开发约束
 
+- 用中文回答。
 - Cargo 是唯一工程入口；禁止新增 Node、Python、手写 TypeScript/JavaScript 业务实现。
 - `docs/PLAN.md` 是唯一计划与架构底账。
 - `echo-domain` 只放纯规则，`echo-application` 只做用例，`echo-db` 是唯一数据库入口，`echo-data` 是唯一外部供应商入口，`echo-api`/`echo-worker` 只做边界与调度，`echo-web` 只放 Leptos/WASM UI。

@@ -118,7 +118,9 @@ fn start_turn(
     id: u64,
     question: String,
     ticker: String,
+    session_id: Option<String>,
     set_thread: WriteSignal<Vec<Turn>>,
+    set_session_id: WriteSignal<Option<String>>,
     on_persisted: Callback<()>,
 ) {
     set_thread.update(|v| {
@@ -130,7 +132,15 @@ fn start_turn(
             handle: None,
         });
     });
-    attach_stream(id, question, ticker, set_thread, on_persisted);
+    attach_stream(
+        id,
+        question,
+        ticker,
+        session_id,
+        set_thread,
+        set_session_id,
+        on_persisted,
+    );
 }
 
 /// 重试：把已存在的 turn（取消/失败终态）原地重置为 streaming，而不是追加新 turn。
@@ -138,7 +148,9 @@ fn retry_turn(
     id: u64,
     question: String,
     ticker: String,
+    session_id: Option<String>,
     set_thread: WriteSignal<Vec<Turn>>,
+    set_session_id: WriteSignal<Option<String>>,
     on_persisted: Callback<()>,
 ) {
     set_thread.update(|v| {
@@ -147,19 +159,32 @@ fn retry_turn(
             turn.handle = None;
         }
     });
-    attach_stream(id, question, ticker, set_thread, on_persisted);
+    attach_stream(
+        id,
+        question,
+        ticker,
+        session_id,
+        set_thread,
+        set_session_id,
+        on_persisted,
+    );
 }
 
 /// 把一次研究请求接到类型化 SSE 流上：事件回来后按 `id` 精确回填对应 turn，
-/// 迟到事件（turn 已是别的终态）一律忽略。
+/// 迟到事件（turn 已是别的终态）一律忽略。带 `session_id` 时后端把这轮追加到
+/// 同一研究会话（历史只帮代词/实体承接，不注入旧数字）；`Final` 落库归位的会话 id
+/// 回填进 `set_session_id`，同一页面接下来的追问就能续接同一会话。
 fn attach_stream(
     id: u64,
     question: String,
     ticker: String,
+    session_id: Option<String>,
     set_thread: WriteSignal<Vec<Turn>>,
+    set_session_id: WriteSignal<Option<String>>,
     on_persisted: Callback<()>,
 ) {
-    let req = AskRequest::minimal(question, ticker);
+    let mut req = AskRequest::minimal(question, ticker);
+    req.session_id = session_id;
 
     let on_event = move |event: ResearchStreamEvent| {
         set_thread.update(|v| {
@@ -171,6 +196,9 @@ fn attach_stream(
             }
             match event {
                 ResearchStreamEvent::Final(f) => {
+                    if f.response.session_id.is_some() {
+                        set_session_id.set(f.response.session_id.clone());
+                    }
                     turn.status = TurnStatus::Done(f.response);
                     turn.handle = None;
                     on_persisted.call(());
@@ -612,6 +640,9 @@ pub fn ResearchPage(
     let (thread, set_thread) = create_signal(Vec::<Turn>::new());
     let (next_id, set_next_id) = create_signal(0u64);
     let (session_error, set_session_error) = create_signal(None::<String>);
+    // 本页面当前续接的研究会话 id——深链带来的历史会话，或本页面第一轮问答落库后
+    // 归位的新会话；后续每一轮追问都带上它，让模型能承接代词/实体指代。
+    let (current_session_id, set_current_session_id) = create_signal(initial_session.clone());
 
     let sessions = create_resource(
         || (),
@@ -730,7 +761,15 @@ pub fn ResearchPage(
         }
         let id = next_id.get();
         set_next_id.set(id + 1);
-        start_turn(id, q, target_ticker, set_thread, on_persisted);
+        start_turn(
+            id,
+            q,
+            target_ticker,
+            current_session_id.get(),
+            set_thread,
+            set_current_session_id,
+            on_persisted,
+        );
         set_question.set(String::new());
         set_company_query.set(String::new());
         set_resolved.set(None);
@@ -826,7 +865,15 @@ pub fn ResearchPage(
                                 let retry_question = turn.question.clone();
                                 let retry_ticker = turn.ticker.clone();
                                 let on_retry = Callback::new(move |_| {
-                                    retry_turn(turn_id, retry_question.clone(), retry_ticker.clone(), set_thread, on_persisted);
+                                    retry_turn(
+                                        turn_id,
+                                        retry_question.clone(),
+                                        retry_ticker.clone(),
+                                        current_session_id.get(),
+                                        set_thread,
+                                        set_current_session_id,
+                                        on_persisted,
+                                    );
                                 });
                                 let result_view = match turn.status {
                                     TurnStatus::Streaming {

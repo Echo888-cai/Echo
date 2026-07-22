@@ -6,6 +6,7 @@
 //! 全是纯函数（事实进、字符串出），不碰网络/时钟，可离线单测每条红线分支。
 
 use crate::DecisionPanel;
+use crate::research::PriorTurn;
 use echo_domain::{Filing, Financials, MarketSnapshot};
 use rust_decimal::Decimal;
 
@@ -17,6 +18,8 @@ pub struct AnswerContext<'a> {
     pub market: &'a MarketSnapshot,
     pub financials: &'a Financials,
     pub filings: &'a [Filing],
+    /// 同一研究会话此前几轮的问答——只帮模型承接代词/实体指代，不得当作本轮数字来源。
+    pub history: &'a [PriorTurn],
 }
 
 /// 固定的 system 红线——研究助手人设 + 不可逾越的护栏。与 composer 的 system 段同义：
@@ -31,6 +34,16 @@ pub fn build_system_prompt() -> String {
         "· 不用「暂不评分」「完整度xx%」这类产品状态词，改用研究语言（未核到、置信度下降）。",
     ]
     .join("\n")
+}
+
+/// 按字符边界截断（多字节安全），超长追加省略号提示这是摘要而非全文。
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max).collect();
+    out.push('…');
+    out
 }
 
 /// 把一个可选定点数渲染成事实行的值；缺就「未核到」。
@@ -67,6 +80,21 @@ pub fn build_user_prompt(ctx: &AnswerContext) -> String {
 
     let mut out = String::new();
     out.push_str(&format!("研究对象：{name}（{}）\n", ctx.panel.ticker));
+
+    if !ctx.history.is_empty() {
+        out.push_str(
+            "\n== 本次会话此前几轮问答（仅供理解代词/实体指代，不得引用其中任何数字作为本轮核对依据——本轮所有数字以下方事实块为准）==\n",
+        );
+        let recent = ctx.history.iter().rev().take(3).collect::<Vec<_>>();
+        for turn in recent.into_iter().rev() {
+            out.push_str(&format!(
+                "用户问：{}\n上轮作答摘要：{}\n\n",
+                turn.question,
+                truncate_chars(&turn.answer, 300)
+            ));
+        }
+    }
+
     out.push_str(&format!("用户问题：{}\n\n", ctx.question));
 
     out.push_str("== 已核到的事实（只用这些数字）==\n");
@@ -193,6 +221,7 @@ mod tests {
             market: &market,
             financials: &financials,
             filings: &[],
+            history: &[],
         });
         assert!(prompt.contains("严禁给出任何具体财务数字"));
         assert!(!prompt.contains("已核到的实时财报"));
@@ -213,6 +242,7 @@ mod tests {
             market: &market,
             financials: &financials,
             filings: &[],
+            history: &[],
         });
         assert!(prompt.contains("已核到的实时财报"));
         assert!(prompt.contains("383000USD"));
@@ -231,6 +261,7 @@ mod tests {
             market: &market,
             financials: &financials,
             filings: &[],
+            history: &[],
         });
         assert!(prompt.contains("现价：未核到"));
     }
@@ -254,6 +285,7 @@ mod tests {
             market: &market,
             financials: &financials,
             filings: &filings,
+            history: &[],
         });
         assert!(prompt.contains("已核到的最新公司公告"));
         assert!(prompt.contains("10-K"));
@@ -275,7 +307,58 @@ mod tests {
             market: &market,
             financials: &financials,
             filings: &[],
+            history: &[],
         });
         assert!(!prompt.contains("已核到的最新公司公告"));
+    }
+
+    #[test]
+    fn history_carries_pronouns_but_is_labeled_not_a_fact_source() {
+        let (panel, financials) = panel_with(Some(dec!(190)), false);
+        let market = MarketSnapshot {
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let history = vec![PriorTurn {
+            question: "苹果的护城河是什么？".into(),
+            answer: "苹果的护城河主要在生态锁定与服务收入占比提升。".into(),
+        }];
+        let prompt = build_user_prompt(&AnswerContext {
+            question: "它的估值贵不贵？",
+            name_zh: Some("苹果"),
+            panel: &panel,
+            market: &market,
+            financials: &financials,
+            filings: &[],
+            history: &history,
+        });
+        assert!(prompt.contains("不得引用其中任何数字作为本轮核对依据"));
+        assert!(prompt.contains("苹果的护城河是什么？"));
+        assert!(prompt.contains("生态锁定"));
+    }
+
+    #[test]
+    fn history_answer_beyond_limit_is_truncated() {
+        let (panel, financials) = panel_with(Some(dec!(190)), false);
+        let market = MarketSnapshot {
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let long_answer = "壁".repeat(400);
+        let history = vec![PriorTurn {
+            question: "护城河？".into(),
+            answer: long_answer.clone(),
+        }];
+        let prompt = build_user_prompt(&AnswerContext {
+            question: "它的估值贵不贵？",
+            name_zh: Some("苹果"),
+            panel: &panel,
+            market: &market,
+            financials: &financials,
+            filings: &[],
+            history: &history,
+        });
+        assert!(!prompt.contains(&long_answer));
+        assert!(prompt.contains('…'));
     }
 }

@@ -26,8 +26,8 @@ use echo_application::model_gateway::{
 };
 use echo_application::{
     AuthError, AuthService, CompanyResolvePorts, CompanyResolveService, DbCompanyHit,
-    ExternalSymbolHit, LoadedFundamentals, PersistResearchSession, ResearchPorts, ResearchService,
-    ResolvedCompany, market_snapshot_from_rows, resolved_company_from_rows,
+    ExternalSymbolHit, LoadedFundamentals, PersistResearchSession, PriorTurn, ResearchPorts,
+    ResearchService, ResolvedCompany, market_snapshot_from_rows, resolved_company_from_rows,
 };
 use echo_config::ApiConfig;
 use echo_contracts::{
@@ -1221,11 +1221,12 @@ impl ResearchPorts for ApiResearchPorts {
         &self,
         user_id: &str,
         session: PersistResearchSession,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let Some(pool) = &self.state.pool else {
-            return Ok(());
+            return Ok(session.id.unwrap_or_else(|| "s_offline".to_string()));
         };
         let save = SaveResearchSession {
+            id: session.id,
             ticker: session.ticker,
             company_name: session.company_name,
             question: session.question,
@@ -1234,13 +1235,28 @@ impl ResearchPorts for ApiResearchPorts {
             full_research: session.full_research,
             data_sources: session.data_sources,
             turn_count: session.turn_count,
+            thread: session.thread,
             ..Default::default()
         };
         ResearchSessionRepository::new(pool)
             .save(user_id, &save)
             .await
-            .map(|_| ())
             .map_err(|error| error.to_string())
+    }
+
+    async fn load_prior_turns(&self, user_id: &str, session_id: &str) -> Vec<PriorTurn> {
+        let Some(pool) = &self.state.pool else {
+            return Vec::new();
+        };
+        let Ok(Some(row)) = ResearchSessionRepository::new(pool)
+            .get(user_id, session_id)
+            .await
+        else {
+            return Vec::new();
+        };
+        row.thread_json
+            .and_then(|value| serde_json::from_value::<Vec<PriorTurn>>(value).ok())
+            .unwrap_or_default()
     }
 }
 

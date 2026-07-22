@@ -85,7 +85,7 @@ The baseline contained 45 REST surfaces: `/healthz` plus 44 registered REST cont
 | Auto-populate profile from research | — | — | pending | — | keep | P3-2 remainder | 每轮研究自动沉淀 thesis/bull/bear 到档案——需要先定语义（哪些字段从答案抽取、抽取规则），产品判断，未做。当前只有手动编辑 API。 |
 | Company review | `GET /api/company/review` | — | pending | — | keep | Phase 3–4 | 画像 review/scorecard 未迁移。 |
 | Research scorecard | `GET /api/research/scorecard` | — | pending | — | keep | Phase 3–4 | 研究质量/资产 scorecard 未迁移。 |
-| Research conversations | `GET /api/research/conversations` | — | pending | — | keep | Phase 1, 3 | 现有 session 是独立 turn；缺 conversation grouping。 |
+| Research conversations | `POST /api/ask[/stream]` 带 `session_id` | `ResearchPorts::load_prior_turns` + `persist_outcome` | rust-accepted | application 单测 + 真库端到端（同 session 两轮落成同一行，turn_count/thread_json 累加）| keep | P3-4 | 无独立 conversation 列表端点，续问同一 `research_sessions` 行即"会话"；历史只喂 prompt 做代词/实体承接，不进 `FactsRegistry`。 |
 | List research sessions | `GET /api/research/sessions` | `ResearchSessionRepository::list` | rust-accepted | repository/API + CI live | keep | #43 / #45 | 列表、读取、删除、清空基础契约已存在。 |
 | Clear research sessions | `DELETE /api/research/sessions` | `ResearchSessionRepository::clear` | rust-accepted | repository/API tests | keep | #43 | 同上。 |
 | Get research session | `GET /api/research/sessions/:id` | `ResearchSessionRepository::get` | rust-accepted | repository/API + CI live | keep | #43 / #45 | 不等价多轮 conversation。 |
@@ -149,7 +149,7 @@ All nine schedules are defined and can execute activities, but no atomic claim/l
 | Portfolio positions | `portfolioRepository` | `PortfolioRepository` | skeleton | repository/API + CI live | keep | #43 / #45 | CRUD 已有；enriched/review/snapshot 仍缺。 |
 | Preferences | `userPreferencesRepository` | `PreferencesRepository` | rust-accepted | repository/API + CI live | keep | #43 / #45 | 通知偏好已落地。 |
 | Notifications | `notificationsRepository` | `NotificationsRepository` | rust-accepted | repository/API tests | keep | #43 | 去重咽喉存在。 |
-| Research sessions | `researchSessionsRepository` | `ResearchSessionRepository` | skeleton | repository/API + CI live | keep | #43 / #45 | 单 turn 保存；缺 conversation/facts/guard 版本链。 |
+| Research sessions | `researchSessionsRepository` | `ResearchSessionRepository` | rust-accepted | repository/API + CI live + 真库端到端（多轮续问同一行）| keep | #43 / #45 / P3-4 | 多轮续问同一行已接线（`session_id` 归位 + `turn_count`/`thread_json` 累加）；facts/guard 版本链仍缺。 |
 | Scheduler state | scheduler repository | `SchedulerStateRepository` | skeleton | schedule tests + CI live | keep | #45 / Phase 5 | 有运行记录，无 claim/lease、失败游标和 status API。 |
 | Operations/rules/snapshots | worker repositories | `OperationsRepository` | skeleton | activity tests | keep | #43 | Worker 内部读取存在；公开 API 与后台 RLS 仍不足。 |
 | LLM audit | `llmAuditRepository` | partial DB implementation | skeleton | unit tests | keep | Phase 1, 3 | stream final 状态和全链路追溯未闭环。 |

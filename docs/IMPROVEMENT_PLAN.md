@@ -147,7 +147,13 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
    未做）；研究会话自动沉淀 thesis/bull/bear 到档案（需先定"从答案抽取什么、怎么抽"的语义，
    产品判断，未做——当前只有手动 PUT 编辑）。
 3. `deep-report`：深度报告生成 + 导出；报告只引用 registry 内已核数字。
-4. `multi-turn`：conversation 分组、代词承接；历史只帮承接，旧数字不得注入新事实。
+4. `multi-turn` ✅已接（`echo_contracts::AskRequest.session_id` + `AskResponse.session_id`；
+   `ResearchPorts::load_prior_turns` 读回本会话此前几轮问答，`answer_prompt` 拼一段明确标注
+   "仅供代词/实体承接、不得引用其中数字"的历史块，`fact_guard` 仍只用本轮现取事实核数——
+   历史绝不进 `FactsRegistry`；`persist_outcome` 用 `session_id` 归位同一行而非插入新行，
+   `turn_count`/`thread_json` 按轮次累加；Web 页面级 `current_session_id` 信号在第一轮落库后
+   自动续接，后续追问在同一页面自动带 `session_id`。真库端到端验证：连续两轮问答落成同一行，
+   `turn_count` 2、`thread_json` 累积两轮问答，未污染其他会话）。
 
 ### P4 · 主动研究（简报触达）
 1. `worker-lease`：`SELECT ... FOR UPDATE SKIP LOCKED` + `locked_until`，job 幂等；完成前 worker 单实例。

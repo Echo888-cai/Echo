@@ -17,6 +17,7 @@ use echo_domain::{
     MultipleType, PeerAnchor, RegistrySources, ResearchRoute, build_facts_registry,
     build_soft_note, classify_asset_stage, route_research_intent, verify_answer_numbers,
 };
+use serde::{Deserialize, Serialize};
 use std::future::Future;
 use tokio::sync::mpsc;
 
@@ -43,9 +44,19 @@ pub struct CompareResearchFacts {
     pub peer: ResearchFacts,
 }
 
+/// 同一研究会话此前一轮的问答摘要——只用于代词/实体承接，绝不作为本轮数字核对依据
+/// （不携带任何 `FactsRegistry` 数值，只是问题原文 + 上轮作答的自然语言文本）。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PriorTurn {
+    pub question: String,
+    pub answer: String,
+}
+
 /// 会话落库所需最小字段（与 `echo-db::SaveResearchSession` 对齐，避免端口泄漏 sqlx 细节）。
 #[derive(Clone, Debug, Default)]
 pub struct PersistResearchSession {
+    /// 续问同一会话时带上已有 id，落库归位同一行而不是插入新行。
+    pub id: Option<String>,
     pub ticker: String,
     pub company_name: Option<String>,
     pub question: Option<String>,
@@ -54,6 +65,8 @@ pub struct PersistResearchSession {
     pub full_research: Option<String>,
     pub data_sources: Option<serde_json::Value>,
     pub turn_count: Option<i32>,
+    /// 累积问答历史（含本轮）；只有生成了新作答时才带上，否则 `None` 保留库里原值。
+    pub thread: Option<serde_json::Value>,
 }
 
 /// 外部财务事实补数结果——请求体缺数时由端口注入；`pe_ttm` 优先于行情 PE。
@@ -102,6 +115,14 @@ pub trait ResearchPorts: Send + Sync {
     /// 最近公司公告/披露（美股专属）。缺数/未核到返回空列表——绝不占位。
     fn load_recent_filings(&self, ticker: &str) -> impl Future<Output = Vec<Filing>> + Send;
 
+    /// 续问已有会话时读回此前几轮问答（仅供代词/实体承接）。会话不存在/不属于该用户/
+    /// 未带 `session_id` 一律返回空——空历史不是错误，是"这是新会话"。
+    fn load_prior_turns(
+        &self,
+        user_id: &str,
+        session_id: &str,
+    ) -> impl Future<Output = Vec<PriorTurn>> + Send;
+
     fn complete_answer(
         &self,
         system: &str,
@@ -117,11 +138,12 @@ pub trait ResearchPorts: Send + Sync {
         user_id: String,
     ) -> impl Future<Output = ModelStreamStart> + Send;
 
+    /// 落库并返回归位的会话 id（续问时与传入的 `id` 一致，新会话时是新生成的 id）。
     fn save_session(
         &self,
         user_id: &str,
         session: PersistResearchSession,
-    ) -> impl Future<Output = Result<(), String>> + Send;
+    ) -> impl Future<Output = Result<String, String>> + Send;
 }
 
 /// 一次非流式研究的结果；可追溯主体、护栏与是否已落库。
@@ -228,6 +250,7 @@ impl ResearchService {
             facts.peer_anchor.as_ref(),
             &facts.filings,
         );
+        let prior_turns = load_prior_turns_for(ports, user_id, &req).await;
 
         let (answer, answer_source) = match req.draft_answer.clone() {
             Some(draft) => (Some(draft), AnswerSource::Draft),
@@ -240,6 +263,7 @@ impl ResearchService {
                     market: &facts.market,
                     financials: &facts.financials,
                     filings: &facts.filings,
+                    history: &prior_turns,
                 });
                 match ports.complete_answer(&system, &user_prompt, user_id).await {
                     Some(generated) => (Some(generated), AnswerSource::Generated),
@@ -252,7 +276,7 @@ impl ResearchService {
             .as_deref()
             .map(|draft| guard_view(&req, &facts, &panel, draft));
 
-        let response = build_ask_response(
+        let mut response = build_ask_response(
             &panel,
             &route,
             answer,
@@ -261,7 +285,9 @@ impl ResearchService {
             facts.earnings_calendar.as_ref(),
             &facts.filings,
         );
-        let persisted = persist_outcome(ports, user_id, &req, &facts, &response).await;
+        let (persisted, session_id) =
+            persist_outcome(ports, user_id, &req, &facts, &response, &prior_turns).await;
+        response.session_id = session_id;
 
         ResearchOutcome {
             response,
@@ -319,6 +345,7 @@ async fn drive_stream<P: ResearchPorts>(
         facts.peer_anchor.as_ref(),
         &facts.filings,
     );
+    let prior_turns = load_prior_turns_for(ports, user_id, &req).await;
 
     send(ResearchStreamEvent::Meta(ResearchStreamMeta {
         ticker: panel.ticker.clone(),
@@ -357,6 +384,7 @@ async fn drive_stream<P: ResearchPorts>(
             market: &facts.market,
             financials: &facts.financials,
             filings: &facts.filings,
+            history: &prior_turns,
         });
         match ports
             .stream_answer(system, user_prompt, user_id.to_string())
@@ -401,7 +429,7 @@ async fn drive_stream<P: ResearchPorts>(
     }))
     .await?;
 
-    let response = build_ask_response(
+    let mut response = build_ask_response(
         &panel,
         &route,
         answer,
@@ -415,13 +443,27 @@ async fn drive_stream<P: ResearchPorts>(
         name: ResearchStreamStageName::Persisting,
     }))
     .await?;
-    let persisted = persist_outcome(ports, user_id, &req, &facts, &response).await;
+    let (persisted, session_id) =
+        persist_outcome(ports, user_id, &req, &facts, &response, &prior_turns).await;
+    response.session_id = session_id;
     send(ResearchStreamEvent::Final(ResearchStreamFinal {
         response,
         persisted,
     }))
     .await?;
     Ok(())
+}
+
+/// 有 `session_id` 才读历史；新会话没有可承接的上文，空列表就是正确答案。
+async fn load_prior_turns_for<P: ResearchPorts>(
+    ports: &P,
+    user_id: &str,
+    req: &AskRequest,
+) -> Vec<PriorTurn> {
+    match req.session_id.as_deref() {
+        Some(session_id) => ports.load_prior_turns(user_id, session_id).await,
+        None => Vec::new(),
+    }
 }
 
 fn guard_view(
@@ -480,6 +522,7 @@ fn build_ask_response(
         fact_guard,
         earnings: earnings_view(earnings_calendar),
         filings: filings_view(filings),
+        session_id: None,
     }
 }
 
@@ -506,14 +549,26 @@ fn earnings_view(calendar: Option<&EarningsCalendar>) -> Option<EarningsCalendar
     })
 }
 
+/// 落库并返回 `(是否成功, 归位的会话 id)`；失败时若是续问已有会话，id 原样带回（客户端
+/// 已经在跟踪那个会话，不因这一轮落库失败就丢线索）。
 async fn persist_outcome<P: ResearchPorts>(
     ports: &P,
     user_id: &str,
     req: &AskRequest,
     facts: &ResearchFacts,
     response: &AskResponse,
-) -> bool {
+    prior_turns: &[PriorTurn],
+) -> (bool, Option<String>) {
+    let thread = response.answer.as_ref().map(|answer| {
+        let mut entries = prior_turns.to_vec();
+        entries.push(PriorTurn {
+            question: req.question.clone(),
+            answer: answer.clone(),
+        });
+        serde_json::to_value(&entries).unwrap_or(serde_json::Value::Null)
+    });
     let session = PersistResearchSession {
+        id: req.session_id.clone(),
         ticker: req.ticker.clone(),
         company_name: facts.company.name_zh.clone(),
         question: Some(req.question.clone()),
@@ -521,9 +576,13 @@ async fn persist_outcome<P: ResearchPorts>(
         decision_panel: serde_json::to_value(&response.valuation).ok(),
         full_research: response.answer.clone(),
         data_sources: Some(serde_json::json!({ "connected": response.connected_sources.clone() })),
-        turn_count: Some(1),
+        turn_count: Some(prior_turns.len() as i32 + 1),
+        thread,
     };
-    ports.save_session(user_id, session).await.is_ok()
+    match ports.save_session(user_id, session).await {
+        Ok(id) => (true, Some(id)),
+        Err(_) => (false, req.session_id.clone()),
+    }
 }
 
 fn route_view(route: &ResearchRoute) -> RouteView {
@@ -592,6 +651,7 @@ mod tests {
         stream_unavailable: bool,
         saved: Mutex<Vec<PersistResearchSession>>,
         fail_save: bool,
+        prior_turns: Vec<PriorTurn>,
     }
 
     impl ResearchPorts for FakePorts {
@@ -634,6 +694,10 @@ mod tests {
             Vec::new()
         }
 
+        async fn load_prior_turns(&self, _user_id: &str, _session_id: &str) -> Vec<PriorTurn> {
+            self.prior_turns.clone()
+        }
+
         async fn complete_answer(
             &self,
             _system: &str,
@@ -672,12 +736,16 @@ mod tests {
             &self,
             _user_id: &str,
             session: PersistResearchSession,
-        ) -> Result<(), String> {
+        ) -> Result<String, String> {
             if self.fail_save {
                 return Err("db down".into());
             }
+            let id = session
+                .id
+                .clone()
+                .unwrap_or_else(|| format!("s_{}", self.saved.lock().expect("lock").len()));
             self.saved.lock().expect("lock").push(session);
-            Ok(())
+            Ok(id)
         }
     }
 
@@ -708,6 +776,53 @@ mod tests {
         assert!(outcome.response.fact_guard.is_some());
         assert!(outcome.persisted);
         assert_eq!(outcome.route.intent.as_str(), "valuation");
+    }
+
+    #[tokio::test]
+    async fn continuing_session_reuses_id_and_feeds_history_not_facts() {
+        let ports = FakePorts {
+            prior_turns: vec![PriorTurn {
+                question: "苹果的护城河是什么？".into(),
+                answer: "生态锁定与服务收入占比提升。".into(),
+            }],
+            answer: Some("现价约 190 美元，估值偏贵。".into()),
+            ..FakePorts::default()
+        };
+        let req = AskRequest {
+            question: "它的估值贵不贵？".into(),
+            ticker: "AAPL".into(),
+            session_id: Some("s_existing".into()),
+            ..Default::default()
+        };
+        let outcome = ResearchService::ask(&ports, "user-1", req).await;
+        assert_eq!(outcome.response.session_id.as_deref(), Some("s_existing"));
+        let saved = ports.saved.lock().expect("lock");
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].id.as_deref(), Some("s_existing"));
+        assert_eq!(saved[0].turn_count, Some(2), "此前一轮 + 本轮");
+        let thread: Vec<PriorTurn> =
+            serde_json::from_value(saved[0].thread.clone().expect("thread")).expect("decode");
+        assert_eq!(thread.len(), 2);
+        assert_eq!(thread[0].question, "苹果的护城河是什么？");
+        assert_eq!(thread[1].question, "它的估值贵不贵？");
+    }
+
+    #[tokio::test]
+    async fn save_failure_on_continuation_still_returns_known_session_id() {
+        let ports = FakePorts {
+            fail_save: true,
+            answer: Some("ok".into()),
+            ..FakePorts::default()
+        };
+        let req = AskRequest {
+            question: "还有其他风险吗".into(),
+            ticker: "AAPL".into(),
+            session_id: Some("s_existing".into()),
+            ..Default::default()
+        };
+        let outcome = ResearchService::ask(&ports, "user-1", req).await;
+        assert!(!outcome.persisted);
+        assert_eq!(outcome.response.session_id.as_deref(), Some("s_existing"));
     }
 
     #[tokio::test]

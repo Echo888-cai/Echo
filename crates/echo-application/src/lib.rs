@@ -30,7 +30,7 @@ pub use model_gateway::{
     OwnedAuditContext, ProviderConfig, model_answer, model_answer_stream, parse_json_object,
 };
 pub use research::{
-    CompareResearchFacts, LoadedFundamentals, PersistResearchSession, ResearchFacts,
+    CompareResearchFacts, LoadedFundamentals, PersistResearchSession, PriorTurn, ResearchFacts,
     ResearchOutcome, ResearchPorts, ResearchService,
 };
 
