@@ -13,9 +13,11 @@ use echo_contracts::{
     RouteView, ValuationView,
 };
 use echo_domain::{
-    AssetStage, Company, Financials, MarketSnapshot, RegistrySources, ResearchRoute,
-    build_facts_registry, build_soft_note, route_research_intent, verify_answer_numbers,
+    AssetStage, Company, Financials, MarketSnapshot, MultipleType, PeerAnchor, RegistrySources,
+    ResearchRoute, build_facts_registry, build_soft_note, route_research_intent,
+    verify_answer_numbers,
 };
+use rust_decimal::Decimal;
 use std::future::Future;
 use tokio::sync::mpsc;
 
@@ -30,6 +32,42 @@ pub struct ResearchFacts {
     pub company: ResolvedCompany,
     pub market: MarketSnapshot,
     pub financials: Financials,
+    /// 同业锚点（PE 分位数）；样本不足或端口未接线时为 `None`，估值退回行业默认倍数。
+    pub peer_anchor: Option<PeerAnchor>,
+}
+
+/// 一条同业候选的可比 PE（TTM）；由端口取回，估值层只信任已过滤为正的值。
+#[derive(Clone, Debug)]
+pub struct PeerComparable {
+    pub ticker: String,
+    pub pe_ttm: Decimal,
+}
+
+/// 由同业候选算 PE 同业锚点：过滤正值、`n < 2` 判样本不足返回 `None`（不得伪造锚点）。
+#[must_use]
+pub fn build_peer_anchor(comparables: &[PeerComparable]) -> Option<PeerAnchor> {
+    let mut values: Vec<(Decimal, &str)> = comparables
+        .iter()
+        .filter(|item| item.pe_ttm > Decimal::ZERO)
+        .map(|item| (item.pe_ttm, item.ticker.as_str()))
+        .collect();
+    if values.len() < 2 {
+        return None;
+    }
+    values.sort_by(|a, b| a.0.cmp(&b.0));
+    let n = values.len();
+    let quantile = |q: f64| values[((n - 1) as f64 * q).round() as usize].0;
+    Some(PeerAnchor {
+        multiple_type: MultipleType::Pe,
+        p25: quantile(0.25),
+        median: quantile(0.5),
+        p75: quantile(0.75),
+        n,
+        tickers: values
+            .iter()
+            .map(|(_, ticker)| (*ticker).to_string())
+            .collect(),
+    })
 }
 
 /// 比较研究的双腿事实；两侧 registry 不得交叉污染。
@@ -74,6 +112,9 @@ pub trait ResearchPorts: Send + Sync {
         &self,
         ticker: &str,
     ) -> impl Future<Output = Option<LoadedFundamentals>> + Send;
+
+    /// 同业候选 PE（TTM）。无端口/无同业/上游失败一律返回空 `Vec`，不阻断主研究链。
+    fn load_peers(&self, ticker: &str) -> impl Future<Output = Vec<PeerComparable>> + Send;
 
     fn complete_answer(
         &self,
@@ -166,10 +207,12 @@ impl ResearchService {
                 }
             }
         }
+        let peer_anchor = build_peer_anchor(&ports.load_peers(&req.ticker).await);
         ResearchFacts {
             company,
             market,
             financials,
+            peer_anchor,
         }
     }
 
@@ -181,7 +224,12 @@ impl ResearchService {
     ) -> ResearchOutcome {
         let route = route_research_intent(&req.question);
         let facts = Self::assemble_facts(ports, &req).await;
-        let panel = build_panel(&facts.company, &facts.market, &facts.financials, None);
+        let panel = build_panel(
+            &facts.company,
+            &facts.market,
+            &facts.financials,
+            facts.peer_anchor.as_ref(),
+        );
 
         let (answer, answer_source) = match req.draft_answer.clone() {
             Some(draft) => (Some(draft), AnswerSource::Draft),
@@ -257,7 +305,12 @@ async fn drive_stream<P: ResearchPorts>(
 
     let route = route_research_intent(&req.question);
     let facts = ResearchService::assemble_facts(ports, &req).await;
-    let panel = build_panel(&facts.company, &facts.market, &facts.financials, None);
+    let panel = build_panel(
+        &facts.company,
+        &facts.market,
+        &facts.financials,
+        facts.peer_anchor.as_ref(),
+    );
 
     send(ResearchStreamEvent::Meta(ResearchStreamMeta {
         ticker: panel.ticker.clone(),
@@ -482,6 +535,7 @@ mod tests {
         market: Option<(ResolvedCompany, MarketSnapshot)>,
         refresh_ok: bool,
         fundamentals: Option<LoadedFundamentals>,
+        peers: Vec<PeerComparable>,
         answer: Option<String>,
         stream_chunks: Vec<String>,
         stream_fail: Option<String>,
@@ -508,6 +562,10 @@ mod tests {
 
         async fn load_fundamentals(&self, _ticker: &str) -> Option<LoadedFundamentals> {
             self.fundamentals.clone()
+        }
+
+        async fn load_peers(&self, _ticker: &str) -> Vec<PeerComparable> {
+            self.peers.clone()
         }
 
         async fn complete_answer(
@@ -565,6 +623,99 @@ mod tests {
             out.push(event);
         }
         out
+    }
+
+    #[test]
+    fn peer_anchor_needs_at_least_two_positive_comparables() {
+        assert!(build_peer_anchor(&[]).is_none());
+        assert!(
+            build_peer_anchor(&[PeerComparable {
+                ticker: "MSFT".into(),
+                pe_ttm: dec!(30),
+            }])
+            .is_none()
+        );
+        assert!(
+            build_peer_anchor(&[
+                PeerComparable {
+                    ticker: "MSFT".into(),
+                    pe_ttm: dec!(30),
+                },
+                PeerComparable {
+                    ticker: "GOOGL".into(),
+                    pe_ttm: dec!(-5),
+                },
+            ])
+            .is_none(),
+            "唯一的正值同业不足两家，不得伪造锚点"
+        );
+    }
+
+    #[test]
+    fn peer_anchor_computes_quantiles_from_positive_comparables() {
+        let anchor = build_peer_anchor(&[
+            PeerComparable {
+                ticker: "MSFT".into(),
+                pe_ttm: dec!(30),
+            },
+            PeerComparable {
+                ticker: "GOOGL".into(),
+                pe_ttm: dec!(20),
+            },
+            PeerComparable {
+                ticker: "META".into(),
+                pe_ttm: dec!(-4),
+            },
+            PeerComparable {
+                ticker: "AMZN".into(),
+                pe_ttm: dec!(40),
+            },
+        ])
+        .expect("n>=2 positive comparables");
+        assert_eq!(anchor.multiple_type, MultipleType::Pe);
+        assert_eq!(anchor.n, 3);
+        assert_eq!(anchor.median, dec!(30));
+        assert!(anchor.tickers.contains(&"MSFT".to_string()));
+        assert!(!anchor.tickers.contains(&"META".to_string()));
+    }
+
+    #[tokio::test]
+    async fn peer_anchor_feeds_valuation_when_ports_provide_peers() {
+        let ports = FakePorts {
+            peers: vec![
+                PeerComparable {
+                    ticker: "MSFT".into(),
+                    pe_ttm: dec!(30),
+                },
+                PeerComparable {
+                    ticker: "GOOGL".into(),
+                    pe_ttm: dec!(20),
+                },
+            ],
+            answer: Some("ok".into()),
+            ..FakePorts::default()
+        };
+        // 价格须落在同业 PE 带内（p25 20x ~ p75 30x × EPS 5 → 100~150），否则触发
+        // "带子与现价不自洽"护栏，本用例就验证不到同业锚点是否真的接线。
+        let req = AskRequest {
+            question: "估值怎么样".into(),
+            ticker: "AAPL".into(),
+            price: Some(dec!(130)),
+            eps: Some(dec!(5)),
+            ..Default::default()
+        };
+        let outcome = ResearchService::ask(&ports, "user-1", req).await;
+        assert!(outcome.facts.peer_anchor.is_some());
+        assert!(
+            outcome
+                .response
+                .valuation
+                .key_assumptions
+                .iter()
+                .any(|line| line.contains("同业倍数 PE")),
+            "接上同业锚点后应走同业倍数 PE 法，而不是仅退回默认倍数：{:?}",
+            outcome.response.valuation.key_assumptions
+        );
     }
 
     #[tokio::test]

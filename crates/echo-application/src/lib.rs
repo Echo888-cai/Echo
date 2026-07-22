@@ -28,8 +28,8 @@ pub use model_gateway::{
     OwnedAuditContext, ProviderConfig, model_answer, model_answer_stream, parse_json_object,
 };
 pub use research::{
-    CompareResearchFacts, LoadedFundamentals, PersistResearchSession, ResearchFacts,
-    ResearchOutcome, ResearchPorts, ResearchService,
+    CompareResearchFacts, LoadedFundamentals, PeerComparable, PersistResearchSession,
+    ResearchFacts, ResearchOutcome, ResearchPorts, ResearchService,
 };
 
 /// 一轮研究请求——公司是必到字段（由公司解析闭环在边界处兑现），history 只用于代词承接。

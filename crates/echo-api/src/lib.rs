@@ -26,8 +26,8 @@ use echo_application::model_gateway::{
 };
 use echo_application::{
     AuthError, AuthService, CompanyResolvePorts, CompanyResolveService, DbCompanyHit,
-    ExternalSymbolHit, LoadedFundamentals, PersistResearchSession, ResearchPorts, ResearchService,
-    ResolvedCompany, market_snapshot_from_rows, resolved_company_from_rows,
+    ExternalSymbolHit, LoadedFundamentals, PeerComparable, PersistResearchSession, ResearchPorts,
+    ResearchService, ResolvedCompany, market_snapshot_from_rows, resolved_company_from_rows,
 };
 use echo_config::ApiConfig;
 use echo_contracts::{
@@ -43,7 +43,8 @@ use echo_contracts::{
     UnreadResponse, UserPreferences, UserRole, WatchEntry, WatchListResponse, WatchMutationRequest,
 };
 use echo_data::{
-    FmpSearchService, FundamentalsRow, FundamentalsService, QuoteService, pct_change, pct_of,
+    FmpSearchService, FundamentalsRow, FundamentalsService, PeersService, QuoteService, pct_change,
+    pct_of,
 };
 use echo_db::{
     CompanyRepository, MarketRepository, NotificationsRepository, Pool, PortfolioRepository,
@@ -69,6 +70,7 @@ pub struct AppState {
     quotes: Option<QuoteService>,
     fundamentals: Option<FundamentalsService>,
     fmp_search: Option<FmpSearchService>,
+    peers: Option<PeersService>,
     auth_disabled: bool,
     auth_disabled_user_id: String,
     secure_cookie: bool,
@@ -83,6 +85,7 @@ impl AppState {
             quotes: None,
             fundamentals: None,
             fmp_search: None,
+            peers: None,
             auth_disabled: true,
             auth_disabled_user_id: "local".into(),
             secure_cookie: false,
@@ -917,6 +920,28 @@ impl ResearchPorts for ApiResearchPorts {
         })
     }
 
+    /// 同业候选 PE（TTM）：Finnhub 取候选 ticker，逐个复用 FMP fundamentals 取 `pe_ttm`。
+    /// 缺 peers/fundamentals 服务、上游失败、或候选无正 PE 一律返回空，不阻断主研究链。
+    async fn load_peers(&self, ticker: &str) -> Vec<PeerComparable> {
+        let (Some(peers), Some(fundamentals)) =
+            (self.state.peers.as_ref(), self.state.fundamentals.as_ref())
+        else {
+            return Vec::new();
+        };
+        let candidates = peers.fetch_peer_tickers(ticker).await;
+        let mut comparables = Vec::with_capacity(candidates.len());
+        for candidate in candidates {
+            let result = fundamentals.fetch(&candidate).await;
+            if let Some(pe_ttm) = result.latest().and_then(|row| row.pe_ttm) {
+                comparables.push(PeerComparable {
+                    ticker: candidate,
+                    pe_ttm,
+                });
+            }
+        }
+        comparables
+    }
+
     async fn complete_answer(&self, system: &str, user: &str, user_id: &str) -> Option<String> {
         let audit = self
             .state
@@ -1089,11 +1114,13 @@ pub async fn run() {
     });
     let fundamentals = FundamentalsService::new(config.data_sources.clone()).ok();
     let fmp_search = FmpSearchService::new(config.data_sources.clone()).ok();
+    let peers = PeersService::new(config.data_sources.clone()).ok();
     let app = router(AppState {
         pool,
         quotes,
         fundamentals,
         fmp_search,
+        peers,
         auth_disabled: config.auth_disabled,
         auth_disabled_user_id: config.auth_disabled_user_id,
         secure_cookie: config.secure_cookie,
@@ -1228,6 +1255,7 @@ mod tests {
             quotes: None,
             fundamentals: None,
             fmp_search: None,
+            peers: None,
             auth_disabled: false,
             auth_disabled_user_id: "local".into(),
             secure_cookie: false,
