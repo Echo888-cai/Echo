@@ -90,6 +90,7 @@ The baseline contained 45 REST surfaces: `/healthz` plus 44 registered REST cont
 | Clear research sessions | `DELETE /api/research/sessions` | `ResearchSessionRepository::clear` | rust-accepted | repository/API tests | keep | #43 | 同上。 |
 | Get research session | `GET /api/research/sessions/:id` | `ResearchSessionRepository::get` | rust-accepted | repository/API + CI live | keep | #43 / #45 | 不等价多轮 conversation。 |
 | Delete research session | `DELETE /api/research/sessions/:id` | `ResearchSessionRepository::delete` | rust-accepted | repository/API + CI live | keep | #43 / #45 | 同上。 |
+| Compare research (双主体对比) | `POST /api/compare` | `ResearchService::compare` | rust-accepted | application 单测 + 真库/真 FMP/真模型端到端（AAPL vs MSFT，双腿 0 hard fail）| keep | P3-1 | 架构判断已定：分别验证不合并 registry；不落库、不支持多轮；Web 对比视图未做。已知 `fact_guard.rs` 货币标签窗口在两数字紧邻时可能误吞邻居标签（预置代码限制，非本次引入）。 |
 
 ## 4. Web page parity
 

@@ -773,6 +773,40 @@ pub struct ResearchSessionResponse {
     pub session: Option<ResearchSessionDetail>,
 }
 
+/// 双主体对比研究入口——两个 ticker 各自独立取数，绝无"问苹果答腾讯"的合并事实面。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompareRequest {
+    pub question: String,
+    pub primary_ticker: String,
+    pub peer_ticker: String,
+}
+
+/// 对比研究里单腿的结构化事实——与单公司 `AskResponse` 同源字段，独立不共享。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompareLegView {
+    pub ticker: String,
+    pub data_completeness: u8,
+    pub connected_sources: Vec<String>,
+    pub valuation: ValuationView,
+    /// 该腿自己的护栏结果——只用本腿的 `FactsRegistry` 核对整段作答，两腿互不合并、
+    /// 互不借用对方的事实登记表（"分别验证"，见 IMPROVEMENT_PLAN §4 P3-1）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fact_guard: Option<GuardView>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompareResponse {
+    pub route: RouteView,
+    pub primary: CompareLegView,
+    pub peer: CompareLegView,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
+    pub answer_source: AnswerSource,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

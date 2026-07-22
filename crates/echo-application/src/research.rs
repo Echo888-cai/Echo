@@ -3,14 +3,17 @@
 //! 编排顺序固定为：解析主体（当前由请求 ticker 提供）→ 取数 → 衍生/估值 →
 //! 提示词 → 生成 → 护栏 → 持久化。端口用假实现即可做无 IO 单测。
 
-use crate::answer_prompt::{AnswerContext, build_system_prompt, build_user_prompt};
+use crate::answer_prompt::{
+    AnswerContext, CompareLegContext, build_compare_user_prompt, build_system_prompt,
+    build_user_prompt,
+};
 use crate::model_gateway::{ModelStreamEvent, ModelStreamStart};
 use crate::{DecisionPanel, ResolvedCompany, build_panel};
 use echo_contracts::{
-    AnswerSource, AskRequest, AskResponse, AssetStageView, EarningsCalendarView, FilingView,
-    GuardView, MethodBandView, ResearchStreamDelta, ResearchStreamError, ResearchStreamEvent,
-    ResearchStreamFinal, ResearchStreamGuard, ResearchStreamMeta, ResearchStreamStage,
-    ResearchStreamStageName, RouteView, ValuationView,
+    AnswerSource, AskRequest, AskResponse, AssetStageView, CompareLegView, CompareResponse,
+    EarningsCalendarView, FilingView, GuardView, MethodBandView, ResearchStreamDelta,
+    ResearchStreamError, ResearchStreamEvent, ResearchStreamFinal, ResearchStreamGuard,
+    ResearchStreamMeta, ResearchStreamStage, ResearchStreamStageName, RouteView, ValuationView,
 };
 use echo_domain::{
     AssetStage, Company, EarningsCalendar, Filing, Financials, HistoricalValuation, MarketSnapshot,
@@ -155,6 +158,15 @@ pub struct ResearchOutcome {
     pub persisted: bool,
 }
 
+/// 一次对比研究的结果；两腿事实全程隔离，不落库（对比会话的落库形态待产品判断，见
+/// IMPROVEMENT_PLAN §4 P3-1）。
+#[derive(Clone, Debug)]
+pub struct CompareOutcome {
+    pub response: CompareResponse,
+    pub facts: CompareResearchFacts,
+    pub route: ResearchRoute,
+}
+
 #[derive(Clone, Debug)]
 pub struct ResearchService;
 
@@ -294,6 +306,86 @@ impl ResearchService {
             facts,
             route,
             persisted,
+        }
+    }
+
+    /// 双主体对比研究：两腿各自独立走 `assemble_facts`（同一条单公司取数管线，互不知道
+    /// 对方存在），生成阶段才把两份已核事实一起摆给模型看；护栏阶段"分别验证"——每腿只用
+    /// 自己的 `FactsRegistry` 核对整段作答，绝不合并两份登记表（合并会把"腾讯的营收"变成
+    /// 对"苹果营收"合法的核对来源，是架构上明令禁止的"问苹果答腾讯"污染，见
+    /// IMPROVEMENT_PLAN §4 P3-1）。
+    pub async fn compare<P: ResearchPorts>(
+        ports: &P,
+        user_id: &str,
+        question: String,
+        primary_ticker: String,
+        peer_ticker: String,
+    ) -> CompareOutcome {
+        let route = route_research_intent(&question);
+        let primary_req = AskRequest::minimal(question.clone(), primary_ticker);
+        let peer_req = AskRequest::minimal(question.clone(), peer_ticker);
+        let primary_facts = Self::assemble_facts(ports, &primary_req).await;
+        let peer_facts = Self::assemble_facts(ports, &peer_req).await;
+        let primary_panel = build_panel(
+            &primary_facts.company,
+            &primary_facts.market,
+            &primary_facts.financials,
+            primary_facts.peer_anchor.as_ref(),
+            &primary_facts.filings,
+        );
+        let peer_panel = build_panel(
+            &peer_facts.company,
+            &peer_facts.market,
+            &peer_facts.financials,
+            peer_facts.peer_anchor.as_ref(),
+            &peer_facts.filings,
+        );
+
+        let system = build_system_prompt();
+        let user_prompt = build_compare_user_prompt(
+            &question,
+            &CompareLegContext {
+                name_zh: primary_facts.company.name_zh.as_deref(),
+                panel: &primary_panel,
+                market: &primary_facts.market,
+                financials: &primary_facts.financials,
+            },
+            &CompareLegContext {
+                name_zh: peer_facts.company.name_zh.as_deref(),
+                panel: &peer_panel,
+                market: &peer_facts.market,
+                financials: &peer_facts.financials,
+            },
+        );
+        let (answer, answer_source) =
+            match ports.complete_answer(&system, &user_prompt, user_id).await {
+                Some(generated) => (Some(generated), AnswerSource::Generated),
+                None => (None, AnswerSource::Unavailable),
+            };
+
+        // 分别验证：每腿只吃自己的登记表核对同一段作答，互不借用。
+        let primary_guard = answer
+            .as_deref()
+            .map(|draft| guard_view(&primary_req, &primary_facts, &primary_panel, draft));
+        let peer_guard = answer
+            .as_deref()
+            .map(|draft| guard_view(&peer_req, &peer_facts, &peer_panel, draft));
+
+        let response = CompareResponse {
+            route: route_view(&route),
+            primary: compare_leg_view(&primary_panel, primary_guard),
+            peer: compare_leg_view(&peer_panel, peer_guard),
+            answer,
+            answer_source,
+        };
+
+        CompareOutcome {
+            response,
+            facts: CompareResearchFacts {
+                primary: primary_facts,
+                peer: peer_facts,
+            },
+            route,
         }
     }
 
@@ -596,6 +688,20 @@ fn route_view(route: &ResearchRoute) -> RouteView {
     }
 }
 
+fn compare_leg_view(panel: &DecisionPanel, fact_guard: Option<GuardView>) -> CompareLegView {
+    CompareLegView {
+        ticker: panel.ticker.clone(),
+        data_completeness: panel.data_completeness,
+        connected_sources: panel
+            .connected_sources
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+        valuation: valuation_view(panel),
+        fact_guard,
+    }
+}
+
 fn valuation_view(panel: &DecisionPanel) -> ValuationView {
     let valuation = &panel.valuation;
     let stage = valuation.stage.map(|stage| match stage {
@@ -641,8 +747,12 @@ mod tests {
     #[derive(Default)]
     struct FakePorts {
         market: Option<(ResolvedCompany, MarketSnapshot)>,
+        /// 按 ticker 区分的行情/主体——只给对比研究测试用，命中优先于 `market`。
+        market_by_ticker: std::collections::HashMap<String, (ResolvedCompany, MarketSnapshot)>,
         refresh_ok: bool,
         fundamentals: Option<LoadedFundamentals>,
+        /// 按 ticker 区分的财报——只给对比研究测试用，命中优先于 `fundamentals`。
+        fundamentals_by_ticker: std::collections::HashMap<String, LoadedFundamentals>,
         earnings_calendar: Option<EarningsCalendar>,
         historical_valuation: Option<HistoricalValuation>,
         answer: Option<String>,
@@ -657,9 +767,12 @@ mod tests {
     impl ResearchPorts for FakePorts {
         async fn load_company_market(
             &self,
-            _ticker: &str,
+            ticker: &str,
         ) -> Option<(ResolvedCompany, MarketSnapshot)> {
-            self.market.clone()
+            self.market_by_ticker
+                .get(ticker)
+                .cloned()
+                .or_else(|| self.market.clone())
         }
 
         async fn refresh_quote(&self, _ticker: &str) -> Result<(), String> {
@@ -670,8 +783,11 @@ mod tests {
             }
         }
 
-        async fn load_fundamentals(&self, _ticker: &str) -> Option<LoadedFundamentals> {
-            self.fundamentals.clone()
+        async fn load_fundamentals(&self, ticker: &str) -> Option<LoadedFundamentals> {
+            self.fundamentals_by_ticker
+                .get(ticker)
+                .cloned()
+                .or_else(|| self.fundamentals.clone())
         }
 
         async fn load_earnings_calendar(&self, _ticker: &str) -> Option<EarningsCalendar> {
@@ -823,6 +939,103 @@ mod tests {
         let outcome = ResearchService::ask(&ports, "user-1", req).await;
         assert!(!outcome.persisted);
         assert_eq!(outcome.response.session_id.as_deref(), Some("s_existing"));
+    }
+
+    #[tokio::test]
+    async fn compare_keeps_two_legs_isolated_and_guards_each_separately() {
+        let mut market_by_ticker = std::collections::HashMap::new();
+        market_by_ticker.insert(
+            "AAPL".to_string(),
+            (
+                ResolvedCompany {
+                    ticker: "AAPL".into(),
+                    name_zh: Some("苹果".into()),
+                    company: Company {
+                        price: Some(dec!(190)),
+                        ..Default::default()
+                    },
+                },
+                MarketSnapshot {
+                    price: Some(dec!(190)),
+                    currency: Some("USD".into()),
+                    ..Default::default()
+                },
+            ),
+        );
+        market_by_ticker.insert(
+            "0700.HK".to_string(),
+            (
+                ResolvedCompany {
+                    ticker: "0700.HK".into(),
+                    name_zh: Some("腾讯".into()),
+                    company: Company {
+                        price: Some(dec!(300)),
+                        ..Default::default()
+                    },
+                },
+                MarketSnapshot {
+                    price: Some(dec!(300)),
+                    currency: Some("HKD".into()),
+                    ..Default::default()
+                },
+            ),
+        );
+        let mut fundamentals_by_ticker = std::collections::HashMap::new();
+        fundamentals_by_ticker.insert(
+            "AAPL".to_string(),
+            LoadedFundamentals {
+                financials: Financials {
+                    provider_ok: true,
+                    revenue: Some(dec!(383000)),
+                    currency: Some("USD".into()),
+                    ..Default::default()
+                },
+                pe_ttm: None,
+                company_name: Some("苹果".into()),
+            },
+        );
+        fundamentals_by_ticker.insert(
+            "0700.HK".to_string(),
+            LoadedFundamentals {
+                financials: Financials {
+                    provider_ok: true,
+                    revenue: Some(dec!(160000)),
+                    currency: Some("HKD".into()),
+                    ..Default::default()
+                },
+                pe_ttm: None,
+                company_name: Some("腾讯".into()),
+            },
+        );
+        let ports = FakePorts {
+            market_by_ticker,
+            fundamentals_by_ticker,
+            answer: Some(
+                "苹果营收约383000美元。这段说明性文字用来把两家公司的数字隔开一段距离。\
+                 腾讯营收约160000港元。"
+                    .into(),
+            ),
+            ..FakePorts::default()
+        };
+
+        let outcome = ResearchService::compare(
+            &ports,
+            "user-1",
+            "谁的利润质量更好？".into(),
+            "AAPL".into(),
+            "0700.HK".into(),
+        )
+        .await;
+
+        assert_eq!(outcome.facts.primary.company.ticker, "AAPL");
+        assert_eq!(outcome.facts.peer.company.ticker, "0700.HK");
+        assert_eq!(outcome.response.primary.ticker, "AAPL");
+        assert_eq!(outcome.response.peer.ticker, "0700.HK");
+        // 两腿的营收数字都在各自事实块里真实存在，护栏各自应给 pass（不合并、不互相污染）。
+        let primary_guard = outcome.response.primary.fact_guard.expect("primary guard");
+        let peer_guard = outcome.response.peer.fact_guard.expect("peer guard");
+        assert!(primary_guard.pass >= 1, "苹果自己的营收应命中自己的登记表");
+        assert!(peer_guard.pass >= 1, "腾讯自己的营收应命中自己的登记表");
     }
 
     #[tokio::test]

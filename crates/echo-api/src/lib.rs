@@ -37,10 +37,10 @@ use echo_contracts::{
     CompanyProfileUpsertRequest, CompanyProfilesListResponse, CompanyResolveItem,
     CompanyResolveQuery, CompanyResolveResponse, CompanySearchItem, CompanySearchQuery,
     CompanySearchResponse, CompanyVerifyQuery, CompanyVerifyResponse, CompanyVerifySuggestion,
-    ErrorResponse, HealthResponse, ListQuery, MutationResponse, Notification,
-    NotificationReadRequest, NotificationsListResponse, PortfolioListResponse, PortfolioPosition,
-    PortfolioUpsertRequest, PreferencesResponse, PreferencesUpdateRequest, PublicUser,
-    ResearchSessionDetail, ResearchSessionResponse, ResearchSessionSummary,
+    CompareRequest, CompareResponse, ErrorResponse, HealthResponse, ListQuery, MutationResponse,
+    Notification, NotificationReadRequest, NotificationsListResponse, PortfolioListResponse,
+    PortfolioPosition, PortfolioUpsertRequest, PreferencesResponse, PreferencesUpdateRequest,
+    PublicUser, ResearchSessionDetail, ResearchSessionResponse, ResearchSessionSummary,
     ResearchSessionsResponse, ResearchStreamEvent, TickerQuery, UnreadResponse, UserPreferences,
     UserRole, WatchEntry, WatchListResponse, WatchMutationRequest,
 };
@@ -1276,6 +1276,38 @@ async fn ask(
     Json(outcome.response)
 }
 
+/// 双主体对比研究：`POST /api/compare` —— 两个 ticker 各自走同一条单公司解析/建档管线
+/// （`prepare_research_request`），再交给 `ResearchService::compare` 隔离取数、分别护栏。
+/// 不落库（对比会话的落库形态待产品判断，见 IMPROVEMENT_PLAN §4 P3-1）。
+async fn compare(
+    State(state): State<AppState>,
+    Extension(current_user): Extension<PublicUser>,
+    Json(req): Json<CompareRequest>,
+) -> Json<CompareResponse> {
+    let primary = prepare_research_request(
+        &state,
+        AskRequest::minimal(req.question.clone(), req.primary_ticker),
+    )
+    .await;
+    let peer = prepare_research_request(
+        &state,
+        AskRequest::minimal(req.question.clone(), req.peer_ticker),
+    )
+    .await;
+    let ports = ApiResearchPorts {
+        state: state.clone(),
+    };
+    let outcome = ResearchService::compare(
+        &ports,
+        &current_user.id,
+        req.question,
+        primary.ticker,
+        peer.ticker,
+    )
+    .await;
+    Json(outcome.response)
+}
+
 /// 流式作答：`POST /api/ask/stream` —— 类型化 SSE（meta/stage/delta/guard/final/error）；
 /// 仅在干净完成后跑护栏并落库，由 `final.persisted` 报告落库结果。
 async fn ask_stream(
@@ -1307,8 +1339,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ask", post(ask).route_layer(ask_rate_limited.clone()))
         .route(
             "/api/ask/stream",
-            post(ask_stream).route_layer(ask_rate_limited),
+            post(ask_stream).route_layer(ask_rate_limited.clone()),
         )
+        .route("/api/compare", post(compare).route_layer(ask_rate_limited))
         .route("/api/auth/invite", post(auth_invite))
         .route("/api/companies/search", get(companies_search))
         .route("/api/companies/resolve", get(companies_resolve))

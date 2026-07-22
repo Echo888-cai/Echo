@@ -135,12 +135,22 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
    429，`/ready` 掉库返 503，跨站 Origin 返 403，见 rust-parity-matrix）。优雅停机仍 pending，见 P5。
 
 ### P3 · 报告、记忆、对比（研究资产化）
-1. `compare-legs`：`CompareResearchFacts` 双腿隔离取数 + 对比提示词 + Web 对比视图。**blocked**：
-   `echo_domain::merge_facts_registry`（同样是"写好了没人调"的冻结代码）按维度（金额/百分比/
-   倍数/日期）合并两份 `FactsRegistry`，**不按 ticker 命名空间隔离**——直接拿来做双腿护栏会
-   把"腾讯的营收"当成"苹果营收"的合法核对来源，正是架构上明令禁止的"问苹果答腾讯"污染。
-   需要先决定护栏怎么在双主体下做隔离核对（按公司分别验证 vs 合并但打标签），这是产品/架构
-   判断，不是数据接线，故未做；接手时先读这段注释，不要重新推导。
+1. `compare-legs` ✅已接（架构判断已定：**按公司分别验证**，不碰 `merge_facts_registry`——
+   两腿全程各自独立 `assemble_facts`/`FactsRegistry`，`ResearchService::compare` 新增编排：
+   `build_compare_user_prompt` 拼两个标了名字/代码的独立事实块 + 首行硬性禁止互相借用数字；
+   护栏对同一段作答分别跑两次 `verify_answer_numbers`（各用各的 registry），两份 `GuardView`
+   独立返回，绝不合并登记表——避免了"腾讯的营收"被当成"苹果营收"合法核对来源的红线污染。
+   `POST /api/compare`（`CompareRequest`/`CompareResponse`，`echo-contracts`）不落库、不支持
+   多轮（对比会话的持久化/续问形态待产品判断，非本次范围）。真实端到端验证：AAPL vs MSFT
+   对比问"利润质量"，模型正确分别引用两家净利润/净利率并显式标注归属公司，两腿护栏各自
+   4 项核对、0 hard fail。**已知限制**（`fact_guard.rs` 现有代码，非本次引入）：裸数字的货币
+   标签识别窗口只看前 10 字符，当两个不同币种数字在原文中紧邻（<10 字符）出现时，后一个
+   数字可能误吞前一个的货币标签——对比研究场景比单公司场景更容易触发；调研时用真实文本
+   复现过，已用更长间隔的答案文本绕开，但护栏本身未修（不在本次架构判断范围内，需要时另开
+   小 PR：把货币标签窗口从"字符距离"改成"就近原则"或要求标签与数字之间不能跨越另一个数字）。
+   **仍未做**：Web 对比视图（两个 ticker 解析 + 结果双栏渲染，需要新页面/路由，属机械接线，
+   非架构判断）、对比会话落库/续问（需要先定"对比会话"在 `research_sessions` 单 ticker schema
+   下怎么存，或要不要新表）。
 2. `company-profiles` ✅已接 repository/API（`echo-db::CompanyProfileRepository` + `GET/PUT/DELETE
    /api/profiles[/:ticker]`，真库 tenant-isolation 单测 + live HTTP 验证：建档→部分更新保留
    未传字段→turn_count 按轮次递增→删除不复活）。**仍 pending**：Web 编辑页（产品级 UX 决定，

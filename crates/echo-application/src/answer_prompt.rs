@@ -166,6 +166,59 @@ pub fn build_user_prompt(ctx: &AnswerContext) -> String {
     out
 }
 
+/// 对比研究一腿的事实——与 [`AnswerContext`] 同源，但刻意不含 `history`：两家公司各自
+/// 独立取数，任何一方都不该被历史问答里提到的第三方数字污染。
+pub struct CompareLegContext<'a> {
+    pub name_zh: Option<&'a str>,
+    pub panel: &'a DecisionPanel,
+    pub market: &'a MarketSnapshot,
+    pub financials: &'a Financials,
+}
+
+/// 单腿事实块——与 `build_user_prompt` 里的"已核到的事实"段落同构，供对比 prompt 各标一份。
+fn leg_facts_block(label: &str, ctx: &CompareLegContext) -> String {
+    let name = ctx.name_zh.unwrap_or(&ctx.panel.ticker);
+    let mut out = format!("=== {label}：{name}（{}）===\n", ctx.panel.ticker);
+    out.push_str(&format!("现价：{}\n", field(ctx.market.price, "")));
+    out.push_str(&valuation_line(ctx.panel));
+    out.push('\n');
+    if ctx.financials.provider_ok {
+        let cur = ctx.financials.currency.as_deref().unwrap_or("");
+        out.push_str(&format!("营收：{}\n", field(ctx.financials.revenue, cur)));
+        out.push_str(&format!(
+            "净利润：{}\n",
+            field(ctx.financials.net_income, cur)
+        ));
+        out.push_str(&format!(
+            "净利率：{}\n",
+            field(ctx.financials.net_margin, "%")
+        ));
+    } else {
+        out.push_str("本轮无实时财报：这一方严禁给出任何具体财务数字或估算值，只能定性判断。\n");
+    }
+    out
+}
+
+/// 对比研究 user 提示词：两腿事实各标各的名字/代码，且首行硬性禁止互相借用数字。
+#[must_use]
+pub fn build_compare_user_prompt(
+    question: &str,
+    primary: &CompareLegContext,
+    peer: &CompareLegContext,
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("用户问题（对比研究）：{question}\n\n"));
+    out.push_str(
+        "铁律：以下两家公司的事实完全独立核实，绝不允许把一家的数字当成另一家的数字引用、\n\
+         也不允许凭常识/记忆给出未在对应事实块里出现的数字。你在作答里提到任何具体数字时，\n\
+         必须明确说明这个数字属于哪家公司（用公司名或代码标注），不得含糊带过。\n\n",
+    );
+    out.push_str(&leg_facts_block("公司A", primary));
+    out.push('\n');
+    out.push_str(&leg_facts_block("公司B", peer));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,5 +413,62 @@ mod tests {
         });
         assert!(!prompt.contains(&long_answer));
         assert!(prompt.contains('…'));
+    }
+
+    #[test]
+    fn compare_prompt_labels_each_leg_and_forbids_cross_borrowing() {
+        let (apple_panel, apple_financials) = panel_with(Some(dec!(190)), true);
+        let apple_market = MarketSnapshot {
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let (tencent_panel, tencent_financials) = {
+            let company = ResolvedCompany {
+                ticker: "0700.HK".into(),
+                name_zh: Some("腾讯".into()),
+                company: Company {
+                    price: Some(dec!(300)),
+                    ..Default::default()
+                },
+            };
+            let market = MarketSnapshot {
+                price: Some(dec!(300)),
+                ..Default::default()
+            };
+            let financials = Financials {
+                provider_ok: true,
+                revenue: Some(dec!(160000)),
+                net_income: Some(dec!(30000)),
+                currency: Some("HKD".into()),
+                ..Default::default()
+            };
+            let panel = crate::build_panel(&company, &market, &financials, None, &[]);
+            (panel, financials)
+        };
+        let tencent_market = MarketSnapshot {
+            price: Some(dec!(300)),
+            ..Default::default()
+        };
+
+        let prompt = build_compare_user_prompt(
+            "苹果和腾讯谁的利润质量更好？",
+            &CompareLegContext {
+                name_zh: Some("苹果"),
+                panel: &apple_panel,
+                market: &apple_market,
+                financials: &apple_financials,
+            },
+            &CompareLegContext {
+                name_zh: Some("腾讯"),
+                panel: &tencent_panel,
+                market: &tencent_market,
+                financials: &tencent_financials,
+            },
+        );
+        assert!(prompt.contains("绝不允许把一家的数字当成另一家的数字"));
+        assert!(prompt.contains("苹果（AAPL）"));
+        assert!(prompt.contains("腾讯（0700.HK）"));
+        assert!(prompt.contains("383000USD"));
+        assert!(prompt.contains("160000HKD"));
     }
 }
