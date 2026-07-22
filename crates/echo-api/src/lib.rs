@@ -65,6 +65,7 @@ use futures_util::Stream;
 use std::convert::Infallible;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
+use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::{error, info, warn};
 
 const COOKIE_NAME: &str = "echo_session";
@@ -1572,6 +1573,15 @@ pub fn router(state: AppState) -> Router {
             enforce_origin,
         ))
         .layer(DefaultBodyLimit::max(MAX_JSON_BODY_BYTES))
+        // 每请求生成一个 tracing span（method+path+status+延迟），是 OTLP 追踪导出的唯一数据
+        // 来源——没有这层，echo-observability 配了 OTLP 端点也无 span 可导，是新增导出通路
+        // 后必须同 PR 接上的调用方（frozen-table 教训）。显式指定 INFO 级：`DefaultMakeSpan`
+        // 缺省是 DEBUG，生产环境默认 `RUST_LOG=info` 会把 span 在到达 OTLP 层之前就过滤掉，
+        // 本地曾用真实 OTLP 收集端复现过这个"配了端点但一条 span 都导不出"的坑。
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(tracing::Level::INFO)),
+        )
         .with_state(state)
 }
 
@@ -1636,6 +1646,7 @@ pub async fn run() {
         .await
         .expect("serve echo-api");
     info!("echo-api 收到停机信号，已排空进行中的请求并退出");
+    echo_observability::shutdown();
 }
 
 /// SIGTERM（容器编排下发）与 Ctrl+C 均触发优雅停机：`axum::serve` 收到信号后停止接受新连接，

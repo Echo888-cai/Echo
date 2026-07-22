@@ -191,9 +191,9 @@ These are P0 blockers from the handoff. Dockerfiles or Terraform resources alone
 | Deploy Rust Web | Terraform/ECS topology | Web Dockerfile only | blocked | no image smoke/deploy test | keep | Phase 5 | Terraform 未部署 `echo-web`。 |
 | HTTPS and secure cookies | ALB/domain/certificate | partial cookie flag | blocked | — | keep | Phase 5 | 缺 ACM、443、域名、HSTS。 |
 | Runtime secret injection | Secrets Manager | config parses keys | blocked | — | keep | Phase 5 | Terraform 未注入模型与数据源密钥。 |
-| S3 backup and restore | `ECHO_BACKUP_BUCKET` | local `pg_dump` | blocked | no S3/restore drill | keep | Phase 5 | Worker 不读取 bucket。 |
+| S3 backup and restore | `ECHO_BACKUP_BUCKET` | `echo-data::BackupStorageService`（手签 SigV4 PUT） | blocked | 签名算法单测（对照独立 Python 实现）+ 真库端到端验证"未配置→诚实降级"路径 | keep | P5-1 | Worker 现在读 `ECHO_BACKUP_BUCKET` 等四项并尝试上传；仍 blocked——真实 S3 桶/凭据的上传成功路径与 restore 演练需用户本人在 AWS 侧配置后验证，见 IMPROVEMENT_PLAN §4 P5-1/§2.2。 |
 | Multi-worker safety | ECS desired count 2–8 | `SchedulerStateRepository::try_claim`（原子 `UPDATE ... WHERE` 抢占） | rust-accepted | `live_scheduler_lease_claim_round_trip`（真库：第二实例抢不到、`record_run` 释放锁、过期租约可被重新抢占） | keep | P4-1 | 15 分钟租约兜底崩溃恢复；ECS desired count 仍需 Phase 5 部署验证多实例真实场景。 |
-| Observability | OTEL Terraform config | tracing logs only | blocked | — | keep | Phase 5 | OTLP exporter 未安装。 |
+| Observability | OTEL Terraform config | `echo-observability::init`（OTLP HTTP 导出）+ `echo-api::TraceLayer` + `echo-worker::dispatch` `#[instrument]` | rust-accepted | 真实起假 OTLP 收集端（Python http.server）验证：`echo-api`/`echo-worker` 各自打真实请求/作业，SIGTERM 触发 flush 后逐字节核对 protobuf 载荷里 `service.name`/span 名 | keep | P5-1 | `OTEL_EXPORTER_OTLP_ENDPOINT` 未配即完全不建 `TracerProvider`；只支持明文 HTTP 收集端，HTTPS 需要额外 TLS 后端选型，未做；Terraform 侧的 OTEL Collector 部署本身仍不在范围（那部分确实是 Phase 5 云端基建）。 |
 | Research/API rate limiting | WAF/table claim | `echo-db::RateLimitRepository` + ask/ask_stream 中间件 | rust-accepted | 见上方 Rate limits 行 | keep | P2-4 | 见上方 Rate limits 行。 |
 | API safety/readiness | production boundary | Origin 校验 + readiness + body 上限 + 限流中间件 + 优雅停机 | rust-accepted | API 单测 + 真库端到端手测 + SIGTERM 真实进程验证 | keep | P2-4 / P5 | `enforce_origin`（缺 Origin 放行、Origin 存在必须在白名单）+ `/ready`（真连 DB）+ `DefaultBodyLimit::max(512KiB)`；`echo-api`/`echo-worker` 均已接 SIGTERM/Ctrl+C 优雅停机（`axum::serve().with_graceful_shutdown`；worker 用 `select!` 只在空闲等待时参与，不打断进行中的活动/租约），真实发送 SIGTERM 验证过日志与进程干净退出。 |
 | Build and IaC gates | release CI | `cargo xtask` + live DB (#45) | skeleton | Docker/IaC CI still missing | keep | #45 / Phase 5–6 | 活库进 CI；仍缺 Docker/TF gates。 |
@@ -203,12 +203,12 @@ These are P0 blockers from the handoff. Dockerfiles or Terraform resources alone
 
 | Status | Count |
 | --- | ---: |
-| rust-accepted | 34 |
+| rust-accepted | 35 |
 | skeleton | 26 |
 | pending | 35 |
 | replaced | 2 |
 | retire-candidate | 0 |
-| blocked | 9 |
+| blocked | 8 |
 | product-decide | 3 |
 | **Total** | **109** |
 
@@ -221,3 +221,4 @@ Completion condition: this ledger may only contain `rust-accepted` or ADR-closed
 | 2026-07-21 | 初版缩略矩阵随 #44 |
 | 2026-07-21 | 扩展为 109 行完整底账（对齐交接书逐能力清点）；同步 #44 ResearchService 与 #45 CI live DB |
 | 2026-07-22 | 校正两处滞后行：`GET /api/companies/resolve`（P1-3 resolve-first 已接线，pending→rust-accepted）、`POST /api/ask`（P2/P3-4 取数+hard-fail+多轮隔离已完整落地，非 fake ports，skeleton→rust-accepted）。P5 启动前置核对。 |
+| 2026-07-22 | P5-1：优雅停机（echo-api/echo-worker SIGTERM）、pg_dump S3 镜像通道（手签 SigV4）、OTLP 追踪导出（echo-observability + echo-api TraceLayer + echo-worker `#[instrument]`）。Observability blocked→rust-accepted；S3 backup and restore 行更新为已接上传但仍 blocked（真实凭据待用户配置）。 |

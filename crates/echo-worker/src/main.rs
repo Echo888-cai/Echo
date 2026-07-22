@@ -40,6 +40,10 @@ async fn load_last_runs(pool: &Pool) -> HashMap<String, chrono::DateTime<chrono:
 /// 派发一个到期作业前先抢占租约（worker-lease，IMPROVEMENT_PLAN §4 P4-1）：多实例部署下，
 /// 同一 job_id 在同一时刻只有一个实例能抢到，抢不到就说明另一实例正在跑或刚跑完这一跳，
 /// 本实例安静跳过，不重复执行。实际成功才记 `ok`；失败详情进入可恢复游标供运营排查。
+// tracing span 是 OTLP 追踪导出的唯一数据来源（见 echo-observability），没有它配了
+// OTLP 端点也无 span 可导——同 echo-api 的 TraceLayer 是同一条"新增导出通路必须同 PR
+// 接上调用方"教训。job_id/worker_id 进 span 字段，方便按作业类型/实例过滤追踪。
+#[tracing::instrument(skip(pool, activities), fields(job_id = schedule.id, worker_id))]
 async fn dispatch(pool: &Pool, activities: &Activities, schedule: &Schedule, worker_id: &str) {
     match SchedulerStateRepository::new(pool)
         .try_claim(schedule.id, worker_id, LEASE_SECONDS)
@@ -140,6 +144,7 @@ async fn main() {
             }
         }
     }
+    echo_observability::shutdown();
 }
 
 /// 与 echo-api 同一套信号约定：SIGTERM/Ctrl+C。`select!` 只在空闲等待下一跳时参与选择，

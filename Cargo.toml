@@ -72,6 +72,8 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 url = "2"
 fantoccini = { version = "0.22", default-features = false, features = ["rustls-tls"] }
+# 每请求 tracing span（OTLP 追踪导出的数据来源，见 echo-observability）。
+tower-http = { version = "0.6", default-features = false, features = ["trace"] }
 # 简报邮件通道：tokio1 异步 SMTP + rustls，与项目其余 TLS 客户端一致（不引 OpenSSL）。
 lettre = { version = "0.11", default-features = false, features = [
     "tokio1",
@@ -84,6 +86,24 @@ lettre = { version = "0.11", default-features = false, features = [
 # 能力切片里顺带升级工具链）；改用 reqwest 直连 S3 REST API + 手签 SigV4（hmac/sha2/hex
 # 已在工作区内，RustCrypto 同源，无新增 MSRV 风险）。
 hmac = "0.12"
+# OTLP 可观测性导出（可选，ECHO_OTLP_ENDPOINT 未配就完全不初始化，见 echo-observability）。
+# reqwest-client 走 opentelemetry-otlp 自带的 reqwest 依赖（default-features=false，不带
+# TLS 后端）——本次只支持明文 HTTP 收集端（本地/同网 sidecar collector 的常见形态），
+# HTTPS 收集端需要额外 TLS 后端选型，不在本次范围内。
+opentelemetry = { version = "0.32", default-features = false, features = [
+    "trace",
+] }
+opentelemetry_sdk = { version = "0.32", default-features = false, features = [
+    "trace",
+    "rt-tokio",
+    "experimental_trace_batch_span_processor_with_async_runtime",
+] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = [
+    "http-proto",
+    "reqwest-client",
+    "trace",
+] }
+tracing-opentelemetry = { version = "0.33", default-features = false }
 
 [profile.release]
 lto = "thin"

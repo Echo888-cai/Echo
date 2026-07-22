@@ -233,7 +233,27 @@ rust-parity-matrix 变更记录）。
    证明两套互不共享代码的实现算出同一结果；②真实端到端跑 `cargo test -p echo-worker --
    --ignored`，对活库真实 `pg_dump` 落盘，验证未配置 `ECHO_BACKUP_BUCKET` 时诚实降级为
    `S3=未配置`（真实 S3 桶/凭据需用户本人在 AWS 侧配置后才能验证上传成功路径，见 §2.2）。
-3. HTTPS、密钥注入、OTLP、CI 真浏览器 E2E、镜像 smoke、S3 备份恢复演练：待续，部分需要用户
+3. `otlp-tracing` ✅已接：`echo-observability::init` 在 `OTEL_EXPORTER_OTLP_ENDPOINT`
+   （标准 OTel 环境变量名，明文 HTTP，收集端通常是同网/同机 sidecar；HTTPS 收集端需要
+   额外 TLS 后端选型，本次不支持）非空时挂一层 OTLP span 导出，与既有 stdout 日志并行、
+   互不替代；未配置时完全不建 `TracerProvider`（不是失败降级，是真正不起任何后台导出
+   线程）。用 `opentelemetry_sdk::trace::span_processor_with_async_runtime::
+   BatchSpanProcessor`（`experimental_trace_batch_span_processor_with_async_runtime`
+   feature）+ `runtime::Tokio`——默认的 `with_batch_exporter` 走独立 OS 线程，会在
+   reqwest 底层 hyper 需要 tokio reactor 时直接 panic（"no reactor running"，本地真实
+   复现过）。**同 PR 必须接上真实调用方**（frozen-table 教训，只加导出通路没有调用方
+   等于没做）：`echo-api` 在路由上挂 `tower_http::trace::TraceLayer`（新依赖）生成每请求
+   span；`echo-worker` 在 `dispatch` 加 `#[tracing::instrument]` 生成每作业 span。两处都
+   踩了同一个坑并修了：`TraceLayer`/`#[instrument]` 缺省 span 级别是 DEBUG，而生产默认
+   `RUST_LOG=info` 会在 span 到达 OTLP 层之前就被过滤掉——本地起真实 OTLP 收集端复现过
+   "配了端点但一条 span 都导不出"，已显式把 echo-api 的 `TraceLayer` 调到 INFO 级修正
+   （`echo-worker` 的 `#[instrument]` 默认级别本身是 INFO，不受影响）。优雅停机路径
+   （P5-1）同步接了 `echo_observability::shutdown()`，退出前排空批处理队列，不丢尾部
+   span。真实端到端验证：本地起一个捕获 HTTP POST 的假收集端（Python http.server），
+   `echo-api`/`echo-worker` 分别指向它，各自打真实请求/真实作业，SIGTERM 触发 flush 后
+   逐字节核对收到的 protobuf 载荷里 `service.name`=`echo-api`/`echo-worker`、span 名
+   `request`/`dispatch`，不是自洽测试。
+4. HTTPS、密钥注入、CI 真浏览器 E2E、镜像 smoke、S3 备份恢复演练：待续，部分需要用户
    本人操作云账号/证书（见 §2.2）。
 
 ## 5. 完成定义
