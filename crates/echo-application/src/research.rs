@@ -547,7 +547,7 @@ async fn drive_stream<P: ResearchPorts>(
 }
 
 /// 有 `session_id` 才读历史；新会话没有可承接的上文，空列表就是正确答案。
-async fn load_prior_turns_for<P: ResearchPorts>(
+pub(crate) async fn load_prior_turns_for<P: ResearchPorts>(
     ports: &P,
     user_id: &str,
     req: &AskRequest,
@@ -558,7 +558,7 @@ async fn load_prior_turns_for<P: ResearchPorts>(
     }
 }
 
-fn guard_view(
+pub(crate) fn guard_view(
     req: &AskRequest,
     facts: &ResearchFacts,
     panel: &DecisionPanel,
@@ -618,7 +618,7 @@ fn build_ask_response(
     }
 }
 
-fn filings_view(filings: &[Filing]) -> Vec<FilingView> {
+pub(crate) fn filings_view(filings: &[Filing]) -> Vec<FilingView> {
     filings
         .iter()
         .map(|filing| FilingView {
@@ -630,7 +630,7 @@ fn filings_view(filings: &[Filing]) -> Vec<FilingView> {
 }
 
 /// 缺数（`provider_ok == false`）即不进响应，绝不用空壳字段冒充"已核到"。
-fn earnings_view(calendar: Option<&EarningsCalendar>) -> Option<EarningsCalendarView> {
+pub(crate) fn earnings_view(calendar: Option<&EarningsCalendar>) -> Option<EarningsCalendarView> {
     let calendar = calendar.filter(|c| c.provider_ok)?;
     Some(EarningsCalendarView {
         next_date: calendar.next_date.clone(),
@@ -677,7 +677,7 @@ async fn persist_outcome<P: ResearchPorts>(
     }
 }
 
-fn route_view(route: &ResearchRoute) -> RouteView {
+pub(crate) fn route_view(route: &ResearchRoute) -> RouteView {
     RouteView {
         intent: route.intent.as_str().to_string(),
         depth: route.depth.as_str().to_string(),
@@ -702,7 +702,7 @@ fn compare_leg_view(panel: &DecisionPanel, fact_guard: Option<GuardView>) -> Com
     }
 }
 
-fn valuation_view(panel: &DecisionPanel) -> ValuationView {
+pub(crate) fn valuation_view(panel: &DecisionPanel) -> ValuationView {
     let valuation = &panel.valuation;
     let stage = valuation.stage.map(|stage| match stage {
         AssetStage::Profitable => AssetStageView::Profitable,

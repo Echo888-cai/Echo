@@ -47,7 +47,7 @@ fn truncate_chars(s: &str, max: usize) -> String {
 }
 
 /// 把一个可选定点数渲染成事实行的值；缺就「未核到」。
-fn field(value: Option<Decimal>, unit: &str) -> String {
+pub(crate) fn field(value: Option<Decimal>, unit: &str) -> String {
     match value {
         Some(v) => format!("{v}{unit}"),
         None => "未核到".to_string(),
@@ -55,7 +55,7 @@ fn field(value: Option<Decimal>, unit: &str) -> String {
 }
 
 /// 估值区间事实行——给不出可信带子（`cannot_value_reason`）时如实说未核到，绝不硬凑数字。
-fn valuation_line(panel: &DecisionPanel) -> String {
+pub(crate) fn valuation_line(panel: &DecisionPanel) -> String {
     let v = &panel.valuation;
     if !v.is_valued() {
         let reason = v.cannot_value_reason.as_deref().unwrap_or("数据不足");
@@ -76,7 +76,6 @@ fn valuation_line(panel: &DecisionPanel) -> String {
 #[must_use]
 pub fn build_user_prompt(ctx: &AnswerContext) -> String {
     let name = ctx.name_zh.unwrap_or(&ctx.panel.ticker);
-    let has_live_fin = ctx.financials.provider_ok;
 
     let mut out = String::new();
     out.push_str(&format!("研究对象：{name}（{}）\n", ctx.panel.ticker));
@@ -96,6 +95,15 @@ pub fn build_user_prompt(ctx: &AnswerContext) -> String {
     }
 
     out.push_str(&format!("用户问题：{}\n\n", ctx.question));
+    out.push_str(&facts_block(ctx));
+    out
+}
+
+/// 单公司「已核到的事实」块——`build_user_prompt` 与深度报告提示词（`report.rs`）共用同一份
+/// 事实格式化，确保报告引用的数字与聊天回答核对同一份 `FactsRegistry`，不会各拼一套口径。
+pub(crate) fn facts_block(ctx: &AnswerContext) -> String {
+    let has_live_fin = ctx.financials.provider_ok;
+    let mut out = String::new();
 
     out.push_str("== 已核到的事实（只用这些数字）==\n");
     out.push_str(&format!("现价：{}\n", field(ctx.market.price, "")));

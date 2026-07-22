@@ -16,6 +16,7 @@ pub mod auth;
 pub mod company_resolve;
 pub mod from_db;
 pub mod model_gateway;
+pub mod report;
 pub mod research;
 
 pub use answer_prompt::{AnswerContext, build_system_prompt, build_user_prompt};
@@ -29,6 +30,7 @@ pub use model_gateway::{
     AnswerKind, ModelAnswer, ModelAnswerOptions, ModelStreamEvent, ModelStreamStart,
     OwnedAuditContext, ProviderConfig, model_answer, model_answer_stream, parse_json_object,
 };
+pub use report::{ReportOutcome, ReportService};
 pub use research::{
     CompareResearchFacts, LoadedFundamentals, PersistResearchSession, PriorTurn, ResearchFacts,
     ResearchOutcome, ResearchPorts, ResearchService,

@@ -26,8 +26,9 @@ use echo_application::model_gateway::{
 };
 use echo_application::{
     AuthError, AuthService, CompanyResolvePorts, CompanyResolveService, DbCompanyHit,
-    ExternalSymbolHit, LoadedFundamentals, PersistResearchSession, PriorTurn, ResearchPorts,
-    ResearchService, ResolvedCompany, market_snapshot_from_rows, resolved_company_from_rows,
+    ExternalSymbolHit, LoadedFundamentals, PersistResearchSession, PriorTurn, ReportService,
+    ResearchPorts, ResearchService, ResolvedCompany, market_snapshot_from_rows,
+    resolved_company_from_rows,
 };
 use echo_config::ApiConfig;
 use echo_contracts::{
@@ -40,9 +41,9 @@ use echo_contracts::{
     CompareRequest, CompareResponse, ErrorResponse, HealthResponse, ListQuery, MutationResponse,
     Notification, NotificationReadRequest, NotificationsListResponse, PortfolioListResponse,
     PortfolioPosition, PortfolioUpsertRequest, PreferencesResponse, PreferencesUpdateRequest,
-    PublicUser, ResearchSessionDetail, ResearchSessionResponse, ResearchSessionSummary,
-    ResearchSessionsResponse, ResearchStreamEvent, TickerQuery, UnreadResponse, UserPreferences,
-    UserRole, WatchEntry, WatchListResponse, WatchMutationRequest,
+    PublicUser, ReportGenerateResponse, ResearchSessionDetail, ResearchSessionResponse,
+    ResearchSessionSummary, ResearchSessionsResponse, ResearchStreamEvent, TickerQuery,
+    UnreadResponse, UserPreferences, UserRole, WatchEntry, WatchListResponse, WatchMutationRequest,
 };
 use echo_data::{
     CalendarService, FilingsService, FmpSearchService, FundamentalsRow, FundamentalsService,
@@ -1308,6 +1309,25 @@ async fn compare(
     Json(outcome.response)
 }
 
+/// 深度报告：`POST /api/report/generate` —— 与 `/api/ask` 共用同一条取数/建档管线
+/// （`prepare_research_request`），交给 `ReportService::generate` 走报告专属提示词/固定结构，
+/// 模型不可用或输出过短时退化为本地确定性报告；落库归位同一研究会话（`session_id` 续接）。
+async fn report_generate(
+    State(state): State<AppState>,
+    Extension(current_user): Extension<PublicUser>,
+    Json(req): Json<AskRequest>,
+) -> Json<ReportGenerateResponse> {
+    let req = prepare_research_request(&state, req).await;
+    let ports = ApiResearchPorts {
+        state: state.clone(),
+    };
+    let outcome = ReportService::generate(&ports, &current_user.id, req.clone()).await;
+    if !outcome.persisted && state.pool.is_some() {
+        warn!(ticker = req.ticker, "深度报告会话落库失败，保留本轮响应");
+    }
+    Json(outcome.response)
+}
+
 /// 流式作答：`POST /api/ask/stream` —— 类型化 SSE（meta/stage/delta/guard/final/error）；
 /// 仅在干净完成后跑护栏并落库，由 `final.persisted` 报告落库结果。
 async fn ask_stream(
@@ -1341,7 +1361,14 @@ pub fn router(state: AppState) -> Router {
             "/api/ask/stream",
             post(ask_stream).route_layer(ask_rate_limited.clone()),
         )
-        .route("/api/compare", post(compare).route_layer(ask_rate_limited))
+        .route(
+            "/api/compare",
+            post(compare).route_layer(ask_rate_limited.clone()),
+        )
+        .route(
+            "/api/report/generate",
+            post(report_generate).route_layer(ask_rate_limited),
+        )
         .route("/api/auth/invite", post(auth_invite))
         .route("/api/companies/search", get(companies_search))
         .route("/api/companies/resolve", get(companies_resolve))

@@ -60,7 +60,7 @@ The baseline contained 45 REST surfaces: `/healthz` plus 44 registered REST cont
 | Research answer | `POST /api/ask` | `ResearchService` + `echo-api` adapter | skeleton | application fake ports + API | keep | #44 | 编排已收口 application；完整取数/hard-fail/客户端事实隔离未完。 |
 | Research SSE | historical SSE on ask | `POST /api/ask/stream` typed events | rust-accepted | application stream tests + contract tags + Web 手动浏览器验证 | keep | web-typed-stream | meta/stage/delta/guard/final/error 已落地并在 final 后落库；Web 已消费，取消经 `AbortController` 传播、服务端断流落 `cancelled` 审计。 |
 | Chat alias | `POST /api/chat` | Unified `POST /api/ask` | replaced | ask contract tests | keep | #44 / Phase 3 | 统一研究入口可替代独立 chat；需 ADR/兼容说明。 |
-| Generate deep report | `POST /api/report/generate` | — | pending | — | keep | Phase 3–4 | 独立深度报告契约未迁移。 |
+| Generate deep report | `POST /api/report/generate` | `ReportService` + `echo-api` adapter | rust-accepted | application unit tests（本地兜底/模型路径/落库）+ 纯核路径真实 HTTP 端到端验证 | keep | IMPROVEMENT_PLAN §4 P3-3 | 与 `/api/ask` 共用 `assemble_facts`/`build_panel`/护栏；报告专属提示词固定七段结构，模型不可用或输出过短退化为本地确定性报告，落库归位同一研究会话。Web 导出视图未做。 |
 | Discover | `POST /api/discover` | — | product-decide | — | product-decide | Product / ADR | 是否保留“发现”工作流未裁决。 |
 | Events digest | `GET /api/events/digest` | Worker digest 内部活动 | pending | worker activity tests only | keep | Phase 3 | Worker 可发摘要，不等价用户读取 API。 |
 | Ingest HK financials | `POST /api/hk-financials/ingest` | — | pending | — | keep | Phase 2–3 | HKEX/filing ingestion 未迁移。 |

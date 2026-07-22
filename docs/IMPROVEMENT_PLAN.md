@@ -156,7 +156,19 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
    未传字段→turn_count 按轮次递增→删除不复活）。**仍 pending**：Web 编辑页（产品级 UX 决定，
    未做）；研究会话自动沉淀 thesis/bull/bear 到档案（需先定"从答案抽取什么、怎么抽"的语义，
    产品判断，未做——当前只有手动 PUT 编辑）。
-3. `deep-report`：深度报告生成 + 导出；报告只引用 registry 内已核数字。
+3. `deep-report` ✅已接生成（`POST /api/report/generate`，`echo-application::ReportService::generate`
+   与 `/api/ask` 共用同一条 `assemble_facts`/`build_panel` 取数管线——不是另起一条编排，
+   只在提示词与产物形态上分叉：`build_report_prompt` 复用与聊天回答同一份 `facts_block`
+   事实格式化，外面套判断优先的固定七段结构（核心判断/赚钱机制与护城河/财务质量/估值与
+   赔率/风险与证伪条件/关键监控与下一步/来源），1200-2500 字。模型不可用或输出短于 200
+   字（截断/拒答）退化为 `compose_report_fallback`——只用同一份已核事实拼接，不发明业务
+   定性描述（Rust 侧研究管线目前不接 company_profiles 定性字段，见下条 P3-2 pending）。
+   护栏对最终产出的 markdown（无论模型或本地路径）跑 `verify_answer_numbers`，与聊天回答
+   同一份 `FactsRegistry`。落库复用 `PersistResearchSession`，`session_id` 续接同一研究会话。
+   真实端到端验证：纯核路径（无 DB/无模型配置）真实 HTTP 调用 AAPL 请求，本地兜底 0.1s
+   出带真实数字的完整 Markdown 报告，估值区间正确算出，fact_guard 9 项核对 6 pass/3
+   soft/0 hard fail，会话落库返回 session_id。**仍未做**：Web 报告视图/导出（新页面/路由，
+   机械接线，非架构判断，未做）。
 4. `multi-turn` ✅已接（`echo_contracts::AskRequest.session_id` + `AskResponse.session_id`；
    `ResearchPorts::load_prior_turns` 读回本会话此前几轮问答，`answer_prompt` 拼一段明确标注
    "仅供代词/实体承接、不得引用其中数字"的历史块，`fact_guard` 仍只用本轮现取事实核数——

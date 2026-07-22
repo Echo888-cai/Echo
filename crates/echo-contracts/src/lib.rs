@@ -807,6 +807,44 @@ pub struct CompareResponse {
     pub answer_source: AnswerSource,
 }
 
+/// 深度报告的生成方式——模型生成，或模型不可用/输出过短时的本地确定性兜底。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportMode {
+    Model,
+    Local,
+}
+
+impl ReportMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Model => "report_model",
+            Self::Local => "report_local",
+        }
+    }
+}
+
+/// 深度报告入口响应——复用 `AskRequest` 作为请求体（同一套事实覆盖字段与 `session_id`
+/// 续接语义），报告只引用 `FactsRegistry` 内已核数字（同一份护栏，见 `fact_guard`）。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReportGenerateResponse {
+    pub ticker: String,
+    pub route: RouteView,
+    pub mode: ReportMode,
+    pub markdown: String,
+    pub valuation: ValuationView,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fact_guard: Option<GuardView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub earnings: Option<EarningsCalendarView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filings: Vec<FilingView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
