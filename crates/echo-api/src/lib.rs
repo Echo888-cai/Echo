@@ -1631,7 +1631,34 @@ pub async fn run() {
         .await
         .expect("bind echo-api");
     info!(address = %listen_addr, "echo-api listening");
-    axum::serve(listener, app).await.expect("serve echo-api");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .expect("serve echo-api");
+    info!("echo-api 收到停机信号，已排空进行中的请求并退出");
+}
+
+/// SIGTERM（容器编排下发）与 Ctrl+C 均触发优雅停机：`axum::serve` 收到信号后停止接受新连接，
+/// 等待存量请求处理完再返回，避免容器滚动更新时中断用户正在进行的研究请求。
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("install ctrl+c handler");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
 }
 
 #[cfg(test)]

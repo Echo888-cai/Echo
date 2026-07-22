@@ -128,7 +128,38 @@ async fn main() {
 
     let mut ticker = tokio::time::interval(Duration::from_secs(config.tick_seconds));
     loop {
-        ticker.tick().await;
-        tick(&pool, &activities, chrono::Utc::now(), &worker_id).await;
+        tokio::select! {
+            _ = ticker.tick() => {
+                tick(&pool, &activities, chrono::Utc::now(), &worker_id).await;
+            }
+            _ = shutdown_signal() => {
+                info!("echo-worker 收到停机信号，当前无进行中活动，安全退出");
+                break;
+            }
+        }
+    }
+}
+
+/// 与 echo-api 同一套信号约定：SIGTERM/Ctrl+C。`select!` 只在空闲等待下一跳时参与选择，
+/// 一旦某个 `tick()` 已经开始执行就会跑到完成（不会被同一次 select 打断），避免在活动
+/// 持有 lease 的中途被杀死导致租约要等到过期才能被下一个实例接手。
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("install ctrl+c handler");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
     }
 }

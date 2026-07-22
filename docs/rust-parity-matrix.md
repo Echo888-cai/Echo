@@ -52,14 +52,14 @@ The baseline contained 45 REST surfaces: `/healthz` plus 44 registered REST cont
 | Current user | `GET /api/auth/me` | `echo-api::auth_me` | rust-accepted | auth/API tests | keep | #43 | 支持本地禁用认证模式。 |
 | Create invite | `POST /api/auth/invite` | `echo-api::auth_invite` | rust-accepted | auth/API tests | keep | #43 | 已有 owner 检查；CI live 覆盖 register/session。 |
 | Verify ticker | `GET /api/companies/verify` | — | pending | — | keep | Phase 2 | 需“验证成功后才建档”的闭环。 |
-| Resolve company identity | `GET /api/companies/resolve` | — | pending | — | keep | Phase 2 | 缺名称→ticker、别名、供应商搜索、行情验证链。 |
+| Resolve company identity | `GET /api/companies/resolve` | `CompanyResolveService::resolve_query` + `echo-api::companies_resolve` | rust-accepted | application/repository 单测 + 真库/真 FMP 端到端（composer resolve-first 接线） | keep | P1-3 | DB→别名→FMP 搜索→行情探活→（可选 LLM 消歧）全链已接；Web composer 单输入框已消费，不再要求手输 ticker。 |
 | Search companies | `GET /api/companies/search` | `CompanyRepository::search`, `echo-api::companies_search` | rust-accepted | repository/API tests | keep | #43 | 仅本地库检索；不是 resolve/verify 替代品。 |
 | Supplier/system status | `GET /api/status` | — | pending | — | keep | Phase 2–3 | 缺 canary、数据新鲜度、供应商可用性汇总。 |
 | Get preferences | `GET /api/preferences` | `PreferencesRepository`, `preferences_get` | rust-accepted | repository/API + CI live | keep | #43 / #45 | 偏好读写已在 Rust。 |
 | Update preferences | `PATCH /api/preferences` | `PreferencesRepository`, `preferences_update` | rust-accepted | repository/API + CI live | keep | #43 / #45 | 免打扰/通知偏好写入咽喉。 |
 | Submit feedback | `POST /api/feedback` | — | pending | — | keep | Phase 3 | `feedback` 表无完整 Rust repository/API。 |
 | Parse document | `POST /api/parse-document` | — | pending | — | keep | Phase 3 | 文件/文档解析及其安全边界未迁移。 |
-| Research answer | `POST /api/ask` | `ResearchService` + `echo-api` adapter | skeleton | application fake ports + API | keep | #44 | 编排已收口 application；完整取数/hard-fail/客户端事实隔离未完。 |
+| Research answer | `POST /api/ask` | `ResearchService::ask` + `echo-api::ApiResearchPorts`（真实生产端口，非 fake） | rust-accepted | application 单测 + 真库/真供应商端到端（filings/calendar/peers/历史分位全接） | keep | #44 / P2 / P3-4 | 取数管线（fundamentals+filings+calendar+peer anchor+历史分位）、`fact_guard` hard-fail、多轮历史隔离（历史绝不进 `FactsRegistry`）均已接线并真数据验证。 |
 | Research SSE | historical SSE on ask | `POST /api/ask/stream` typed events | rust-accepted | application stream tests + contract tags + Web 手动浏览器验证 | keep | web-typed-stream | meta/stage/delta/guard/final/error 已落地并在 final 后落库；Web 已消费，取消经 `AbortController` 传播、服务端断流落 `cancelled` 审计。 |
 | Chat alias | `POST /api/chat` | Unified `POST /api/ask` | replaced | ask contract tests | keep | #44 / Phase 3 | 统一研究入口可替代独立 chat；需 ADR/兼容说明。 |
 | Generate deep report | `POST /api/report/generate` | `ReportService` + `echo-api` adapter + `echo-web::research::ReportCard` | rust-accepted | application unit tests（本地兜底/模型路径/落库）+ 纯核路径真实 HTTP 端到端验证 + Web 端真实生成/下载实测（AAPL 完整七段报告） | keep | IMPROVEMENT_PLAN §4 P3-3 | 与 `/api/ask` 共用 `assemble_facts`/`build_panel`/护栏；报告专属提示词固定七段结构，模型不可用或输出短于 200 字退化为本地确定性报告，落库归位同一研究会话。Web 视图/导出已接（研究页 composer 按钮，客户端 Blob 下载 `.md`）。 |
@@ -110,19 +110,21 @@ The baseline contained 45 REST surfaces: `/healthz` plus 44 registered REST cont
 
 ## 5. Worker job parity
 
-All nine schedules are defined and can execute activities, but no atomic claim/lease/advisory lock exists. Until that is fixed, multiple Worker instances may duplicate work; therefore all are `skeleton`.
+All nine schedules are defined and dispatch through a shared `try_claim`/`record_run` lease (P4-1，migration
+0012，真库端到端验证过抢占/释放/过期重抢）——分布式重复执行问题已解决，不再是各行 skeleton 的共同成因。
+仍标 `skeleton` 的行是各自剩余的具体缺口（见 Notes），非"无 lease"。
 
 | Capability | Old surface | Rust landing | Status | Tests | Product decision | Owner/PR | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Premarket digest | `echo-premarket-digest` | `JobKind::PremarketDigest` | skeleton | schedule/activity unit tests | keep | Phase 5 | 无分布式 lease；通知依赖偏好/去重路径。 |
-| After-hours digest | `echo-afterhours-digest` | `JobKind::AfterhoursDigest` | skeleton | schedule/activity unit tests | keep | Phase 5 | 同上。 |
-| Market refresh | `echo-market-refresh` | `JobKind::MarketRefresh` | skeleton | schedule/activity unit tests | keep | Phase 5 | quote 可刷新；`tracked_tickers` 与 FORCE RLS 后台权限仍需验证。 |
-| Portfolio snapshot | `echo-portfolio-snapshot` | `JobKind::PortfolioSnapshot` | skeleton | schedule/activity unit tests | keep | Phase 5 | 会写快照；缺读模型闭环与并发安全。 |
-| Falsifier check | `echo-falsifier-check` | `JobKind::FalsifierCheck` | skeleton | schedule/activity unit tests | keep | Phase 5 | 基础规则检查存在；规则管理 API/UI 缺失。 |
-| Earnings review | `echo-earnings-review` | `JobKind::EarningsReview` | skeleton | schedule/activity unit tests | keep | Phase 5 | 依赖未迁移的财务/日历数据面。 |
-| Position alert | `echo-position-alert` | `JobKind::PositionAlert` | skeleton | schedule/activity unit tests | keep | Phase 5 | 可计算基础阈值；需真实 RLS、lease、重试测试。 |
-| Review reminder | `echo-review-reminder` | `JobKind::ReviewReminder` | skeleton | schedule/activity unit tests | keep | Phase 5 | 提醒活动存在，产品复盘 UI/API 不完整。 |
-| PostgreSQL backup | `echo-postgres-backup` | `JobKind::PostgresBackup` | skeleton | activity unit tests | keep | Phase 5 | 当前仅 `pg_dump` 至本地目录；未读 `ECHO_BACKUP_BUCKET`、未上传 S3。 |
+| Premarket digest | `echo-premarket-digest` | `JobKind::PremarketDigest` | skeleton | schedule/activity unit tests + live digest 测试（P4-2） | keep | Phase 5 | lease 已接（P4-1）；正文已改真实持仓异动聚合（P4-2）；`GET /api/events/digest` 独立端点仍缺，只经站内通知/邮件镜像触达。 |
+| After-hours digest | `echo-afterhours-digest` | `JobKind::AfterhoursDigest` | skeleton | schedule/activity unit tests + live digest 测试（P4-2） | keep | Phase 5 | 同上。 |
+| Market refresh | `echo-market-refresh` | `JobKind::MarketRefresh` | skeleton | schedule/activity unit tests | keep | Phase 5 | lease 已接；quote 可刷新；`tracked_tickers` 与 FORCE RLS 后台权限仍需验证。 |
+| Portfolio snapshot | `echo-portfolio-snapshot` | `JobKind::PortfolioSnapshot` | skeleton | schedule/activity unit tests | keep | Phase 5 | lease 已接；会写快照；缺读模型闭环（`GET /api/portfolio/snapshots` 仍 pending）与并发安全验证。 |
+| Falsifier check | `echo-falsifier-check` | `JobKind::FalsifierCheck` | skeleton | schedule/activity unit tests + live 测试（P4-2） | keep | Phase 5 | lease 已接；规则管理 API/UI 已补齐（`POST/GET/DELETE /api/watch/rules` + Web `RulesDeskSection`，P4-3）；仍缺该 job 自身的失败重试/告警可观测性验证。 |
+| Earnings review | `echo-earnings-review` | `JobKind::EarningsReview` | skeleton | schedule/activity unit tests + live 测试（P4-2） | keep | Phase 5 | lease 已接；财务/日历数据面已迁（filings+calendar，P2）；仍缺该 job 自身端到端告警链验证。 |
+| Position alert | `echo-position-alert` | `JobKind::PositionAlert` | skeleton | schedule/activity unit tests | keep | Phase 5 | lease 已接；可计算基础阈值；需真实 RLS、重试测试。 |
+| Review reminder | `echo-review-reminder` | `JobKind::ReviewReminder` | skeleton | schedule/activity unit tests | keep | Phase 5 | lease 已接；提醒活动存在，产品复盘 UI/API（`GET /api/portfolio/review`）不完整。 |
+| PostgreSQL backup | `echo-postgres-backup` | `JobKind::PostgresBackup` | skeleton | activity unit tests | keep | Phase 5 | lease 已接；当前仅 `pg_dump` 至本地目录；未读 `ECHO_BACKUP_BUCKET`、未上传 S3——P5 首个切片。 |
 
 ## 6. Data adapter parity
 
@@ -193,7 +195,7 @@ These are P0 blockers from the handoff. Dockerfiles or Terraform resources alone
 | Multi-worker safety | ECS desired count 2–8 | `SchedulerStateRepository::try_claim`（原子 `UPDATE ... WHERE` 抢占） | rust-accepted | `live_scheduler_lease_claim_round_trip`（真库：第二实例抢不到、`record_run` 释放锁、过期租约可被重新抢占） | keep | P4-1 | 15 分钟租约兜底崩溃恢复；ECS desired count 仍需 Phase 5 部署验证多实例真实场景。 |
 | Observability | OTEL Terraform config | tracing logs only | blocked | — | keep | Phase 5 | OTLP exporter 未安装。 |
 | Research/API rate limiting | WAF/table claim | `echo-db::RateLimitRepository` + ask/ask_stream 中间件 | rust-accepted | 见上方 Rate limits 行 | keep | P2-4 | 见上方 Rate limits 行。 |
-| API safety/readiness | production boundary | Origin 校验 + readiness + body 上限 + 限流中间件 | rust-accepted | API 单测 + 真库端到端手测 | keep | P2-4 | `enforce_origin`（缺 Origin 放行、Origin 存在必须在白名单）+ `/ready`（真连 DB）+ `DefaultBodyLimit::max(512KiB)`；优雅停机仍 pending（Phase 5）。 |
+| API safety/readiness | production boundary | Origin 校验 + readiness + body 上限 + 限流中间件 + 优雅停机 | rust-accepted | API 单测 + 真库端到端手测 + SIGTERM 真实进程验证 | keep | P2-4 / P5 | `enforce_origin`（缺 Origin 放行、Origin 存在必须在白名单）+ `/ready`（真连 DB）+ `DefaultBodyLimit::max(512KiB)`；`echo-api`/`echo-worker` 均已接 SIGTERM/Ctrl+C 优雅停机（`axum::serve().with_graceful_shutdown`；worker 用 `select!` 只在空闲等待时参与，不打断进行中的活动/租约），真实发送 SIGTERM 验证过日志与进程干净退出。 |
 | Build and IaC gates | release CI | `cargo xtask` + live DB (#45) | skeleton | Docker/IaC CI still missing | keep | #45 / Phase 5–6 | 活库进 CI；仍缺 Docker/TF gates。 |
 | Production recovery exercise | runbook | — | blocked | no restore/failover rehearsal | keep | Phase 5–6 | 需备份恢复与故障演练。 |
 
@@ -201,9 +203,9 @@ These are P0 blockers from the handoff. Dockerfiles or Terraform resources alone
 
 | Status | Count |
 | --- | ---: |
-| rust-accepted | 32 |
-| skeleton | 27 |
-| pending | 36 |
+| rust-accepted | 34 |
+| skeleton | 26 |
+| pending | 35 |
 | replaced | 2 |
 | retire-candidate | 0 |
 | blocked | 9 |
@@ -218,3 +220,4 @@ Completion condition: this ledger may only contain `rust-accepted` or ADR-closed
 | --- | --- |
 | 2026-07-21 | 初版缩略矩阵随 #44 |
 | 2026-07-21 | 扩展为 109 行完整底账（对齐交接书逐能力清点）；同步 #44 ResearchService 与 #45 CI live DB |
+| 2026-07-22 | 校正两处滞后行：`GET /api/companies/resolve`（P1-3 resolve-first 已接线，pending→rust-accepted）、`POST /api/ask`（P2/P3-4 取数+hard-fail+多轮隔离已完整落地，非 fake ports，skeleton→rust-accepted）。P5 启动前置核对。 |

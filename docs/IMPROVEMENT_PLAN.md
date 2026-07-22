@@ -132,7 +132,7 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
 4. `api-hardening` ✅已接（`echo-db::RateLimitRepository` 接线 `rate_limit_buckets` + `/api/ask`、
    `/api/ask/stream` 每用户每分钟限流；`GET /ready` 真连库；`enforce_origin` 中间件校验状态变更
    请求 Origin；`DefaultBodyLimit::max` 512KiB 请求体上限；真库端到端验证：3 次放行第 4 次
-   429，`/ready` 掉库返 503，跨站 Origin 返 403，见 rust-parity-matrix）。优雅停机仍 pending，见 P5。
+   429，`/ready` 掉库返 503，跨站 Origin 返 403，见 rust-parity-matrix）。优雅停机 ✅已接，见 §4 P5-1。
 
 ### P3 · 报告、记忆、对比（研究资产化）
 1. `compare-legs` ✅已接（架构判断已定：**按公司分别验证**，不碰 `merge_facts_registry`——
@@ -209,7 +209,20 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
 
 ### P5 · 生产化与全自动验收
 按交接书 Phase 5/6 原文执行（HTTPS、密钥注入、S3 备份恢复演练、OTLP、CI 起真浏览器 E2E、
-镜像 smoke）。前提：P1–P4 完成且平价矩阵无 skeleton 主链条目。
+镜像 smoke）。前提：P1–P4 完成且平价矩阵研究主链无 skeleton 条目——2026-07-22 核对通过（`/api/
+companies/resolve`、`/api/ask` 此前矩阵行滞后于实际代码，已校正为 rust-accepted，详见
+rust-parity-matrix 变更记录）。
+
+1. `graceful-shutdown` ✅已接：`echo-api`（`axum::serve().with_graceful_shutdown`，SIGTERM/Ctrl+C
+   停止接受新连接、排空存量请求再退出）与 `echo-worker`（主循环 `tokio::select!` 只在空闲等待
+   下一跳时参与停机信号选择，一旦某个 `tick()` 已经开始执行就会跑到完成，不会在活动持有
+   worker-lease 的中途被杀死——避免容器滚动更新把租约晾到过期才被下一实例接手）共用同一套
+   SIGTERM/SIGINT 信号处理。真实进程验证：`cargo run` 起两个进程，`kill -TERM` 后确认停机日志
+   打印、进程干净退出（非僵死/非崩溃）。fmt/clippy(-D warnings)/test(全绿)/wasm check 门禁全过。
+2. `backup-s3-upload`：`echo-postgres-backup` 当前仅 `pg_dump` 到本地目录，未读
+   `ECHO_BACKUP_BUCKET`、未上传 S3——下一切片。
+3. HTTPS、密钥注入、OTLP、CI 真浏览器 E2E、镜像 smoke、S3 备份恢复演练：待续，部分需要用户
+   本人操作云账号/证书（见 §2.2）。
 
 ## 5. 完成定义
 
