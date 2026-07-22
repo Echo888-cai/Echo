@@ -7,13 +7,13 @@ use crate::answer_prompt::{AnswerContext, build_system_prompt, build_user_prompt
 use crate::model_gateway::{ModelStreamEvent, ModelStreamStart};
 use crate::{DecisionPanel, ResolvedCompany, build_panel};
 use echo_contracts::{
-    AnswerSource, AskRequest, AskResponse, AssetStageView, EarningsCalendarView, GuardView,
-    MethodBandView, ResearchStreamDelta, ResearchStreamError, ResearchStreamEvent,
+    AnswerSource, AskRequest, AskResponse, AssetStageView, EarningsCalendarView, FilingView,
+    GuardView, MethodBandView, ResearchStreamDelta, ResearchStreamError, ResearchStreamEvent,
     ResearchStreamFinal, ResearchStreamGuard, ResearchStreamMeta, ResearchStreamStage,
     ResearchStreamStageName, RouteView, ValuationView,
 };
 use echo_domain::{
-    AssetStage, Company, EarningsCalendar, Financials, HistoricalValuation, MarketSnapshot,
+    AssetStage, Company, EarningsCalendar, Filing, Financials, HistoricalValuation, MarketSnapshot,
     MultipleType, PeerAnchor, RegistrySources, ResearchRoute, build_facts_registry,
     build_soft_note, classify_asset_stage, route_research_intent, verify_answer_numbers,
 };
@@ -33,6 +33,7 @@ pub struct ResearchFacts {
     pub financials: Financials,
     pub earnings_calendar: Option<EarningsCalendar>,
     pub peer_anchor: Option<PeerAnchor>,
+    pub filings: Vec<Filing>,
 }
 
 /// 比较研究的双腿事实；两侧 registry 不得交叉污染。
@@ -97,6 +98,9 @@ pub trait ResearchPorts: Send + Sync {
         ticker: &str,
         multiple_type: MultipleType,
     ) -> impl Future<Output = Option<PeerAnchor>> + Send;
+
+    /// 最近公司公告/披露（美股专属）。缺数/未核到返回空列表——绝不占位。
+    fn load_recent_filings(&self, ticker: &str) -> impl Future<Output = Vec<Filing>> + Send;
 
     fn complete_answer(
         &self,
@@ -198,12 +202,14 @@ impl ResearchService {
             _ => MultipleType::Pe,
         };
         let peer_anchor = ports.load_peer_anchor(&req.ticker, multiple_type).await;
+        let filings = ports.load_recent_filings(&req.ticker).await;
         ResearchFacts {
             company,
             market,
             financials,
             earnings_calendar,
             peer_anchor,
+            filings,
         }
     }
 
@@ -220,6 +226,7 @@ impl ResearchService {
             &facts.market,
             &facts.financials,
             facts.peer_anchor.as_ref(),
+            &facts.filings,
         );
 
         let (answer, answer_source) = match req.draft_answer.clone() {
@@ -232,6 +239,7 @@ impl ResearchService {
                     panel: &panel,
                     market: &facts.market,
                     financials: &facts.financials,
+                    filings: &facts.filings,
                 });
                 match ports.complete_answer(&system, &user_prompt, user_id).await {
                     Some(generated) => (Some(generated), AnswerSource::Generated),
@@ -251,6 +259,7 @@ impl ResearchService {
             answer_source,
             fact_guard,
             facts.earnings_calendar.as_ref(),
+            &facts.filings,
         );
         let persisted = persist_outcome(ports, user_id, &req, &facts, &response).await;
 
@@ -308,6 +317,7 @@ async fn drive_stream<P: ResearchPorts>(
         &facts.market,
         &facts.financials,
         facts.peer_anchor.as_ref(),
+        &facts.filings,
     );
 
     send(ResearchStreamEvent::Meta(ResearchStreamMeta {
@@ -346,6 +356,7 @@ async fn drive_stream<P: ResearchPorts>(
             panel: &panel,
             market: &facts.market,
             financials: &facts.financials,
+            filings: &facts.filings,
         });
         match ports
             .stream_answer(system, user_prompt, user_id.to_string())
@@ -397,6 +408,7 @@ async fn drive_stream<P: ResearchPorts>(
         answer_source,
         fact_guard,
         facts.earnings_calendar.as_ref(),
+        &facts.filings,
     );
 
     send(ResearchStreamEvent::Stage(ResearchStreamStage {
@@ -451,6 +463,7 @@ fn build_ask_response(
     answer_source: AnswerSource,
     fact_guard: Option<GuardView>,
     earnings_calendar: Option<&EarningsCalendar>,
+    filings: &[Filing],
 ) -> AskResponse {
     AskResponse {
         ticker: panel.ticker.clone(),
@@ -466,7 +479,19 @@ fn build_ask_response(
         answer_source,
         fact_guard,
         earnings: earnings_view(earnings_calendar),
+        filings: filings_view(filings),
     }
+}
+
+fn filings_view(filings: &[Filing]) -> Vec<FilingView> {
+    filings
+        .iter()
+        .map(|filing| FilingView {
+            form: filing.form.clone(),
+            filed_date: filing.filed_date.clone(),
+            source_url: filing.source_url.clone(),
+        })
+        .collect()
 }
 
 /// 缺数（`provider_ok == false`）即不进响应，绝不用空壳字段冒充"已核到"。
@@ -603,6 +628,10 @@ mod tests {
             _multiple_type: MultipleType,
         ) -> Option<PeerAnchor> {
             None
+        }
+
+        async fn load_recent_filings(&self, _ticker: &str) -> Vec<Filing> {
+            Vec::new()
         }
 
         async fn complete_answer(

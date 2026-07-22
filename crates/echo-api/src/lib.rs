@@ -43,7 +43,7 @@ use echo_contracts::{
     UnreadResponse, UserPreferences, UserRole, WatchEntry, WatchListResponse, WatchMutationRequest,
 };
 use echo_data::{
-    CalendarService, FmpSearchService, FundamentalsRow, FundamentalsService,
+    CalendarService, FilingsService, FmpSearchService, FundamentalsRow, FundamentalsService,
     HistoricalValuationService, PeerService, QuoteService, pct_change, pct_of,
 };
 use echo_db::{
@@ -52,7 +52,8 @@ use echo_db::{
     ResearchSessionRepository, SaveResearchSession, UserPreferencesRow, WatchlistRepository,
 };
 use echo_domain::{
-    EarningsCalendar, Financials, HistoricalValuation, MarketSnapshot, MultipleType, PeerAnchor,
+    EarningsCalendar, Filing, Financials, HistoricalValuation, MarketSnapshot, MultipleType,
+    PeerAnchor,
 };
 use futures_util::Stream;
 use std::convert::Infallible;
@@ -77,6 +78,7 @@ pub struct AppState {
     calendar: Option<CalendarService>,
     historical_valuation: Option<HistoricalValuationService>,
     peers: Option<PeerService>,
+    filings: Option<FilingsService>,
     fmp_search: Option<FmpSearchService>,
     auth_disabled: bool,
     auth_disabled_user_id: String,
@@ -96,6 +98,7 @@ impl AppState {
             calendar: None,
             historical_valuation: None,
             peers: None,
+            filings: None,
             fmp_search: None,
             auth_disabled: true,
             auth_disabled_user_id: "local".into(),
@@ -1053,6 +1056,22 @@ impl ResearchPorts for ApiResearchPorts {
         })
     }
 
+    async fn load_recent_filings(&self, ticker: &str) -> Vec<Filing> {
+        let Some(service) = self.state.filings.as_ref() else {
+            return Vec::new();
+        };
+        service
+            .recent(ticker)
+            .await
+            .into_iter()
+            .map(|filing| Filing {
+                form: filing.form,
+                filed_date: filing.filed_date,
+                source_url: filing.source_url,
+            })
+            .collect()
+    }
+
     async fn complete_answer(&self, system: &str, user: &str, user_id: &str) -> Option<String> {
         let audit = self
             .state
@@ -1243,6 +1262,9 @@ pub async fn run() {
     let peers = pool
         .clone()
         .and_then(|pool| PeerService::new(pool, config.data_sources.clone()).ok());
+    let filings = pool
+        .clone()
+        .and_then(|pool| FilingsService::new(pool, config.data_sources.clone()).ok());
     let fmp_search = FmpSearchService::new(config.data_sources.clone()).ok();
     let app = router(AppState {
         pool,
@@ -1251,6 +1273,7 @@ pub async fn run() {
         calendar,
         historical_valuation,
         peers,
+        filings,
         fmp_search,
         auth_disabled: config.auth_disabled,
         auth_disabled_user_id: config.auth_disabled_user_id,
@@ -1440,6 +1463,7 @@ mod tests {
             calendar: None,
             historical_valuation: None,
             peers: None,
+            filings: None,
             fmp_search: None,
             auth_disabled: false,
             auth_disabled_user_id: "local".into(),

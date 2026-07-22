@@ -4,6 +4,7 @@
 //! 当最后兜底。供应商数字先转为 [`rust_decimal::Decimal`]，经过质量门后才允许写入仓库。
 
 mod calendar;
+mod filings;
 mod fmp;
 mod fundamentals;
 mod historical;
@@ -15,6 +16,7 @@ mod router;
 mod search;
 
 pub use calendar::{CalendarError, CalendarService};
+pub use filings::{Filing, FilingsError, FilingsService};
 pub use fundamentals::{
     FundamentalsError, FundamentalsResult, FundamentalsRow, FundamentalsService, pct_change, pct_of,
 };

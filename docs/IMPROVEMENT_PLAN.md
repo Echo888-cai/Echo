@@ -42,7 +42,7 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
 
 | 差距 | Honeclaw 现状 | Echo 现状 | 落点 |
 | --- | --- | --- | --- |
-| 证据平面 | 有新闻/事件输入 | 日历/历史分位/同业已接；filings/网页证据仍 pending | §4 P2 |
+| 证据平面 | 有新闻/事件输入 | 日历/历史分位/同业/filings 已接；网页证据仍 pending | §4 P2 |
 | 深度报告 | 有报告工作流 | `/api/report/generate` 未迁移 | §4 P3 |
 | 公司档案记忆 | Markdown 长期记忆 | `company_profiles` 无 Rust 读写 | §4 P3 |
 | 定时简报触达用户 | 盘前/财报简报直达 IM | worker digest 只写库，无用户触达面 | §4 P4 |
@@ -115,8 +115,12 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
 1. `evidence-port`：网页证据端口 + 所选供应商适配器（等用户定 Tavily 续费或替代品；供应商失败诚实降级，不重诊断——已知结论勿重推）。
 2. `filings-and-calendar`：财报日历（Finnhub）✅已接（`echo-data::CalendarService` +
    `echo-db::CalendarRepository`，24h 陈旧回源，`ResearchPorts::load_earnings_calendar`→Web
-   `EarningsBadge`，见 rust-parity-matrix）+ 公告/filings 读模型（**仍 pending**，字段带
-   source URL、valid/knowledge time、currency、license，全新表/新 crate 模块，无既有骨架可接）。
+   `EarningsBadge`，见 rust-parity-matrix）+ 公告/filings 读模型 ✅已接（`echo-data::FilingsService`：
+   Finnhub `/stock/filings`，新表 `company_filings`（migration 0011，首个冻结后新增迁移）+
+   `echo-db::FilingsRepository`；只留实质公告表单 10-K/10-Q/8-K/proxy/registration 等，剔除内部人
+   交易表单 3/4/5/144；美股专属（EDGAR 本身不覆盖港股/A股）；接入 `ResearchPorts::load_recent_filings`
+   →`answer_prompt`（模型可引用 form/日期/URL）→`AskResponse.filings`；真库+真 Finnhub 端到端验证：
+   AAPL 8 条入库并被模型引用，0700.HK 正确空表退出，24h 缓存命中）。
 3. `peers-and-history`：历史估值分位 ✅已接（`echo-data::HistoricalValuationService`，美股专属，
    FMP 年度 EPS 按 `filingDate` 截止匹配 Yahoo 月度收盘价，避免未来数据反推历史；港股/A股
    诚实返回 `None`，不读表里可能是别口径的陈旧点位冒充支持；接入 `answer_prompt` + `fact_guard`）。

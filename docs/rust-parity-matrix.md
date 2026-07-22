@@ -5,8 +5,8 @@
 > Migration baseline: `dc4b75c^` / `eb3b766`. Historical TypeScript/React/Python code is behavior-only reference and must not be restored as a runtime.
 >
 > Last inventoried: 2026-07-22 · Updated for #44 (ResearchService / QA fixtures), #45 (CI live DB),
-> P2-4 (api-hardening: rate limit / readiness / Origin / body limit), and P2-3 remainder
-> (comp_peers 同业锚点接线).
+> P2-4 (api-hardening: rate limit / readiness / Origin / body limit), P2-3 remainder
+> (comp_peers 同业锚点接线), and P2 remainder (company_filings 公告读模型接线, migration 0011).
 
 ## 1. Purpose and update rules
 
@@ -133,7 +133,7 @@ All nine schedules are defined and can execute activities, but no atomic claim/l
 | Finnhub peers | `finnhubPeersAdapter` | `echo-data::PeerService`（FMP `stock-peers` + `ratios-ttm`/`key-metrics-ttm`）+ `echo-db::PeersRepository` | rust-accepted | echo-data 单测（分位/排除自身/JSON 往返）+ live FMP+DB 端到端（AAPL：PE 4 家 p25 23.6x/中位 26.2x、EV-Sales 5 家；RIVN：单点位诚实拒绝成分位，不足两点不成锚点） | keep | P2-3 remainder | 供应商换成 FMP（非 Finnhub）；美股专属（免费档三表限定，见 fundamentals.rs 同一授权口径）；单个可比失败不拖垮整批，`partial` 标记不完整；24h 缓存已验证命中。 |
 | HK ADR/calendar | `hkAdrCalendarAdapter` | — | pending | — | keep | Phase 2 | 港股/ADR 日期与映射链缺失。 |
 | PostgreSQL calendar | `postgresCalendarAdapter` | `echo-db::CalendarRepository` | rust-accepted | — | keep | Phase 2–3 | `earnings_calendar` 读写已接（无 RLS，公共参考数据）。 |
-| PostgreSQL filings | `postgresFilingsAdapter` | — | pending | — | keep | Phase 2–3 | filing/公告读模型未迁移。 |
+| PostgreSQL filings | `postgresFilingsAdapter` | `echo-data::FilingsService`（Finnhub `/stock/filings`）+ `echo-db::FilingsRepository`（新表 `company_filings`，migration 0011） | rust-accepted | echo-data 单测（日期解析/表单白名单）+ live Finnhub+DB 端到端（AAPL 8 条实质公告入库、答案引用 form/日期/URL；0700.HK 港股正确空表退出） | keep | P2 remainder | 仅实质性公告表单（10-K/10-Q/8-K/proxy/registration 等），排除内部人交易表单 3/4/5/144（另一类事实，噪音大）；美股专属（EDGAR 本身不覆盖港股/A股）；24h 缓存已验证命中；`ResearchPorts::load_recent_filings`→`answer_prompt`+`AskResponse.filings` 已接线。 |
 | PostgreSQL fundamentals | `postgresFundamentalsAdapter` | — | pending | — | keep | Phase 2–3 | 财务事实、期间、口径、来源、双时间语义未迁移。 |
 
 ## 7. DB repositories and tables
@@ -156,7 +156,7 @@ All nine schedules are defined and can execute activities, but no atomic claim/l
 | Documents | `documentRepository` | — | pending | — | keep | Phase 3 | 无安全的上传、解析、存储边界。 |
 | Financial/history/HK facts | financials / HK repositories | — | pending | — | keep | Phase 2–3 | 缺 bitemporal 财务、估值及 HK facts repository。 |
 | Historical valuation percentile | `historicalValuation` (F-5) | `echo-data::HistoricalValuationService` + `echo-db::HistoricalValuationRepository` | rust-accepted | live FMP+Yahoo+DB round-trip (AAPL 分位 98.28%，0700.HK 诚实拒绝) | keep | Phase 2 | 美股专属（港股 filing EPS 深度不足，见 docs/PLAN.md 勘察结论）；`filingDate` 截止避免未来数据反推历史；`ResearchPorts::load_historical_valuation`→`answer_prompt`+`fact_guard` 已接线；`comp_peers`（同业）见上方 Finnhub peers 行，已接线。 |
-| Peers/evidence | peers/evidence repos | `echo-db::PeersRepository`（同业已接，见上方 Finnhub peers 行） | pending | — | keep | Phase 2–3 | 网页证据（Tavily 额度已耗尽，供应商未定）仍无 Rust 读写边界；同业比较已迁移。 |
+| Peers/evidence | peers/evidence repos | `echo-db::PeersRepository` + `echo-db::FilingsRepository`（同业、filings 已接，见上方对应行） | pending | — | keep | Phase 2–3 | 网页证据（Tavily 额度已耗尽，供应商未定）仍无 Rust 读写边界；同业比较、公司公告已迁移。 |
 | Profiles/research snapshots/memory | profile/snapshot/memory repos | — | pending | — | keep | Phase 3–4 | 未迁移。 |
 | Team/audit/billing | team/audit/billing repositories | — | pending | — | keep | Phase 3 / product | P5 表仍存在；是否继续使用需确认。 |
 | Rate limits | `rate_limit_buckets` | `echo-db::RateLimitRepository` + `echo-api` `/api/ask`、`/api/ask/stream` 限流中间件 | rust-accepted | echo-db 单测（含真库 ignored 用例）+ 真库端到端手测（3 次放行第 4 次 429，见 P2-4） | keep | P2-4 | 按用户 + 60s 窗口共享桶；`ECHO_ASK_RATE_LIMIT_PER_MINUTE` 可调；限流查询出错放行。 |

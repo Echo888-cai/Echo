@@ -6,7 +6,9 @@
 //! 决策面板与作答上下文都以它为唯一事实主体——跨公司的历史/记忆一律只作代词承接，
 //! 不得携带别家的财务数字（"问苹果答腾讯"的架构级封堵）。
 
-use echo_domain::{Company, Financials, MarketSnapshot, PeerAnchor, Valuation, display_valuation};
+use echo_domain::{
+    Company, Filing, Financials, MarketSnapshot, PeerAnchor, Valuation, display_valuation,
+};
 use rust_decimal::Decimal;
 
 pub mod answer_prompt;
@@ -64,6 +66,7 @@ pub fn build_panel(
     market: &MarketSnapshot,
     financials: &Financials,
     peer: Option<&PeerAnchor>,
+    filings: &[Filing],
 ) -> DecisionPanel {
     let valuation = display_valuation(&company.company, market, financials, peer);
 
@@ -79,6 +82,9 @@ pub fn build_panel(
     }
     if peer.is_some() {
         connected.push("同业对比");
+    }
+    if !filings.is_empty() {
+        connected.push("最新公告");
     }
     let completeness = ((connected.len() as f64 / 5.0) * 100.0).round() as u8;
 

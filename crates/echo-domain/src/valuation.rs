@@ -95,6 +95,14 @@ pub struct EarningsCalendar {
     pub revenue_estimate: Option<Decimal>,
 }
 
+/// 一份公司公告/披露（Finnhub SEC filings index）——只做证据引用，不进估值计算。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Filing {
+    pub form: String,
+    pub filed_date: Option<String>,
+    pub source_url: String,
+}
+
 /// 内部人净买卖（Finnhub）——护栏只登金额与交易日。
 #[derive(Clone, Debug, Default)]
 pub struct InsiderActivity {

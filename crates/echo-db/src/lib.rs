@@ -589,6 +589,88 @@ impl<'a> PeersRepository<'a> {
     }
 }
 
+/// 公司公告/披露仓储——`company_filings`（唯一读写入口；不分租户，公共参考数据；`ticker`
+/// 外键指向 `companies`，写入前调用方须已 `CompanyRepository::ensure` 建档）。
+pub struct FilingsRepository<'a> {
+    pool: &'a PgPool,
+}
+
+#[derive(Clone, Debug, FromRow)]
+pub struct FilingRow {
+    pub form: String,
+    pub filed_date: Option<chrono::NaiveDate>,
+    pub filing_url: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewFiling {
+    pub form: String,
+    pub filed_date: Option<chrono::NaiveDate>,
+    pub accepted_date: Option<chrono::DateTime<chrono::Utc>>,
+    pub report_url: Option<String>,
+    pub filing_url: String,
+}
+
+impl<'a> FilingsRepository<'a> {
+    #[must_use]
+    pub fn new(pool: &'a PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// 该 ticker 最近一次同步时间；缺行即 `None`（从未取过数）。
+    pub async fn last_synced(&self, ticker: &str) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+        let row: Option<(chrono::DateTime<chrono::Utc>,)> = sqlx::query_as(
+            "SELECT MAX(knowledge_time) FROM company_filings WHERE ticker = $1 \
+             HAVING MAX(knowledge_time) IS NOT NULL",
+        )
+        .bind(ticker)
+        .fetch_optional(self.pool)
+        .await?;
+        Ok(row.map(|(t,)| t))
+    }
+
+    /// 按公告日期倒序取最近若干条。缺表项即空表——绝不用陈旧/臆造行冒充。
+    pub async fn recent(&self, ticker: &str, limit: i64) -> Result<Vec<FilingRow>> {
+        let rows = sqlx::query_as::<_, FilingRow>(
+            "SELECT form, filed_date, filing_url FROM company_filings \
+             WHERE ticker = $1 ORDER BY filed_date DESC NULLS LAST, id DESC LIMIT $2",
+        )
+        .bind(ticker)
+        .bind(limit)
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// 批量插入新公告；已存在（同 ticker + filing_url）静默跳过——filings 是不可变历史记录，
+    /// 不存在"覆盖更新"语义。`knowledge_time` 用当前时刻标记本轮同步。
+    pub async fn insert_batch(&self, ticker: &str, filings: &[NewFiling]) -> Result<()> {
+        if filings.is_empty() {
+            return Ok(());
+        }
+        let ticker = ticker.trim().to_ascii_uppercase();
+        let mut tx = self.pool.begin().await?;
+        for filing in filings {
+            sqlx::query(
+                "INSERT INTO company_filings \
+                 (ticker, form, filed_date, accepted_date, report_url, filing_url, source, valid_time, knowledge_time) \
+                 VALUES ($1, $2, $3, $4, $5, $6, 'finnhub', now(), now()) \
+                 ON CONFLICT (ticker, filing_url) DO NOTHING",
+            )
+            .bind(&ticker)
+            .bind(&filing.form)
+            .bind(filing.filed_date)
+            .bind(filing.accepted_date)
+            .bind(&filing.report_url)
+            .bind(&filing.filing_url)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::truncate_error_detail;

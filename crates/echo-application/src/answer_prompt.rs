@@ -6,7 +6,7 @@
 //! 全是纯函数（事实进、字符串出），不碰网络/时钟，可离线单测每条红线分支。
 
 use crate::DecisionPanel;
-use echo_domain::{Financials, MarketSnapshot};
+use echo_domain::{Filing, Financials, MarketSnapshot};
 use rust_decimal::Decimal;
 
 /// 作答上下文——本请求这一家公司的全部已核事实（单一主体，无跨公司泄漏面）。
@@ -16,6 +16,7 @@ pub struct AnswerContext<'a> {
     pub panel: &'a DecisionPanel,
     pub market: &'a MarketSnapshot,
     pub financials: &'a Financials,
+    pub filings: &'a [Filing],
 }
 
 /// 固定的 system 红线——研究助手人设 + 不可逾越的护栏。与 composer 的 system 段同义：
@@ -123,6 +124,17 @@ pub fn build_user_prompt(ctx: &AnswerContext) -> String {
             field(hv.median, "x")
         ));
     }
+
+    if !ctx.filings.is_empty() {
+        out.push_str("\n\n== 已核到的最新公司公告（SEC filings，可引用表单类型与日期）==\n");
+        for filing in ctx.filings {
+            let date = filing.filed_date.as_deref().unwrap_or("未核到日期");
+            out.push_str(&format!(
+                "{} · {date} · {}\n",
+                filing.form, filing.source_url
+            ));
+        }
+    }
     out
 }
 
@@ -155,7 +167,7 @@ mod tests {
             ..Default::default()
         };
         let valuation = display_valuation(&company.company, &market, &financials, None);
-        let panel = crate::build_panel(&company, &market, &financials, None);
+        let panel = crate::build_panel(&company, &market, &financials, None, &[]);
         let _ = valuation;
         (panel, financials)
     }
@@ -180,6 +192,7 @@ mod tests {
             panel: &panel,
             market: &market,
             financials: &financials,
+            filings: &[],
         });
         assert!(prompt.contains("严禁给出任何具体财务数字"));
         assert!(!prompt.contains("已核到的实时财报"));
@@ -199,6 +212,7 @@ mod tests {
             panel: &panel,
             market: &market,
             financials: &financials,
+            filings: &[],
         });
         assert!(prompt.contains("已核到的实时财报"));
         assert!(prompt.contains("383000USD"));
@@ -216,7 +230,52 @@ mod tests {
             panel: &panel,
             market: &market,
             financials: &financials,
+            filings: &[],
         });
         assert!(prompt.contains("现价：未核到"));
+    }
+
+    #[test]
+    fn filings_block_cites_form_and_source_url() {
+        let (panel, financials) = panel_with(Some(dec!(190)), false);
+        let market = MarketSnapshot {
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let filings = vec![Filing {
+            form: "10-K".into(),
+            filed_date: Some("2026-05-01".into()),
+            source_url: "https://www.sec.gov/example".into(),
+        }];
+        let prompt = build_user_prompt(&AnswerContext {
+            question: "最近有什么公告？",
+            name_zh: Some("苹果"),
+            panel: &panel,
+            market: &market,
+            financials: &financials,
+            filings: &filings,
+        });
+        assert!(prompt.contains("已核到的最新公司公告"));
+        assert!(prompt.contains("10-K"));
+        assert!(prompt.contains("2026-05-01"));
+        assert!(prompt.contains("https://www.sec.gov/example"));
+    }
+
+    #[test]
+    fn empty_filings_omit_the_block() {
+        let (panel, financials) = panel_with(Some(dec!(190)), false);
+        let market = MarketSnapshot {
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let prompt = build_user_prompt(&AnswerContext {
+            question: "最近有什么公告？",
+            name_zh: Some("苹果"),
+            panel: &panel,
+            market: &market,
+            financials: &financials,
+            filings: &[],
+        });
+        assert!(!prompt.contains("已核到的最新公司公告"));
     }
 }

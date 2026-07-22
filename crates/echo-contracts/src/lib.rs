@@ -185,6 +185,15 @@ pub struct EarningsCalendarView {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct FilingView {
+    pub form: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filed_date: Option<String>,
+    pub source_url: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AskResponse {
     pub ticker: String,
     pub route: RouteView,
@@ -198,6 +207,8 @@ pub struct AskResponse {
     pub fact_guard: Option<GuardView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub earnings: Option<EarningsCalendarView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filings: Vec<FilingView>,
 }
 
 /// 类型化研究 SSE 事件。`type` 字段与 Axum `event:` 名对齐。
