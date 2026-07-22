@@ -10,6 +10,7 @@ pub use operations::{
 };
 pub use rate_limit::RateLimitRepository;
 pub use workspace::{
+    CompanyProfileRepository, CompanyProfileRow, CompanyProfileSummaryRow, CompanyProfileUpsert,
     CompanySearchRow, NewNotification, NotificationRow, NotificationsRepository,
     PortfolioPositionRow, PortfolioRepository, PortfolioUpsert, PreferencesPatch,
     PreferencesRepository, ResearchSessionRepository, ResearchSessionRow,

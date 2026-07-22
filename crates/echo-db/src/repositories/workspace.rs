@@ -681,6 +681,172 @@ impl<'a> ResearchSessionRepository<'a> {
     }
 }
 
+/// 公司档案摘要行（列表视图）。
+#[derive(Clone, Debug, FromRow)]
+pub struct CompanyProfileSummaryRow {
+    pub ticker: String,
+    pub company_name: Option<String>,
+    pub research_status: Option<String>,
+    pub confidence: Option<String>,
+    pub turn_count: i32,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// 公司档案完整行（详情视图）。
+#[derive(Clone, Debug, FromRow)]
+pub struct CompanyProfileRow {
+    pub ticker: String,
+    pub company_name: Option<String>,
+    pub thesis: Option<String>,
+    pub research_status: Option<String>,
+    pub confidence: Option<String>,
+    pub bull: Option<Vec<String>>,
+    pub bear: Option<Vec<String>>,
+    pub monitors: Option<Vec<String>>,
+    pub falsifiers: Option<Vec<String>>,
+    pub valuation_method: Option<String>,
+    pub valuation_bear: Option<Decimal>,
+    pub valuation_base: Option<Decimal>,
+    pub valuation_bull: Option<Decimal>,
+    pub valuation_current_price: Option<Decimal>,
+    pub profile_md: Option<String>,
+    pub turn_count: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// 部分更新——每个字段 `None` 表示"本次不改"，与既有行合并（`COALESCE`）。清空一个
+/// 数组/文本字段需显式传 `Some(vec![])`/`Some(String::new())`，不能靠省略字段做到。
+#[derive(Clone, Debug, Default)]
+pub struct CompanyProfileUpsert {
+    pub company_name: Option<String>,
+    pub thesis: Option<String>,
+    pub research_status: Option<String>,
+    pub confidence: Option<String>,
+    pub bull: Option<Vec<String>>,
+    pub bear: Option<Vec<String>>,
+    pub monitors: Option<Vec<String>>,
+    pub falsifiers: Option<Vec<String>>,
+    pub valuation_method: Option<String>,
+    pub valuation_bear: Option<Decimal>,
+    pub valuation_base: Option<Decimal>,
+    pub valuation_bull: Option<Decimal>,
+    pub valuation_current_price: Option<Decimal>,
+    pub profile_md: Option<String>,
+}
+
+pub struct CompanyProfileRepository<'a> {
+    pool: &'a Pool,
+}
+
+impl<'a> CompanyProfileRepository<'a> {
+    #[must_use]
+    pub fn new(pool: &'a Pool) -> Self {
+        Self { pool }
+    }
+
+    pub async fn list(&self, user_id: &str, limit: i64) -> Result<Vec<CompanyProfileSummaryRow>> {
+        let mut tx = with_tenant(self.pool, user_id).await?;
+        let rows = sqlx::query_as::<_, CompanyProfileSummaryRow>(
+            "SELECT ticker, company_name, research_status, confidence, turn_count, updated_at \
+             FROM company_profiles WHERE user_id = $1 ORDER BY updated_at DESC LIMIT $2",
+        )
+        .bind(user_id)
+        .bind(limit.clamp(1, 200))
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(rows)
+    }
+
+    pub async fn get(&self, user_id: &str, ticker: &str) -> Result<Option<CompanyProfileRow>> {
+        let mut tx = with_tenant(self.pool, user_id).await?;
+        let row = sqlx::query_as::<_, CompanyProfileRow>(
+            "SELECT ticker, company_name, thesis, research_status, confidence, bull, bear, \
+                    monitors, falsifiers, valuation_method, valuation_bear, valuation_base, \
+                    valuation_bull, valuation_current_price, profile_md, turn_count, \
+                    created_at, updated_at \
+             FROM company_profiles WHERE user_id = $1 AND ticker = $2",
+        )
+        .bind(user_id)
+        .bind(normalize_ticker(ticker))
+        .fetch_optional(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(row)
+    }
+
+    /// 建档/更新并把 `turn_count` 加一——每次研究沉淀都算一轮判断迭代。
+    pub async fn upsert(
+        &self,
+        user_id: &str,
+        ticker: &str,
+        patch: &CompanyProfileUpsert,
+    ) -> Result<CompanyProfileRow> {
+        let ticker = normalize_ticker(ticker);
+        let mut tx = with_tenant(self.pool, user_id).await?;
+        let row = sqlx::query_as::<_, CompanyProfileRow>(
+            "INSERT INTO company_profiles \
+             (user_id, ticker, company_name, thesis, research_status, confidence, bull, bear, \
+              monitors, falsifiers, valuation_method, valuation_bear, valuation_base, \
+              valuation_bull, valuation_current_price, profile_md, turn_count, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 1, now()) \
+             ON CONFLICT (user_id, ticker) DO UPDATE SET \
+               company_name = COALESCE($3, company_profiles.company_name), \
+               thesis = COALESCE($4, company_profiles.thesis), \
+               research_status = COALESCE($5, company_profiles.research_status), \
+               confidence = COALESCE($6, company_profiles.confidence), \
+               bull = COALESCE($7, company_profiles.bull), \
+               bear = COALESCE($8, company_profiles.bear), \
+               monitors = COALESCE($9, company_profiles.monitors), \
+               falsifiers = COALESCE($10, company_profiles.falsifiers), \
+               valuation_method = COALESCE($11, company_profiles.valuation_method), \
+               valuation_bear = COALESCE($12, company_profiles.valuation_bear), \
+               valuation_base = COALESCE($13, company_profiles.valuation_base), \
+               valuation_bull = COALESCE($14, company_profiles.valuation_bull), \
+               valuation_current_price = COALESCE($15, company_profiles.valuation_current_price), \
+               profile_md = COALESCE($16, company_profiles.profile_md), \
+               turn_count = company_profiles.turn_count + 1, \
+               updated_at = now() \
+             RETURNING ticker, company_name, thesis, research_status, confidence, bull, bear, \
+                       monitors, falsifiers, valuation_method, valuation_bear, valuation_base, \
+                       valuation_bull, valuation_current_price, profile_md, turn_count, \
+                       created_at, updated_at",
+        )
+        .bind(user_id)
+        .bind(&ticker)
+        .bind(&patch.company_name)
+        .bind(&patch.thesis)
+        .bind(&patch.research_status)
+        .bind(&patch.confidence)
+        .bind(&patch.bull)
+        .bind(&patch.bear)
+        .bind(&patch.monitors)
+        .bind(&patch.falsifiers)
+        .bind(&patch.valuation_method)
+        .bind(patch.valuation_bear)
+        .bind(patch.valuation_base)
+        .bind(patch.valuation_bull)
+        .bind(patch.valuation_current_price)
+        .bind(&patch.profile_md)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(row)
+    }
+
+    pub async fn delete(&self, user_id: &str, ticker: &str) -> Result<bool> {
+        let mut tx = with_tenant(self.pool, user_id).await?;
+        let result = sqlx::query("DELETE FROM company_profiles WHERE user_id = $1 AND ticker = $2")
+            .bind(user_id)
+            .bind(normalize_ticker(ticker))
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(result.rows_affected() == 1)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -808,6 +974,63 @@ mod tests {
                 .expect("refresh research")
                 .is_none(),
             "研究会话删除后不得复活"
+        );
+
+        let profiles = CompanyProfileRepository::new(&pool);
+        let created = profiles
+            .upsert(
+                "user_a",
+                "AAPL",
+                &CompanyProfileUpsert {
+                    company_name: Some("Apple".into()),
+                    thesis: Some("生态壁垒 + 服务收入占比提升".into()),
+                    bull: Some(vec!["生态锁定".into()]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create profile");
+        assert_eq!(created.turn_count, 1);
+        assert_eq!(created.bull, Some(vec!["生态锁定".to_string()]));
+        assert!(
+            profiles
+                .get("user_b", "AAPL")
+                .await
+                .expect("b profile")
+                .is_none(),
+            "档案必须按租户隔离"
+        );
+        let updated = profiles
+            .upsert(
+                "user_a",
+                "AAPL",
+                &CompanyProfileUpsert {
+                    research_status: Some("tracking".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("update profile");
+        assert_eq!(updated.turn_count, 2, "每次 upsert 都应推进 turn_count");
+        assert_eq!(
+            updated.thesis,
+            Some("生态壁垒 + 服务收入占比提升".to_string()),
+            "未传的字段必须保留原值，不是被清空"
+        );
+        assert_eq!(profiles.list("user_a", 20).await.expect("list").len(), 1);
+        assert!(
+            profiles
+                .delete("user_a", "AAPL")
+                .await
+                .expect("delete profile")
+        );
+        assert!(
+            profiles
+                .get("user_a", "AAPL")
+                .await
+                .expect("refresh profile")
+                .is_none(),
+            "档案删除后不得复活"
         );
     }
 }

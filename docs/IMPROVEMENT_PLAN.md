@@ -44,7 +44,7 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
 | --- | --- | --- | --- |
 | 证据平面 | 有新闻/事件输入 | 日历/历史分位/同业/filings 已接；网页证据仍 pending | §4 P2 |
 | 深度报告 | 有报告工作流 | `/api/report/generate` 未迁移 | §4 P3 |
-| 公司档案记忆 | Markdown 长期记忆 | `company_profiles` 无 Rust 读写 | §4 P3 |
+| 公司档案记忆 | Markdown 长期记忆 | `company_profiles` repository/API 已接（手动编辑）；Web 编辑页/自动沉淀仍 pending | §4 P3 |
 | 定时简报触达用户 | 盘前/财报简报直达 IM | worker digest 只写库，无用户触达面 | §4 P4 |
 | 多轮对话研究 | 有 | 每次独立 turn，Web 不加载历史 | §4 P1 |
 | 流式体验 | SSE 已接 UI | 服务端 SSE 已实现但 Web 不消费 | §4 P1 |
@@ -135,9 +135,17 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
    429，`/ready` 掉库返 503，跨站 Origin 返 403，见 rust-parity-matrix）。优雅停机仍 pending，见 P5。
 
 ### P3 · 报告、记忆、对比（研究资产化）
-1. `compare-legs`：`CompareResearchFacts` 双腿隔离取数 + 对比提示词 + Web 对比视图。
-2. `company-profiles`：公司档案 repository/API/编辑页——每次研究沉淀可复用的长期判断
-   （对标并超越 honeclaw 的 Markdown 记忆：我们的档案每条数字可溯源、过护栏）。
+1. `compare-legs`：`CompareResearchFacts` 双腿隔离取数 + 对比提示词 + Web 对比视图。**blocked**：
+   `echo_domain::merge_facts_registry`（同样是"写好了没人调"的冻结代码）按维度（金额/百分比/
+   倍数/日期）合并两份 `FactsRegistry`，**不按 ticker 命名空间隔离**——直接拿来做双腿护栏会
+   把"腾讯的营收"当成"苹果营收"的合法核对来源，正是架构上明令禁止的"问苹果答腾讯"污染。
+   需要先决定护栏怎么在双主体下做隔离核对（按公司分别验证 vs 合并但打标签），这是产品/架构
+   判断，不是数据接线，故未做；接手时先读这段注释，不要重新推导。
+2. `company-profiles` ✅已接 repository/API（`echo-db::CompanyProfileRepository` + `GET/PUT/DELETE
+   /api/profiles[/:ticker]`，真库 tenant-isolation 单测 + live HTTP 验证：建档→部分更新保留
+   未传字段→turn_count 按轮次递增→删除不复活）。**仍 pending**：Web 编辑页（产品级 UX 决定，
+   未做）；研究会话自动沉淀 thesis/bull/bear 到档案（需先定"从答案抽取什么、怎么抽"的语义，
+   产品判断，未做——当前只有手动 PUT 编辑）。
 3. `deep-report`：深度报告生成 + 导出；报告只引用 registry 内已核数字。
 4. `multi-turn`：conversation 分组、代词承接；历史只帮承接，旧数字不得注入新事实。
 

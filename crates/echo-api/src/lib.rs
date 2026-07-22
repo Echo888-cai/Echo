@@ -33,23 +33,26 @@ use echo_config::ApiConfig;
 use echo_contracts::{
     AskRequest, AskResponse, AuthInviteRequest, AuthInviteResponse, AuthLoginRequest,
     AuthLogoutResponse, AuthMeResponse, AuthRegisterRequest, AuthUserResponse,
-    ChangedCountResponse, CompanyResolveItem, CompanyResolveQuery, CompanyResolveResponse,
-    CompanySearchItem, CompanySearchQuery, CompanySearchResponse, CompanyVerifyQuery,
-    CompanyVerifyResponse, CompanyVerifySuggestion, ErrorResponse, HealthResponse, ListQuery,
-    MutationResponse, Notification, NotificationReadRequest, NotificationsListResponse,
-    PortfolioListResponse, PortfolioPosition, PortfolioUpsertRequest, PreferencesResponse,
-    PreferencesUpdateRequest, PublicUser, ResearchSessionDetail, ResearchSessionResponse,
-    ResearchSessionSummary, ResearchSessionsResponse, ResearchStreamEvent, TickerQuery,
-    UnreadResponse, UserPreferences, UserRole, WatchEntry, WatchListResponse, WatchMutationRequest,
+    ChangedCountResponse, CompanyProfileDetail, CompanyProfileResponse, CompanyProfileSummary,
+    CompanyProfileUpsertRequest, CompanyProfilesListResponse, CompanyResolveItem,
+    CompanyResolveQuery, CompanyResolveResponse, CompanySearchItem, CompanySearchQuery,
+    CompanySearchResponse, CompanyVerifyQuery, CompanyVerifyResponse, CompanyVerifySuggestion,
+    ErrorResponse, HealthResponse, ListQuery, MutationResponse, Notification,
+    NotificationReadRequest, NotificationsListResponse, PortfolioListResponse, PortfolioPosition,
+    PortfolioUpsertRequest, PreferencesResponse, PreferencesUpdateRequest, PublicUser,
+    ResearchSessionDetail, ResearchSessionResponse, ResearchSessionSummary,
+    ResearchSessionsResponse, ResearchStreamEvent, TickerQuery, UnreadResponse, UserPreferences,
+    UserRole, WatchEntry, WatchListResponse, WatchMutationRequest,
 };
 use echo_data::{
     CalendarService, FilingsService, FmpSearchService, FundamentalsRow, FundamentalsService,
     HistoricalValuationService, PeerService, QuoteService, pct_change, pct_of,
 };
 use echo_db::{
-    CompanyRepository, MarketRepository, NotificationsRepository, Pool, PortfolioRepository,
-    PortfolioUpsert, PreferencesPatch, PreferencesRepository, RateLimitRepository,
-    ResearchSessionRepository, SaveResearchSession, UserPreferencesRow, WatchlistRepository,
+    CompanyProfileRepository, CompanyProfileUpsert, CompanyRepository, MarketRepository,
+    NotificationsRepository, Pool, PortfolioRepository, PortfolioUpsert, PreferencesPatch,
+    PreferencesRepository, RateLimitRepository, ResearchSessionRepository, SaveResearchSession,
+    UserPreferencesRow, WatchlistRepository,
 };
 use echo_domain::{
     EarningsCalendar, Filing, Financials, HistoricalValuation, MarketSnapshot, MultipleType,
@@ -706,6 +709,112 @@ async fn portfolio_delete(
     Ok(Json(MutationResponse { changed }))
 }
 
+fn company_profile_summary(row: echo_db::CompanyProfileSummaryRow) -> CompanyProfileSummary {
+    CompanyProfileSummary {
+        ticker: row.ticker,
+        company_name: row.company_name,
+        research_status: row.research_status,
+        confidence: row.confidence,
+        turn_count: row.turn_count,
+        updated_at: row.updated_at.to_rfc3339(),
+    }
+}
+
+fn company_profile_detail(row: echo_db::CompanyProfileRow) -> CompanyProfileDetail {
+    CompanyProfileDetail {
+        ticker: row.ticker,
+        company_name: row.company_name,
+        thesis: row.thesis,
+        research_status: row.research_status,
+        confidence: row.confidence,
+        bull: row.bull.unwrap_or_default(),
+        bear: row.bear.unwrap_or_default(),
+        monitors: row.monitors.unwrap_or_default(),
+        falsifiers: row.falsifiers.unwrap_or_default(),
+        valuation_method: row.valuation_method,
+        valuation_bear: row.valuation_bear,
+        valuation_base: row.valuation_base,
+        valuation_bull: row.valuation_bull,
+        valuation_current_price: row.valuation_current_price,
+        profile_md: row.profile_md,
+        turn_count: row.turn_count,
+        created_at: row.created_at.to_rfc3339(),
+        updated_at: row.updated_at.to_rfc3339(),
+    }
+}
+
+async fn profiles_list(
+    State(state): State<AppState>,
+    Extension(user): Extension<PublicUser>,
+    Query(query): Query<ListQuery>,
+) -> Result<Json<CompanyProfilesListResponse>, ApiError> {
+    let profiles = CompanyProfileRepository::new(require_pool(&state)?)
+        .list(&user.id, query.limit.unwrap_or(50))
+        .await
+        .map_err(map_db_error)?
+        .into_iter()
+        .map(company_profile_summary)
+        .collect();
+    Ok(Json(CompanyProfilesListResponse { profiles }))
+}
+
+async fn profile_get(
+    State(state): State<AppState>,
+    Extension(user): Extension<PublicUser>,
+    Path(ticker): Path<String>,
+) -> Result<Json<CompanyProfileResponse>, ApiError> {
+    let profile = CompanyProfileRepository::new(require_pool(&state)?)
+        .get(&user.id, &ticker)
+        .await
+        .map_err(map_db_error)?
+        .map(company_profile_detail);
+    Ok(Json(CompanyProfileResponse { profile }))
+}
+
+async fn profile_upsert(
+    State(state): State<AppState>,
+    Extension(user): Extension<PublicUser>,
+    Path(ticker): Path<String>,
+    Json(input): Json<CompanyProfileUpsertRequest>,
+) -> Result<Json<CompanyProfileDetail>, ApiError> {
+    let row = CompanyProfileRepository::new(require_pool(&state)?)
+        .upsert(
+            &user.id,
+            &ticker,
+            &CompanyProfileUpsert {
+                company_name: input.company_name,
+                thesis: input.thesis,
+                research_status: input.research_status,
+                confidence: input.confidence,
+                bull: input.bull,
+                bear: input.bear,
+                monitors: input.monitors,
+                falsifiers: input.falsifiers,
+                valuation_method: input.valuation_method,
+                valuation_bear: input.valuation_bear,
+                valuation_base: input.valuation_base,
+                valuation_bull: input.valuation_bull,
+                valuation_current_price: input.valuation_current_price,
+                profile_md: input.profile_md,
+            },
+        )
+        .await
+        .map_err(map_db_error)?;
+    Ok(Json(company_profile_detail(row)))
+}
+
+async fn profile_delete(
+    State(state): State<AppState>,
+    Extension(user): Extension<PublicUser>,
+    Path(ticker): Path<String>,
+) -> Result<Json<MutationResponse>, ApiError> {
+    let changed = CompanyProfileRepository::new(require_pool(&state)?)
+        .delete(&user.id, &ticker)
+        .await
+        .map_err(map_db_error)?;
+    Ok(Json(MutationResponse { changed }))
+}
+
 fn preferences(row: UserPreferencesRow) -> UserPreferences {
     UserPreferences {
         onboarding_completed: row.onboarding_completed,
@@ -1211,6 +1320,11 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/research/sessions/:id",
             get(research_session_get).delete(research_session_delete),
+        )
+        .route("/api/profiles", get(profiles_list))
+        .route(
+            "/api/profiles/:ticker",
+            get(profile_get).put(profile_upsert).delete(profile_delete),
         )
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
     Router::new()

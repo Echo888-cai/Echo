@@ -16,12 +16,14 @@ mod migrations;
 mod repositories;
 pub use migrations::{Migration, migrate, migration_checksum, migrations};
 pub use repositories::{
-    AuthRepository, AuthSessionRow, CompanySearchRow, EarningsCandidateRow, NewNotification,
-    NewUser, NotificationRow, NotificationsRepository, OperationsRepository, PortfolioPositionRow,
-    PortfolioRepository, PortfolioSnapshotResult, PortfolioUpsert, PreferencesPatch,
-    PreferencesRepository, RateLimitRepository, ReminderProfileRow, ResearchSessionRepository,
-    ResearchSessionRow, ResearchSessionSummaryRow, SaveResearchSession, UserPreferencesRow,
-    UserRow, WatchEntryRow, WatchRuleRow, WatchlistRepository, normalize_ticker,
+    AuthRepository, AuthSessionRow, CompanyProfileRepository, CompanyProfileRow,
+    CompanyProfileSummaryRow, CompanyProfileUpsert, CompanySearchRow, EarningsCandidateRow,
+    NewNotification, NewUser, NotificationRow, NotificationsRepository, OperationsRepository,
+    PortfolioPositionRow, PortfolioRepository, PortfolioSnapshotResult, PortfolioUpsert,
+    PreferencesPatch, PreferencesRepository, RateLimitRepository, ReminderProfileRow,
+    ResearchSessionRepository, ResearchSessionRow, ResearchSessionSummaryRow, SaveResearchSession,
+    UserPreferencesRow, UserRow, WatchEntryRow, WatchRuleRow, WatchlistRepository,
+    normalize_ticker,
 };
 
 // 连接池类型对上层再导出，让 echo-api 等消费方不必直接钉 sqlx 版本（工作区单一事实源在此收口）。

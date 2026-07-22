@@ -6,7 +6,8 @@
 >
 > Last inventoried: 2026-07-22 · Updated for #44 (ResearchService / QA fixtures), #45 (CI live DB),
 > P2-4 (api-hardening: rate limit / readiness / Origin / body limit), P2-3 remainder
-> (comp_peers 同业锚点接线), and P2 remainder (company_filings 公告读模型接线, migration 0011).
+> (comp_peers 同业锚点接线), P2 remainder (company_filings 公告读模型接线, migration 0011), and
+> P3-2 (company_profiles repository/API 接线；Web 编辑页与自动沉淀仍 pending)。
 
 ## 1. Purpose and update rules
 
@@ -78,9 +79,10 @@ The baseline contained 45 REST surfaces: `/healthz` plus 44 registered REST cont
 | List portfolio | `GET /api/portfolio` | `PortfolioRepository::list` | rust-accepted | repository/API + CI live | keep | #43 / #45 | 基础持仓 CRUD 已落地。 |
 | Upsert portfolio position | `POST /api/portfolio` | `PortfolioRepository::upsert` | rust-accepted | repository/API + CI live | keep | #43 / #45 | Decimal 持仓、成本等字段。 |
 | Delete portfolio position | `DELETE /api/portfolio` | `PortfolioRepository::delete` | rust-accepted | repository/API + CI live | keep | #43 / #45 | 按用户与 ticker 删除。 |
-| List company profiles | `GET /api/company/profiles` | — | pending | — | keep | Phase 3 | `company_profiles` repository/API 未迁移。 |
-| Company profile | `GET /api/company/profile` | — | pending | — | keep | Phase 3 | 画像及 markdown 投影未迁移。 |
-| Delete company profile | `DELETE /api/company/profile` | — | pending | — | keep | Phase 3 | 同上。 |
+| List company profiles | `GET /api/company/profiles` | `GET /api/profiles`（`echo-db::CompanyProfileRepository::list`） | rust-accepted | 真库 tenant-isolation 单测 + live HTTP round-trip（CI 见 rust-parity-matrix 惯例，本地真库手测） | keep | P3-2 | 路由名从 `/api/company/profiles` 改为 `/api/profiles`（与既有 `/api/research/sessions` 等新命名对齐）。 |
+| Company profile | `GET /api/company/profile` | `GET /api/profiles/:ticker`（`echo-db::CompanyProfileRepository::get`） | rust-accepted | 同上 | keep | P3-2 | 详情含 bull/bear/monitors/falsifiers 数组 + 估值带；`profile_md` 字段保留（Rust 侧尚未生成，只读写既有值）。 |
+| Delete company profile | `DELETE /api/company/profile` | `DELETE /api/profiles/:ticker`（`echo-db::CompanyProfileRepository::delete`） | rust-accepted | 同上 | keep | P3-2 | 同上。写路径新增 `PUT /api/profiles/:ticker`（原 TS 版无对应端点，供手动建档/编辑；自动从研究会话沉淀仍 pending，见下一行）。 |
+| Auto-populate profile from research | — | — | pending | — | keep | P3-2 remainder | 每轮研究自动沉淀 thesis/bull/bear 到档案——需要先定语义（哪些字段从答案抽取、抽取规则），产品判断，未做。当前只有手动编辑 API。 |
 | Company review | `GET /api/company/review` | — | pending | — | keep | Phase 3–4 | 画像 review/scorecard 未迁移。 |
 | Research scorecard | `GET /api/research/scorecard` | — | pending | — | keep | Phase 3–4 | 研究质量/资产 scorecard 未迁移。 |
 | Research conversations | `GET /api/research/conversations` | — | pending | — | keep | Phase 1, 3 | 现有 session 是独立 turn；缺 conversation grouping。 |

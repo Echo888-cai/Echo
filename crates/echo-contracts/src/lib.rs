@@ -614,6 +614,106 @@ pub struct ListQuery {
     pub ticker: Option<String>,
 }
 
+/// 公司档案摘要（列表视图）——对标 honeclaw 的 Markdown 长期记忆，但每条数字可溯源、
+/// 过护栏，不是自由文本堆砌。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompanyProfileSummary {
+    pub ticker: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub company_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub research_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<String>,
+    pub turn_count: i32,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompanyProfileDetail {
+    pub ticker: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub company_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thesis: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub research_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<String>,
+    #[serde(default)]
+    pub bull: Vec<String>,
+    #[serde(default)]
+    pub bear: Vec<String>,
+    #[serde(default)]
+    pub monitors: Vec<String>,
+    #[serde(default)]
+    pub falsifiers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuation_method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuation_bear: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuation_base: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuation_bull: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuation_current_price: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_md: Option<String>,
+    pub turn_count: i32,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// 部分更新请求——省略字段表示"本次不改"，与 `CompanyProfileUpsert`（echo-db）同一语义。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompanyProfileUpsertRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub company_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thesis: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub research_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bull: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bear: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitors: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub falsifiers: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuation_method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuation_bear: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuation_base: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuation_bull: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuation_current_price: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_md: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompanyProfilesListResponse {
+    pub profiles: Vec<CompanyProfileSummary>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompanyProfileResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<CompanyProfileDetail>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ResearchSessionSummary {
