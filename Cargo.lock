@@ -761,6 +761,7 @@ dependencies = [
  "chrono",
  "echo-config",
  "echo-db",
+ "futures-util",
  "reqwest",
  "rust_decimal",
  "rust_decimal_macros",

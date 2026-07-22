@@ -8,6 +8,7 @@ mod fmp;
 mod fundamentals;
 mod historical;
 mod market;
+mod peers;
 mod quality;
 mod quote;
 mod router;
@@ -21,6 +22,7 @@ pub use historical::{
     HistoricalValuationError, HistoricalValuationService, HistoricalValuationSummary,
 };
 pub use market::{Market, detect_market, normalize_ticker};
+pub use peers::{PeerBand, PeerService, PeerSetSummary, PeersError};
 pub use quality::{QualityIssue, QualityReport, Severity, check_quote};
 pub use quote::{ProviderStatus, Quote, QuoteError, QuoteService, RoutedQuote};
 pub use router::{AdapterAuthorization, AdapterDescriptor, LicenseTier, select_adapter_chain};

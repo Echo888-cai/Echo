@@ -77,6 +77,9 @@ pub fn build_panel(
     if valuation.is_valued() {
         connected.push("估值区间");
     }
+    if peer.is_some() {
+        connected.push("同业对比");
+    }
     let completeness = ((connected.len() as f64 / 5.0) * 100.0).round() as u8;
 
     DecisionPanel {

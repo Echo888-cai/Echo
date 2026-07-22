@@ -42,7 +42,7 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
 
 | 差距 | Honeclaw 现状 | Echo 现状 | 落点 |
 | --- | --- | --- | --- |
-| 证据平面 | 有新闻/事件输入 | filings/网页证据/日历/同业全 pending | §4 P2 |
+| 证据平面 | 有新闻/事件输入 | 日历/历史分位/同业已接；filings/网页证据仍 pending | §4 P2 |
 | 深度报告 | 有报告工作流 | `/api/report/generate` 未迁移 | §4 P3 |
 | 公司档案记忆 | Markdown 长期记忆 | `company_profiles` 无 Rust 读写 | §4 P3 |
 | 定时简报触达用户 | 盘前/财报简报直达 IM | worker digest 只写库，无用户触达面 | §4 P4 |
@@ -120,8 +120,11 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
 3. `peers-and-history`：历史估值分位 ✅已接（`echo-data::HistoricalValuationService`，美股专属，
    FMP 年度 EPS 按 `filingDate` 截止匹配 Yahoo 月度收盘价，避免未来数据反推历史；港股/A股
    诚实返回 `None`，不读表里可能是别口径的陈旧点位冒充支持；接入 `answer_prompt` + `fact_guard`）。
-   同业对比事实（`comp_peers`/`PeerAnchor`）**仍 pending**——需要可比公司选取 + EV/Sales 锚点，
-   范围明显更大，另起 PR。
+   同业对比事实（`comp_peers`/`PeerAnchor`）✅已接（`echo-data::PeerService`：FMP `stock-peers`
+   选可比公司 + `ratios-ttm`/`key-metrics-ttm` 取 PE/EV-Sales，按分位缓存 24h；按公司自身盈利/
+   亏损阶段选 PE 或 EV/Sales 口径，接入 `ResearchPorts::load_peer_anchor`→`build_panel`→
+   `compute_valuation`/`compute_ev_sales`→`answer_prompt`；真库+真 FMP 端到端验证：AAPL 4/5 家
+   可比成分位、RIVN 单点位诚实拒绝成分位，见 rust-parity-matrix）。
 4. `api-hardening` ✅已接（`echo-db::RateLimitRepository` 接线 `rate_limit_buckets` + `/api/ask`、
    `/api/ask/stream` 每用户每分钟限流；`GET /ready` 真连库；`enforce_origin` 中间件校验状态变更
    请求 Origin；`DefaultBodyLimit::max` 512KiB 请求体上限；真库端到端验证：3 次放行第 4 次

@@ -524,6 +524,71 @@ impl<'a> HistoricalValuationRepository<'a> {
     }
 }
 
+/// 同业锚点仓储——`comp_peers`（唯一读写入口；不分租户，公共参考数据；`ticker` 外键指向
+/// `companies`，写入前调用方须已 `CompanyRepository::ensure` 建档）。
+pub struct PeersRepository<'a> {
+    pool: &'a PgPool,
+}
+
+#[derive(Clone, Debug, FromRow)]
+pub struct PeersRow {
+    pub ticker: String,
+    pub peers_json: Option<serde_json::Value>,
+    pub anchor_json: Option<serde_json::Value>,
+    pub knowledge_time: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PeersUpsert {
+    pub ticker: String,
+    pub peers_json: serde_json::Value,
+    pub anchor_json: serde_json::Value,
+    pub partial: bool,
+}
+
+impl<'a> PeersRepository<'a> {
+    #[must_use]
+    pub fn new(pool: &'a PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// 取当前登记行。缺表项即断口——返回 `None`，绝不用陈旧值冒充。
+    pub async fn latest(&self, ticker: &str) -> Result<Option<PeersRow>> {
+        let row = sqlx::query_as::<_, PeersRow>(
+            "SELECT ticker, peers_json, anchor_json, knowledge_time \
+             FROM comp_peers WHERE ticker = $1 AND provider_status = 'ok'",
+        )
+        .bind(ticker)
+        .fetch_optional(self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// 用最新供应商数据整行覆盖（`provider_status` 置 ok，`knowledge_time` 推进）。
+    pub async fn upsert(&self, value: &PeersUpsert) -> Result<()> {
+        let ticker = value.ticker.trim().to_ascii_uppercase();
+        sqlx::query(
+            "INSERT INTO comp_peers \
+             (ticker, peers_json, anchor_json, provider_status, partial, valid_time, knowledge_time) \
+             VALUES ($1, $2, $3, 'ok', $4, now(), now()) \
+             ON CONFLICT (ticker) DO UPDATE SET \
+               peers_json = EXCLUDED.peers_json, \
+               anchor_json = EXCLUDED.anchor_json, \
+               provider_status = 'ok', \
+               partial = EXCLUDED.partial, \
+               valid_time = now(), \
+               knowledge_time = now()",
+        )
+        .bind(&ticker)
+        .bind(&value.peers_json)
+        .bind(&value.anchor_json)
+        .bind(value.partial)
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::truncate_error_detail;

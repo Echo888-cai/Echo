@@ -14,8 +14,8 @@ use echo_contracts::{
 };
 use echo_domain::{
     AssetStage, Company, EarningsCalendar, Financials, HistoricalValuation, MarketSnapshot,
-    RegistrySources, ResearchRoute, build_facts_registry, build_soft_note, route_research_intent,
-    verify_answer_numbers,
+    MultipleType, PeerAnchor, RegistrySources, ResearchRoute, build_facts_registry,
+    build_soft_note, classify_asset_stage, route_research_intent, verify_answer_numbers,
 };
 use std::future::Future;
 use tokio::sync::mpsc;
@@ -32,6 +32,7 @@ pub struct ResearchFacts {
     pub market: MarketSnapshot,
     pub financials: Financials,
     pub earnings_calendar: Option<EarningsCalendar>,
+    pub peer_anchor: Option<PeerAnchor>,
 }
 
 /// 比较研究的双腿事实；两侧 registry 不得交叉污染。
@@ -88,6 +89,14 @@ pub trait ResearchPorts: Send + Sync {
         &self,
         ticker: &str,
     ) -> impl Future<Output = Option<HistoricalValuation>> + Send;
+
+    /// 同业锚点（美股专属）。`multiple_type` 由调用方按公司自身资产阶段（盈利/亏损）先行
+    /// 判定——同一批可比公司同时有 PE 与 EV/Sales 两种口径，缺数/未核到返回 `None`。
+    fn load_peer_anchor(
+        &self,
+        ticker: &str,
+        multiple_type: MultipleType,
+    ) -> impl Future<Output = Option<PeerAnchor>> + Send;
 
     fn complete_answer(
         &self,
@@ -182,11 +191,19 @@ impl ResearchService {
         }
         financials.historical_valuation = ports.load_historical_valuation(&req.ticker).await;
         let earnings_calendar = ports.load_earnings_calendar(&req.ticker).await;
+        // 亏损股走 EV/Sales 情景（PE 对负利润无意义），其余走 PE 带；与 `compute_valuation`
+        // 的阶段判定同一口径，否则取回的锚点类型会被域层过滤器悄悄丢弃。
+        let multiple_type = match classify_asset_stage(&financials) {
+            AssetStage::Loss | AssetStage::LossGrowth => MultipleType::EvSales,
+            _ => MultipleType::Pe,
+        };
+        let peer_anchor = ports.load_peer_anchor(&req.ticker, multiple_type).await;
         ResearchFacts {
             company,
             market,
             financials,
             earnings_calendar,
+            peer_anchor,
         }
     }
 
@@ -198,7 +215,12 @@ impl ResearchService {
     ) -> ResearchOutcome {
         let route = route_research_intent(&req.question);
         let facts = Self::assemble_facts(ports, &req).await;
-        let panel = build_panel(&facts.company, &facts.market, &facts.financials, None);
+        let panel = build_panel(
+            &facts.company,
+            &facts.market,
+            &facts.financials,
+            facts.peer_anchor.as_ref(),
+        );
 
         let (answer, answer_source) = match req.draft_answer.clone() {
             Some(draft) => (Some(draft), AnswerSource::Draft),
@@ -281,7 +303,12 @@ async fn drive_stream<P: ResearchPorts>(
 
     let route = route_research_intent(&req.question);
     let facts = ResearchService::assemble_facts(ports, &req).await;
-    let panel = build_panel(&facts.company, &facts.market, &facts.financials, None);
+    let panel = build_panel(
+        &facts.company,
+        &facts.market,
+        &facts.financials,
+        facts.peer_anchor.as_ref(),
+    );
 
     send(ResearchStreamEvent::Meta(ResearchStreamMeta {
         ticker: panel.ticker.clone(),
@@ -568,6 +595,14 @@ mod tests {
 
         async fn load_historical_valuation(&self, _ticker: &str) -> Option<HistoricalValuation> {
             self.historical_valuation.clone()
+        }
+
+        async fn load_peer_anchor(
+            &self,
+            _ticker: &str,
+            _multiple_type: MultipleType,
+        ) -> Option<PeerAnchor> {
+            None
         }
 
         async fn complete_answer(

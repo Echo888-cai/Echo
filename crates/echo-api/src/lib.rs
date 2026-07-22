@@ -44,14 +44,16 @@ use echo_contracts::{
 };
 use echo_data::{
     CalendarService, FmpSearchService, FundamentalsRow, FundamentalsService,
-    HistoricalValuationService, QuoteService, pct_change, pct_of,
+    HistoricalValuationService, PeerService, QuoteService, pct_change, pct_of,
 };
 use echo_db::{
     CompanyRepository, MarketRepository, NotificationsRepository, Pool, PortfolioRepository,
     PortfolioUpsert, PreferencesPatch, PreferencesRepository, RateLimitRepository,
     ResearchSessionRepository, SaveResearchSession, UserPreferencesRow, WatchlistRepository,
 };
-use echo_domain::{EarningsCalendar, Financials, HistoricalValuation, MarketSnapshot};
+use echo_domain::{
+    EarningsCalendar, Financials, HistoricalValuation, MarketSnapshot, MultipleType, PeerAnchor,
+};
 use futures_util::Stream;
 use std::convert::Infallible;
 use tokio_stream::StreamExt;
@@ -74,6 +76,7 @@ pub struct AppState {
     fundamentals: Option<FundamentalsService>,
     calendar: Option<CalendarService>,
     historical_valuation: Option<HistoricalValuationService>,
+    peers: Option<PeerService>,
     fmp_search: Option<FmpSearchService>,
     auth_disabled: bool,
     auth_disabled_user_id: String,
@@ -92,6 +95,7 @@ impl AppState {
             fundamentals: None,
             calendar: None,
             historical_valuation: None,
+            peers: None,
             fmp_search: None,
             auth_disabled: true,
             auth_disabled_user_id: "local".into(),
@@ -1028,6 +1032,27 @@ impl ResearchPorts for ApiResearchPorts {
         })
     }
 
+    async fn load_peer_anchor(
+        &self,
+        ticker: &str,
+        multiple_type: MultipleType,
+    ) -> Option<PeerAnchor> {
+        let service = self.state.peers.as_ref()?;
+        let summary = service.load(ticker).await?;
+        let band = match multiple_type {
+            MultipleType::Pe => summary.pe,
+            MultipleType::EvSales => summary.ev_sales,
+        }?;
+        Some(PeerAnchor {
+            multiple_type,
+            p25: band.p25,
+            median: band.median,
+            p75: band.p75,
+            n: band.n,
+            tickers: band.tickers,
+        })
+    }
+
     async fn complete_answer(&self, system: &str, user: &str, user_id: &str) -> Option<String> {
         let audit = self
             .state
@@ -1215,6 +1240,9 @@ pub async fn run() {
     let historical_valuation = pool
         .clone()
         .and_then(|pool| HistoricalValuationService::new(pool, config.data_sources.clone()).ok());
+    let peers = pool
+        .clone()
+        .and_then(|pool| PeerService::new(pool, config.data_sources.clone()).ok());
     let fmp_search = FmpSearchService::new(config.data_sources.clone()).ok();
     let app = router(AppState {
         pool,
@@ -1222,6 +1250,7 @@ pub async fn run() {
         fundamentals,
         calendar,
         historical_valuation,
+        peers,
         fmp_search,
         auth_disabled: config.auth_disabled,
         auth_disabled_user_id: config.auth_disabled_user_id,
@@ -1410,6 +1439,7 @@ mod tests {
             fundamentals: None,
             calendar: None,
             historical_valuation: None,
+            peers: None,
             fmp_search: None,
             auth_disabled: false,
             auth_disabled_user_id: "local".into(),
