@@ -4,7 +4,7 @@
 >
 > Migration baseline: `dc4b75c^` / `eb3b766`. Historical TypeScript/React/Python code is behavior-only reference and must not be restored as a runtime.
 >
-> Last inventoried: 2026-07-21 · Updated for #44 (ResearchService / QA fixtures) and #45 (CI live DB).
+> Last inventoried: 2026-07-22 · Updated for #44 (ResearchService / QA fixtures), #45 (CI live DB), and P2-4 (api-hardening: rate limit / readiness / Origin / body limit).
 
 ## 1. Purpose and update rules
 
@@ -39,7 +39,8 @@ The baseline contained 45 REST surfaces: `/healthz` plus 44 registered REST cont
 
 | Capability | Old surface | Rust landing | Status | Tests | Product decision | Owner/PR | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Liveness probe | `GET /healthz` | `echo-api::health` (`/health`, `/healthz`) | rust-accepted | API unit tests; image smoke still pending | keep | #43 | 仅 liveness；尚未实现依赖 DB/必需配置的 readiness。 |
+| Liveness probe | `GET /healthz` | `echo-api::health` (`/health`, `/healthz`) | rust-accepted | API unit tests; image smoke still pending | keep | #43 | 仅 liveness。 |
+| Readiness probe | — | `echo-api::ready` (`/ready`, `echo_db::ping`) | rust-accepted | API unit test + 真库端到端手测（见 P2-4） | keep | P2-4 | 配库时真连 `SELECT 1`，掉线 503；未配库（纯核部署）视为就绪。 |
 | Login | `POST /api/auth/login` | `echo-api::auth_login`, `echo-application::AuthService` | rust-accepted | auth/API + CI live (#45) | keep | #43 / #45 | scrypt、cookie session 已落地。 |
 | Invite registration | `POST /api/auth/register` | `echo-api::auth_register` | rust-accepted | auth/API + CI live (#45) | keep | #43 / #45 | 邀请码注册已落地。 |
 | Logout | `POST /api/auth/logout` | `echo-api::auth_logout` | rust-accepted | auth/API + CI live (#45) | keep | #43 / #45 | 销毁 session 并清 cookie。 |
@@ -156,7 +157,7 @@ All nine schedules are defined and can execute activities, but no atomic claim/l
 | Peers/evidence | peers/evidence repos | — | pending | — | keep | Phase 2–3 | 同业比较（`comp_peers`）、网页证据无 Rust 读写边界。 |
 | Profiles/research snapshots/memory | profile/snapshot/memory repos | — | pending | — | keep | Phase 3–4 | 未迁移。 |
 | Team/audit/billing | team/audit/billing repositories | — | pending | — | keep | Phase 3 / product | P5 表仍存在；是否继续使用需确认。 |
-| Rate limits | `rate_limit_buckets` | table only | pending | — | keep | Phase 3, 5 | Rust API 没有应用层限流。 |
+| Rate limits | `rate_limit_buckets` | `echo-db::RateLimitRepository` + `echo-api` `/api/ask`、`/api/ask/stream` 限流中间件 | rust-accepted | echo-db 单测（含真库 ignored 用例）+ 真库端到端手测（3 次放行第 4 次 429，见 P2-4） | keep | P2-4 | 按用户 + 60s 窗口共享桶；`ECHO_ASK_RATE_LIMIT_PER_MINUTE` 可调；限流查询出错放行。 |
 | Tenant/RLS integration | RLS context suite | `with_tenant`, partial repos | skeleton | CI live with `echo_app` NOBYPASSRLS | keep | #45 | 双租户正反向与 Worker 路径仍需扩覆盖。 |
 
 ## 8. QA corpora and gates
@@ -183,8 +184,8 @@ These are P0 blockers from the handoff. Dockerfiles or Terraform resources alone
 | S3 backup and restore | `ECHO_BACKUP_BUCKET` | local `pg_dump` | blocked | no S3/restore drill | keep | Phase 5 | Worker 不读取 bucket。 |
 | Multi-worker safety | ECS desired count 2–8 | due-time scheduler only | blocked | no dual-worker test | keep | Phase 5 | 缺 claim/lease。 |
 | Observability | OTEL Terraform config | tracing logs only | blocked | — | keep | Phase 5 | OTLP exporter 未安装。 |
-| Research/API rate limiting | WAF/table claim | table only | blocked | — | keep | Phase 3, 5 | 缺应用层配额。 |
-| API safety/readiness | production boundary | basic Axum middleware | blocked | — | keep | Phase 3, 5 | 缺 CSRF/Origin、readiness、优雅停机。 |
+| Research/API rate limiting | WAF/table claim | `echo-db::RateLimitRepository` + ask/ask_stream 中间件 | rust-accepted | 见上方 Rate limits 行 | keep | P2-4 | 见上方 Rate limits 行。 |
+| API safety/readiness | production boundary | Origin 校验 + readiness + body 上限 + 限流中间件 | rust-accepted | API 单测 + 真库端到端手测 | keep | P2-4 | `enforce_origin`（缺 Origin 放行、Origin 存在必须在白名单）+ `/ready`（真连 DB）+ `DefaultBodyLimit::max(512KiB)`；优雅停机仍 pending（Phase 5）。 |
 | Build and IaC gates | release CI | `cargo xtask` + live DB (#45) | skeleton | Docker/IaC CI still missing | keep | #45 / Phase 5–6 | 活库进 CI；仍缺 Docker/TF gates。 |
 | Production recovery exercise | runbook | — | blocked | no restore/failover rehearsal | keep | Phase 5–6 | 需备份恢复与故障演练。 |
 

@@ -91,8 +91,8 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
    刷新即丢全部对话。→ §4 P1-2。
 6. **强制手输 ticker**：resolve 链（DB→别名→FMP→探活）已上线，composer 仍要求用户自己给
    `AAPL / 9988.HK` 格式代码。应支持输入公司名自动解析 + 候选确认。→ §4 P1-3。
-7. **API 安全缺口**（矩阵 §9）：无应用层限流、无 readiness、无 CSRF/Origin 防护、无 JSON body 上限；
-   昂贵研究端点裸奔。→ §4 P2-4。
+7. **API 安全缺口**（矩阵 §9）✅已接（P2-4）：应用层限流、readiness、Origin 防护、JSON body 上限
+   均已接线并真库端到端验证，见 §4 P2-4。
 8. **Worker 无 claim/lease**：多实例会重复执行同一 job（矩阵 §5 全 skeleton 根因）。→ §4 P4。
 9. **e2e 全 ignored**：`cargo xtask e2e` 需手工起 WebDriver，CI 不跑真浏览器。→ §4 P5。
 
@@ -122,7 +122,10 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
    诚实返回 `None`，不读表里可能是别口径的陈旧点位冒充支持；接入 `answer_prompt` + `fact_guard`）。
    同业对比事实（`comp_peers`/`PeerAnchor`）**仍 pending**——需要可比公司选取 + EV/Sales 锚点，
    范围明显更大，另起 PR。
-4. `api-hardening`：限流（含 `rate_limit_buckets` 接线或删表）、readiness、Origin 校验、body 上限。
+4. `api-hardening` ✅已接（`echo-db::RateLimitRepository` 接线 `rate_limit_buckets` + `/api/ask`、
+   `/api/ask/stream` 每用户每分钟限流；`GET /ready` 真连库；`enforce_origin` 中间件校验状态变更
+   请求 Origin；`DefaultBodyLimit::max` 512KiB 请求体上限；真库端到端验证：3 次放行第 4 次
+   429，`/ready` 掉库返 503，跨站 Origin 返 403，见 rust-parity-matrix）。优雅停机仍 pending，见 P5。
 
 ### P3 · 报告、记忆、对比（研究资产化）
 1. `compare-legs`：`CompareResearchFacts` 双腿隔离取数 + 对比提示词 + Web 对比视图。

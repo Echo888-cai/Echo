@@ -10,9 +10,9 @@
 //! 研究质量的病灶所在。单公司硬取值：面板与护栏只吃本请求这一家公司的财务事实，
 //! 跨公司污染（"问苹果答腾讯"）在类型层面就发生不了。
 
-use axum::extract::{Extension, Path, Query, Request, State};
-use axum::http::header::{COOKIE, SET_COOKIE};
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::extract::{DefaultBodyLimit, Extension, Path, Query, Request, State};
+use axum::http::header::{COOKIE, ORIGIN, SET_COOKIE};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -48,8 +48,8 @@ use echo_data::{
 };
 use echo_db::{
     CompanyRepository, MarketRepository, NotificationsRepository, Pool, PortfolioRepository,
-    PortfolioUpsert, PreferencesPatch, PreferencesRepository, ResearchSessionRepository,
-    SaveResearchSession, UserPreferencesRow, WatchlistRepository,
+    PortfolioUpsert, PreferencesPatch, PreferencesRepository, RateLimitRepository,
+    ResearchSessionRepository, SaveResearchSession, UserPreferencesRow, WatchlistRepository,
 };
 use echo_domain::{EarningsCalendar, Financials, HistoricalValuation, MarketSnapshot};
 use futures_util::Stream;
@@ -60,6 +60,9 @@ use tracing::{error, info, warn};
 
 const COOKIE_NAME: &str = "echo_session";
 const SESSION_MAX_AGE_SECONDS: i64 = 30 * 86_400;
+/// 请求体上限：研究请求体是结构化数字 + 一段问题/草稿文本，512KiB 留足余量，拦掉异常大包。
+const MAX_JSON_BODY_BYTES: usize = 512 * 1024;
+const ASK_RATE_LIMIT_WINDOW_SECONDS: i64 = 60;
 
 /// 共享状态：可选的数据库连接池。未配 `DATABASE_URL` 时为 `None`——`/api/ask` 只吃请求体里带的
 /// 数字（纯核路径，可离库端到端验证）；配了库则在缺行情时从 `echo-db` 兜底最新快照。
@@ -76,6 +79,8 @@ pub struct AppState {
     auth_disabled_user_id: String,
     secure_cookie: bool,
     model_provider: Option<ProviderConfig>,
+    allowed_origins: Vec<String>,
+    ask_rate_limit_per_minute: u32,
 }
 
 impl AppState {
@@ -92,6 +97,8 @@ impl AppState {
             auth_disabled_user_id: "local".into(),
             secure_cookie: false,
             model_provider: None,
+            allowed_origins: vec!["http://localhost:5190".into()],
+            ask_rate_limit_per_minute: 20,
         }
     }
 }
@@ -156,6 +163,81 @@ fn require_pool(state: &AppState) -> Result<&Pool, ApiError> {
 
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse::ok())
+}
+
+/// 就绪探针：配了 `DATABASE_URL` 就必须能连上（`SELECT 1`），否则 503——流量不该被路由到
+/// 一个数据库掉线的副本。未配库属有意的纯核部署，视为就绪（与 `AppState::without_database`
+/// 的设计一致，不是降级）。
+async fn ready(State(state): State<AppState>) -> Response {
+    let Some(pool) = state.pool.as_ref() else {
+        return Json(HealthResponse::ok()).into_response();
+    };
+    match echo_db::ping(pool).await {
+        Ok(()) => Json(HealthResponse::ok()).into_response(),
+        Err(error) => {
+            error!(error = %error, "readiness 探针失败：数据库不可达");
+            ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "数据库不可达").into_response()
+        }
+    }
+}
+
+/// Origin 校验（CSRF 防护）：状态变更请求带 `Origin` 头时必须在白名单内；非浏览器客户端
+/// 通常不带该头，放行——拦的是"浏览器从别的站点悄悄提交这个会话的 Cookie"这类跨站请求。
+async fn enforce_origin(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    if !matches!(
+        *request.method(),
+        Method::GET | Method::HEAD | Method::OPTIONS
+    ) {
+        if let Some(origin) = request
+            .headers()
+            .get(ORIGIN)
+            .and_then(|value| value.to_str().ok())
+        {
+            if !state
+                .allowed_origins
+                .iter()
+                .any(|allowed| allowed == origin)
+            {
+                warn!(origin, "Origin 校验拒绝跨站请求");
+                return ApiError::new(StatusCode::FORBIDDEN, "非法请求来源").into_response();
+            }
+        }
+    }
+    next.run(request).await
+}
+
+/// 研究端点限流：按用户 + 60 秒滑动窗口共享 `rate_limit_buckets`，挡掉对昂贵模型调用的
+/// 高频重放。仅在配库时生效；限流查询自身出错按放行处理（限流故障不该拖垮研究主链）。
+async fn rate_limit_ask(
+    State(state): State<AppState>,
+    Extension(user): Extension<PublicUser>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if let Some(pool) = state.pool.as_ref() {
+        let key = format!("ask:{}", user.id);
+        match RateLimitRepository::new(pool)
+            .try_consume(
+                &key,
+                state.ask_rate_limit_per_minute as i32,
+                ASK_RATE_LIMIT_WINDOW_SECONDS,
+            )
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                return ApiError::new(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "研究请求过于频繁，请稍后再试",
+                )
+                .into_response();
+            }
+            Err(error) => {
+                error!(error = %error, "限流检查失败，本次放行");
+            }
+        }
+    }
+    next.run(request).await
 }
 
 fn request_token(headers: &HeaderMap) -> Option<&str> {
@@ -1051,9 +1133,13 @@ async fn ask_stream(
 }
 
 pub fn router(state: AppState) -> Router {
+    let ask_rate_limited = middleware::from_fn_with_state(state.clone(), rate_limit_ask);
     let protected = Router::new()
-        .route("/api/ask", post(ask))
-        .route("/api/ask/stream", post(ask_stream))
+        .route("/api/ask", post(ask).route_layer(ask_rate_limited.clone()))
+        .route(
+            "/api/ask/stream",
+            post(ask_stream).route_layer(ask_rate_limited),
+        )
         .route("/api/auth/invite", post(auth_invite))
         .route("/api/companies/search", get(companies_search))
         .route("/api/companies/resolve", get(companies_resolve))
@@ -1086,11 +1172,17 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/healthz", get(health))
+        .route("/ready", get(ready))
         .route("/api/auth/login", post(auth_login))
         .route("/api/auth/register", post(auth_register))
         .route("/api/auth/logout", post(auth_logout))
         .route("/api/auth/me", get(auth_me))
         .merge(protected)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            enforce_origin,
+        ))
+        .layer(DefaultBodyLimit::max(MAX_JSON_BODY_BYTES))
         .with_state(state)
 }
 
@@ -1135,6 +1227,8 @@ pub async fn run() {
         auth_disabled_user_id: config.auth_disabled_user_id,
         secure_cookie: config.secure_cookie,
         model_provider: config.model_provider,
+        allowed_origins: config.allowed_origins,
+        ask_rate_limit_per_minute: config.ask_rate_limit_per_minute,
     });
     let listener = tokio::net::TcpListener::bind(listen_addr)
         .await
@@ -1244,6 +1338,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn readiness_is_ok_without_database() {
+        let response = router(AppState::without_database())
+            .oneshot(
+                Request::builder()
+                    .uri("/ready")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("ready");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn mismatched_origin_is_rejected_on_mutating_requests() {
+        let request = AskRequest::minimal("苹果估值？", "AAPL");
+        let response = router(AppState::without_database())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/ask")
+                    .header("content-type", "application/json")
+                    .header("origin", "https://evil.example")
+                    .body(Body::from(serde_json::to_vec(&request).expect("json")))
+                    .expect("request"),
+            )
+            .await
+            .expect("ask");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn matching_origin_is_allowed_through() {
+        let request = AskRequest::minimal("苹果估值？", "AAPL");
+        let response = router(AppState::without_database())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/ask")
+                    .header("content-type", "application/json")
+                    .header("origin", "http://localhost:5190")
+                    .body(Body::from(serde_json::to_vec(&request).expect("json")))
+                    .expect("request"),
+            )
+            .await
+            .expect("ask");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     #[ignore = "需要隔离 DATABASE_URL；验证 Rust 认证、RLS 会话和保护路由"]
     async fn live_register_session_logout_round_trip() {
         let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
@@ -1271,6 +1415,8 @@ mod tests {
             auth_disabled_user_id: "local".into(),
             secure_cookie: false,
             model_provider: None,
+            allowed_origins: vec!["http://localhost:5190".into()],
+            ask_rate_limit_per_minute: 20,
         });
 
         let register = AuthRegisterRequest {

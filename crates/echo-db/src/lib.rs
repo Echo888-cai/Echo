@@ -19,9 +19,9 @@ pub use repositories::{
     AuthRepository, AuthSessionRow, CompanySearchRow, EarningsCandidateRow, NewNotification,
     NewUser, NotificationRow, NotificationsRepository, OperationsRepository, PortfolioPositionRow,
     PortfolioRepository, PortfolioSnapshotResult, PortfolioUpsert, PreferencesPatch,
-    PreferencesRepository, ReminderProfileRow, ResearchSessionRepository, ResearchSessionRow,
-    ResearchSessionSummaryRow, SaveResearchSession, UserPreferencesRow, UserRow, WatchEntryRow,
-    WatchRuleRow, WatchlistRepository, normalize_ticker,
+    PreferencesRepository, RateLimitRepository, ReminderProfileRow, ResearchSessionRepository,
+    ResearchSessionRow, ResearchSessionSummaryRow, SaveResearchSession, UserPreferencesRow,
+    UserRow, WatchEntryRow, WatchRuleRow, WatchlistRepository, normalize_ticker,
 };
 
 // 连接池类型对上层再导出，让 echo-api 等消费方不必直接钉 sqlx 版本（工作区单一事实源在此收口）。
@@ -55,6 +55,12 @@ pub async fn connect(database_url: &str, max_connections: u32) -> Result<PgPool>
         .connect(database_url)
         .await?;
     Ok(pool)
+}
+
+/// 就绪探针用：确认连接池能真正打到数据库，而非只是"配置存在"。
+pub async fn ping(pool: &PgPool) -> Result<()> {
+    sqlx::query("SELECT 1").execute(pool).await?;
+    Ok(())
 }
 
 /// 在一个带租户上下文的事务里执行私有数据操作：`SET LOCAL app.user_id = $tenant`，

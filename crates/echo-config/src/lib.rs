@@ -6,6 +6,10 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 const DEFAULT_API_PORT: u16 = 4180;
 const DEFAULT_DB_CONNECTIONS: u32 = 5;
+/// Trunk 开发代理默认来源（`crates/echo-web/Trunk.toml` 把 `/api` 代到 4180，浏览器侧 Origin
+/// 仍是 5190）；生产部署必须显式设置 `ECHO_ALLOWED_ORIGINS` 覆盖。
+const DEFAULT_ALLOWED_ORIGIN: &str = "http://localhost:5190";
+const DEFAULT_ASK_RATE_LIMIT_PER_MINUTE: u32 = 20;
 
 /// 外部数据源配置。所有密钥只在进程组合根读取，再显式注入数据层。
 /// 故意不实现 `Debug`，避免密钥进入日志或错误快照。
@@ -98,6 +102,10 @@ pub struct ApiConfig {
     pub secure_cookie: bool,
     pub data_sources: DataSourceConfig,
     pub model_provider: Option<ModelProviderConfig>,
+    /// 允许携带 `Origin` 头做状态变更请求的来源；Origin 不在其中时拒绝（缺 Origin 头放行，
+    /// 覆盖非浏览器客户端）。
+    pub allowed_origins: Vec<String>,
+    pub ask_rate_limit_per_minute: u32,
 }
 
 impl ApiConfig {
@@ -134,6 +142,22 @@ impl ApiConfig {
         )?;
         let data_sources = DataSourceConfig::from_lookup(&mut lookup);
         let model_provider = ModelProviderConfig::from_lookup(&mut lookup);
+        let allowed_origins = non_empty(lookup("ECHO_ALLOWED_ORIGINS")).map_or_else(
+            || vec![DEFAULT_ALLOWED_ORIGIN.to_string()],
+            |value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|origin| !origin.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            },
+        );
+        let ask_rate_limit_per_minute = positive_u32(
+            "ECHO_ASK_RATE_LIMIT_PER_MINUTE",
+            non_empty(lookup("ECHO_ASK_RATE_LIMIT_PER_MINUTE")),
+            DEFAULT_ASK_RATE_LIMIT_PER_MINUTE,
+        )?;
         Ok(Self {
             listen_addr: SocketAddr::new(host, port),
             database_url: non_empty(lookup("DATABASE_URL")),
@@ -144,6 +168,8 @@ impl ApiConfig {
             secure_cookie: flag(non_empty(lookup("ECHO_TRUST_PROXY"))),
             data_sources,
             model_provider,
+            allowed_origins,
+            ask_rate_limit_per_minute,
         })
     }
 }
@@ -249,6 +275,36 @@ mod tests {
         assert_eq!(config.max_connections, 5);
         assert!(!config.auth_disabled);
         assert!(!config.secure_cookie);
+        assert_eq!(config.allowed_origins, vec!["http://localhost:5190"]);
+        assert_eq!(config.ask_rate_limit_per_minute, 20);
+    }
+
+    #[test]
+    fn allowed_origins_parses_comma_list_and_trims() {
+        let config = ApiConfig::from_lookup(lookup(&[(
+            "ECHO_ALLOWED_ORIGINS",
+            " https://echo.example, https://app.echo.example ",
+        )]))
+        .expect("config");
+        assert_eq!(
+            config.allowed_origins,
+            vec!["https://echo.example", "https://app.echo.example"]
+        );
+    }
+
+    #[test]
+    fn ask_rate_limit_rejects_non_positive_override() {
+        let Err(error) = ApiConfig::from_lookup(lookup(&[("ECHO_ASK_RATE_LIMIT_PER_MINUTE", "0")]))
+        else {
+            panic!("zero must be rejected");
+        };
+        assert_eq!(
+            error,
+            ConfigError::InvalidPositiveInteger {
+                key: "ECHO_ASK_RATE_LIMIT_PER_MINUTE",
+                value: "0".into(),
+            }
+        );
     }
 
     #[test]
