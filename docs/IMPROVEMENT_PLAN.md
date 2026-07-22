@@ -117,8 +117,11 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
    `echo-db::CalendarRepository`，24h 陈旧回源，`ResearchPorts::load_earnings_calendar`→Web
    `EarningsBadge`，见 rust-parity-matrix）+ 公告/filings 读模型（**仍 pending**，字段带
    source URL、valid/knowledge time、currency、license，全新表/新 crate 模块，无既有骨架可接）。
-3. `peers-and-history`：同业对比事实 + 历史估值分位（A/H、capex、历史分位的数据可得性结论已在
-   记忆/旧文档里，勿重新调研）。
+3. `peers-and-history`：历史估值分位 ✅已接（`echo-data::HistoricalValuationService`，美股专属，
+   FMP 年度 EPS 按 `filingDate` 截止匹配 Yahoo 月度收盘价，避免未来数据反推历史；港股/A股
+   诚实返回 `None`，不读表里可能是别口径的陈旧点位冒充支持；接入 `answer_prompt` + `fact_guard`）。
+   同业对比事实（`comp_peers`/`PeerAnchor`）**仍 pending**——需要可比公司选取 + EV/Sales 锚点，
+   范围明显更大，另起 PR。
 4. `api-hardening`：限流（含 `rate_limit_buckets` 接线或删表）、readiness、Origin 校验、body 上限。
 
 ### P3 · 报告、记忆、对比（研究资产化）

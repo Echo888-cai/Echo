@@ -13,8 +13,8 @@ use echo_contracts::{
     ResearchStreamStageName, RouteView, ValuationView,
 };
 use echo_domain::{
-    AssetStage, Company, EarningsCalendar, Financials, MarketSnapshot, RegistrySources,
-    ResearchRoute, build_facts_registry, build_soft_note, route_research_intent,
+    AssetStage, Company, EarningsCalendar, Financials, HistoricalValuation, MarketSnapshot,
+    RegistrySources, ResearchRoute, build_facts_registry, build_soft_note, route_research_intent,
     verify_answer_numbers,
 };
 use std::future::Future;
@@ -82,6 +82,12 @@ pub trait ResearchPorts: Send + Sync {
         &self,
         ticker: &str,
     ) -> impl Future<Output = Option<EarningsCalendar>> + Send;
+
+    /// 历史估值分位（美股专属）。缺数/未核到返回 `None`——绝不占位。
+    fn load_historical_valuation(
+        &self,
+        ticker: &str,
+    ) -> impl Future<Output = Option<HistoricalValuation>> + Send;
 
     fn complete_answer(
         &self,
@@ -174,6 +180,7 @@ impl ResearchService {
                 }
             }
         }
+        financials.historical_valuation = ports.load_historical_valuation(&req.ticker).await;
         let earnings_calendar = ports.load_earnings_calendar(&req.ticker).await;
         ResearchFacts {
             company,
@@ -526,6 +533,7 @@ mod tests {
         refresh_ok: bool,
         fundamentals: Option<LoadedFundamentals>,
         earnings_calendar: Option<EarningsCalendar>,
+        historical_valuation: Option<HistoricalValuation>,
         answer: Option<String>,
         stream_chunks: Vec<String>,
         stream_fail: Option<String>,
@@ -556,6 +564,10 @@ mod tests {
 
         async fn load_earnings_calendar(&self, _ticker: &str) -> Option<EarningsCalendar> {
             self.earnings_calendar.clone()
+        }
+
+        async fn load_historical_valuation(&self, _ticker: &str) -> Option<HistoricalValuation> {
+            self.historical_valuation.clone()
         }
 
         async fn complete_answer(

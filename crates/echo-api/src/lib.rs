@@ -43,15 +43,15 @@ use echo_contracts::{
     UnreadResponse, UserPreferences, UserRole, WatchEntry, WatchListResponse, WatchMutationRequest,
 };
 use echo_data::{
-    CalendarService, FmpSearchService, FundamentalsRow, FundamentalsService, QuoteService,
-    pct_change, pct_of,
+    CalendarService, FmpSearchService, FundamentalsRow, FundamentalsService,
+    HistoricalValuationService, QuoteService, pct_change, pct_of,
 };
 use echo_db::{
     CompanyRepository, MarketRepository, NotificationsRepository, Pool, PortfolioRepository,
     PortfolioUpsert, PreferencesPatch, PreferencesRepository, ResearchSessionRepository,
     SaveResearchSession, UserPreferencesRow, WatchlistRepository,
 };
-use echo_domain::{EarningsCalendar, Financials, MarketSnapshot};
+use echo_domain::{EarningsCalendar, Financials, HistoricalValuation, MarketSnapshot};
 use futures_util::Stream;
 use std::convert::Infallible;
 use tokio_stream::StreamExt;
@@ -70,6 +70,7 @@ pub struct AppState {
     quotes: Option<QuoteService>,
     fundamentals: Option<FundamentalsService>,
     calendar: Option<CalendarService>,
+    historical_valuation: Option<HistoricalValuationService>,
     fmp_search: Option<FmpSearchService>,
     auth_disabled: bool,
     auth_disabled_user_id: String,
@@ -85,6 +86,7 @@ impl AppState {
             quotes: None,
             fundamentals: None,
             calendar: None,
+            historical_valuation: None,
             fmp_search: None,
             auth_disabled: true,
             auth_disabled_user_id: "local".into(),
@@ -933,6 +935,17 @@ impl ResearchPorts for ApiResearchPorts {
         })
     }
 
+    async fn load_historical_valuation(&self, ticker: &str) -> Option<HistoricalValuation> {
+        let service = self.state.historical_valuation.as_ref()?;
+        let summary = service.load(ticker).await?;
+        Some(HistoricalValuation {
+            percentile: summary.percentile,
+            min: summary.min,
+            max: summary.max,
+            median: summary.median,
+        })
+    }
+
     async fn complete_answer(&self, system: &str, user: &str, user_id: &str) -> Option<String> {
         let audit = self
             .state
@@ -1107,12 +1120,16 @@ pub async fn run() {
     let calendar = pool
         .clone()
         .and_then(|pool| CalendarService::new(pool, config.data_sources.clone()).ok());
+    let historical_valuation = pool
+        .clone()
+        .and_then(|pool| HistoricalValuationService::new(pool, config.data_sources.clone()).ok());
     let fmp_search = FmpSearchService::new(config.data_sources.clone()).ok();
     let app = router(AppState {
         pool,
         quotes,
         fundamentals,
         calendar,
+        historical_valuation,
         fmp_search,
         auth_disabled: config.auth_disabled,
         auth_disabled_user_id: config.auth_disabled_user_id,
@@ -1248,6 +1265,7 @@ mod tests {
             quotes: None,
             fundamentals: None,
             calendar: None,
+            historical_valuation: None,
             fmp_search: None,
             auth_disabled: false,
             auth_disabled_user_id: "local".into(),

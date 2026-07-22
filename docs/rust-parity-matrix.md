@@ -152,7 +152,8 @@ All nine schedules are defined and can execute activities, but no atomic claim/l
 | Feedback | `feedbackRepository` | — | pending | — | keep | Phase 3 | 无 Rust 写入边界。 |
 | Documents | `documentRepository` | — | pending | — | keep | Phase 3 | 无安全的上传、解析、存储边界。 |
 | Financial/history/HK facts | financials / HK repositories | — | pending | — | keep | Phase 2–3 | 缺 bitemporal 财务、估值及 HK facts repository。 |
-| Peers/calendar/evidence | peers/calendar/evidence repos | — | pending | — | keep | Phase 2–3 | 同业、日历、网页证据无 Rust 读写边界。 |
+| Historical valuation percentile | `historicalValuation` (F-5) | `echo-data::HistoricalValuationService` + `echo-db::HistoricalValuationRepository` | rust-accepted | live FMP+Yahoo+DB round-trip (AAPL 分位 98.28%，0700.HK 诚实拒绝) | keep | Phase 2 | 美股专属（港股 filing EPS 深度不足，见 docs/PLAN.md 勘察结论）；`filingDate` 截止避免未来数据反推历史；`ResearchPorts::load_historical_valuation`→`answer_prompt`+`fact_guard` 已接线；`comp_peers`（同业）仍 pending。 |
+| Peers/evidence | peers/evidence repos | — | pending | — | keep | Phase 2–3 | 同业比较（`comp_peers`）、网页证据无 Rust 读写边界。 |
 | Profiles/research snapshots/memory | profile/snapshot/memory repos | — | pending | — | keep | Phase 3–4 | 未迁移。 |
 | Team/audit/billing | team/audit/billing repositories | — | pending | — | keep | Phase 3 / product | P5 表仍存在；是否继续使用需确认。 |
 | Rate limits | `rate_limit_buckets` | table only | pending | — | keep | Phase 3, 5 | Rust API 没有应用层限流。 |

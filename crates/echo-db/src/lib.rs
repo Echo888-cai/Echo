@@ -433,6 +433,91 @@ impl<'a> CalendarRepository<'a> {
     }
 }
 
+/// 历史估值分位仓储——`historical_valuation`（状态行）+ `historical_valuation_points`
+/// （月度 PE 点）唯一读写入口。不分租户，公共参考数据。
+pub struct HistoricalValuationRepository<'a> {
+    pool: &'a PgPool,
+}
+
+#[derive(Clone, Debug, FromRow)]
+pub struct HistoricalValuationPointRow {
+    pub period_end_date: String,
+    pub pe_value: Option<Decimal>,
+}
+
+#[derive(Clone, Debug)]
+pub struct HistoricalValuationWrite {
+    pub ticker: String,
+    pub points: Vec<(String, Decimal)>,
+}
+
+impl<'a> HistoricalValuationRepository<'a> {
+    #[must_use]
+    pub fn new(pool: &'a PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// 状态行的 `knowledge_time`；缺行即 `None`（从未取过数）。
+    pub async fn knowledge_time(
+        &self,
+        ticker: &str,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+        let row: Option<(chrono::DateTime<chrono::Utc>,)> = sqlx::query_as(
+            "SELECT knowledge_time FROM historical_valuation WHERE ticker = $1 AND provider_status = 'ok'",
+        )
+        .bind(ticker)
+        .fetch_optional(self.pool)
+        .await?;
+        Ok(row.map(|(t,)| t))
+    }
+
+    /// 月度 PE 点，按期末日期升序。缺点位即空表——绝不用陈旧/插值点冒充。
+    pub async fn points(&self, ticker: &str) -> Result<Vec<HistoricalValuationPointRow>> {
+        let rows = sqlx::query_as::<_, HistoricalValuationPointRow>(
+            "SELECT period_end_date, pe_value FROM historical_valuation_points \
+             WHERE ticker = $1 ORDER BY period_end_date ASC",
+        )
+        .bind(ticker)
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// 整批覆盖点位并把状态行推进为 `ok`。先清空该 ticker 全部旧点位再写入——不然换算口径
+    /// （比如从年度切到月度）后，旧点位会跟新点位混在一张分布表里，把分位算脏。
+    pub async fn write(&self, value: &HistoricalValuationWrite) -> Result<()> {
+        let ticker = value.ticker.trim().to_ascii_uppercase();
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM historical_valuation_points WHERE ticker = $1")
+            .bind(&ticker)
+            .execute(&mut *tx)
+            .await?;
+        for (period_end_date, pe_value) in &value.points {
+            sqlx::query(
+                "INSERT INTO historical_valuation_points (ticker, period_end_date, pe_value) \
+                 VALUES ($1, $2, $3) \
+                 ON CONFLICT (ticker, period_end_date) DO UPDATE SET pe_value = EXCLUDED.pe_value",
+            )
+            .bind(&ticker)
+            .bind(period_end_date)
+            .bind(pe_value)
+            .execute(&mut *tx)
+            .await?;
+        }
+        sqlx::query(
+            "INSERT INTO historical_valuation (ticker, provider_status, valid_time, knowledge_time) \
+             VALUES ($1, 'ok', now(), now()) \
+             ON CONFLICT (ticker) DO UPDATE SET \
+               provider_status = 'ok', valid_time = now(), knowledge_time = now()",
+        )
+        .bind(&ticker)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::truncate_error_detail;

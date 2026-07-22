@@ -112,6 +112,17 @@ pub fn build_user_prompt(ctx: &AnswerContext) -> String {
              风险并说明置信度下降；要数字就明说「需核最新财报」。",
         );
     }
+
+    if let Some(hv) = &ctx.financials.historical_valuation {
+        out.push_str("\n\n== 已核到的历史估值分位（近5年月度PE，仅美股）==\n");
+        out.push_str(&format!("当前分位：{}\n", field(hv.percentile, "%")));
+        out.push_str(&format!(
+            "历史区间：{} ~ {}（中位 {}）\n",
+            field(hv.min, "x"),
+            field(hv.max, "x"),
+            field(hv.median, "x")
+        ));
+    }
     out
 }
 

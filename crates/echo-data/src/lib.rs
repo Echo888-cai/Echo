@@ -6,6 +6,7 @@
 mod calendar;
 mod fmp;
 mod fundamentals;
+mod historical;
 mod market;
 mod quality;
 mod quote;
@@ -15,6 +16,9 @@ mod search;
 pub use calendar::{CalendarError, CalendarService};
 pub use fundamentals::{
     FundamentalsError, FundamentalsResult, FundamentalsRow, FundamentalsService, pct_change, pct_of,
+};
+pub use historical::{
+    HistoricalValuationError, HistoricalValuationService, HistoricalValuationSummary,
 };
 pub use market::{Market, detect_market, normalize_ticker};
 pub use quality::{QualityIssue, QualityReport, Severity, check_quote};
