@@ -126,10 +126,10 @@ All nine schedules are defined and can execute activities, but no atomic claim/l
 | FMP company search | `fmpSearchAdapter` | `echo-data::FmpSearchService` | rust-accepted | normalize/filter + resolve ports | keep | Phase 2 | resolve/verify 已消费；研究链路建档 ensure 仍待接。 |
 | Company resolve/verify | `companyResolution` | `CompanyResolveService` + `/api/companies/{resolve,verify}` + ask ensure | rust-accepted | alias/identity + research-entry tests | keep | Phase 2 | `/api/ask` 验证后 `ensure`；仍无 LLM 兜底。 |
 | Tavily evidence search | `tavilySearchAdapter` | — | pending | — | keep | Phase 2 | `TAVILY_API_KEY` 已从 `echo-config` 移除（无 consumer、额度已耗尽）；P2 选定证据供应商时按届时选型与 consumer 同 PR 重新加入。 |
-| Finnhub earnings calendar | `finnhubCalendarAdapter` | — | pending | — | keep | Phase 2 | 日历/业绩数据端口未迁移。 |
+| Finnhub earnings calendar | `finnhubCalendarAdapter` | `echo-data::CalendarService` | rust-accepted | live Finnhub + DB round-trip (AAPL) | keep | Phase 2 | 24h 陈旧窗口回源；商用模式拒绝；`ResearchPorts::load_earnings_calendar` 已接线到 web `EarningsBadge`。 |
 | Finnhub peers | `finnhubPeersAdapter` | — | pending | — | keep | Phase 2 | 同业比较事实未迁移。 |
 | HK ADR/calendar | `hkAdrCalendarAdapter` | — | pending | — | keep | Phase 2 | 港股/ADR 日期与映射链缺失。 |
-| PostgreSQL calendar | `postgresCalendarAdapter` | — | pending | — | keep | Phase 2–3 | `earnings_calendar` 缺完整 Rust repository。 |
+| PostgreSQL calendar | `postgresCalendarAdapter` | `echo-db::CalendarRepository` | rust-accepted | — | keep | Phase 2–3 | `earnings_calendar` 读写已接（无 RLS，公共参考数据）。 |
 | PostgreSQL filings | `postgresFilingsAdapter` | — | pending | — | keep | Phase 2–3 | filing/公告读模型未迁移。 |
 | PostgreSQL fundamentals | `postgresFundamentalsAdapter` | — | pending | — | keep | Phase 2–3 | 财务事实、期间、口径、来源、双时间语义未迁移。 |
 

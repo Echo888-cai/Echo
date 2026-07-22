@@ -7,14 +7,15 @@ use crate::answer_prompt::{AnswerContext, build_system_prompt, build_user_prompt
 use crate::model_gateway::{ModelStreamEvent, ModelStreamStart};
 use crate::{DecisionPanel, ResolvedCompany, build_panel};
 use echo_contracts::{
-    AnswerSource, AskRequest, AskResponse, AssetStageView, GuardView, MethodBandView,
-    ResearchStreamDelta, ResearchStreamError, ResearchStreamEvent, ResearchStreamFinal,
-    ResearchStreamGuard, ResearchStreamMeta, ResearchStreamStage, ResearchStreamStageName,
-    RouteView, ValuationView,
+    AnswerSource, AskRequest, AskResponse, AssetStageView, EarningsCalendarView, GuardView,
+    MethodBandView, ResearchStreamDelta, ResearchStreamError, ResearchStreamEvent,
+    ResearchStreamFinal, ResearchStreamGuard, ResearchStreamMeta, ResearchStreamStage,
+    ResearchStreamStageName, RouteView, ValuationView,
 };
 use echo_domain::{
-    AssetStage, Company, Financials, MarketSnapshot, RegistrySources, ResearchRoute,
-    build_facts_registry, build_soft_note, route_research_intent, verify_answer_numbers,
+    AssetStage, Company, EarningsCalendar, Financials, MarketSnapshot, RegistrySources,
+    ResearchRoute, build_facts_registry, build_soft_note, route_research_intent,
+    verify_answer_numbers,
 };
 use std::future::Future;
 use tokio::sync::mpsc;
@@ -30,6 +31,7 @@ pub struct ResearchFacts {
     pub company: ResolvedCompany,
     pub market: MarketSnapshot,
     pub financials: Financials,
+    pub earnings_calendar: Option<EarningsCalendar>,
 }
 
 /// 比较研究的双腿事实；两侧 registry 不得交叉污染。
@@ -74,6 +76,12 @@ pub trait ResearchPorts: Send + Sync {
         &self,
         ticker: &str,
     ) -> impl Future<Output = Option<LoadedFundamentals>> + Send;
+
+    /// 下一次财报日历。缺数/未核到返回 `None`——绝不占位。
+    fn load_earnings_calendar(
+        &self,
+        ticker: &str,
+    ) -> impl Future<Output = Option<EarningsCalendar>> + Send;
 
     fn complete_answer(
         &self,
@@ -166,10 +174,12 @@ impl ResearchService {
                 }
             }
         }
+        let earnings_calendar = ports.load_earnings_calendar(&req.ticker).await;
         ResearchFacts {
             company,
             market,
             financials,
+            earnings_calendar,
         }
     }
 
@@ -205,7 +215,14 @@ impl ResearchService {
             .as_deref()
             .map(|draft| guard_view(&req, &facts, &panel, draft));
 
-        let response = build_ask_response(&panel, &route, answer, answer_source, fact_guard);
+        let response = build_ask_response(
+            &panel,
+            &route,
+            answer,
+            answer_source,
+            fact_guard,
+            facts.earnings_calendar.as_ref(),
+        );
         let persisted = persist_outcome(ports, user_id, &req, &facts, &response).await;
 
         ResearchOutcome {
@@ -269,6 +286,7 @@ async fn drive_stream<P: ResearchPorts>(
             .map(|s| (*s).to_string())
             .collect(),
         valuation: valuation_view(&panel),
+        earnings: earnings_view(facts.earnings_calendar.as_ref()),
     }))
     .await?;
 
@@ -338,7 +356,14 @@ async fn drive_stream<P: ResearchPorts>(
     }))
     .await?;
 
-    let response = build_ask_response(&panel, &route, answer, answer_source, fact_guard);
+    let response = build_ask_response(
+        &panel,
+        &route,
+        answer,
+        answer_source,
+        fact_guard,
+        facts.earnings_calendar.as_ref(),
+    );
 
     send(ResearchStreamEvent::Stage(ResearchStreamStage {
         name: ResearchStreamStageName::Persisting,
@@ -368,6 +393,10 @@ fn guard_view(
         market: Some(&facts.market),
         financials: Some(&facts.financials),
         valuation: Some(&panel.valuation),
+        earnings_next_date: facts
+            .earnings_calendar
+            .as_ref()
+            .and_then(|c| c.next_date.as_deref()),
         ..Default::default()
     });
     let report = verify_answer_numbers(draft, &registry);
@@ -387,6 +416,7 @@ fn build_ask_response(
     answer: Option<String>,
     answer_source: AnswerSource,
     fact_guard: Option<GuardView>,
+    earnings_calendar: Option<&EarningsCalendar>,
 ) -> AskResponse {
     AskResponse {
         ticker: panel.ticker.clone(),
@@ -401,7 +431,20 @@ fn build_ask_response(
         answer,
         answer_source,
         fact_guard,
+        earnings: earnings_view(earnings_calendar),
     }
+}
+
+/// 缺数（`provider_ok == false`）即不进响应，绝不用空壳字段冒充"已核到"。
+fn earnings_view(calendar: Option<&EarningsCalendar>) -> Option<EarningsCalendarView> {
+    let calendar = calendar.filter(|c| c.provider_ok)?;
+    Some(EarningsCalendarView {
+        next_date: calendar.next_date.clone(),
+        quarter: calendar.quarter,
+        year: calendar.year,
+        eps_estimate: calendar.eps_estimate,
+        revenue_estimate: calendar.revenue_estimate,
+    })
 }
 
 async fn persist_outcome<P: ResearchPorts>(
@@ -482,6 +525,7 @@ mod tests {
         market: Option<(ResolvedCompany, MarketSnapshot)>,
         refresh_ok: bool,
         fundamentals: Option<LoadedFundamentals>,
+        earnings_calendar: Option<EarningsCalendar>,
         answer: Option<String>,
         stream_chunks: Vec<String>,
         stream_fail: Option<String>,
@@ -508,6 +552,10 @@ mod tests {
 
         async fn load_fundamentals(&self, _ticker: &str) -> Option<LoadedFundamentals> {
             self.fundamentals.clone()
+        }
+
+        async fn load_earnings_calendar(&self, _ticker: &str) -> Option<EarningsCalendar> {
+            self.earnings_calendar.clone()
         }
 
         async fn complete_answer(

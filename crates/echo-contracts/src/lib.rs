@@ -170,6 +170,21 @@ impl AnswerSource {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct EarningsCalendarView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quarter: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub year: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eps_estimate: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revenue_estimate: Option<Decimal>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AskResponse {
     pub ticker: String,
     pub route: RouteView,
@@ -181,6 +196,8 @@ pub struct AskResponse {
     pub answer_source: AnswerSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fact_guard: Option<GuardView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub earnings: Option<EarningsCalendarView>,
 }
 
 /// 类型化研究 SSE 事件。`type` 字段与 Axum `event:` 名对齐。
@@ -218,6 +235,8 @@ pub struct ResearchStreamMeta {
     pub data_completeness: u8,
     pub connected_sources: Vec<String>,
     pub valuation: ValuationView,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub earnings: Option<EarningsCalendarView>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -706,6 +725,7 @@ mod tests {
                 data_suspect: false,
                 cannot_value_reason: None,
             },
+            earnings: None,
         });
         let json = serde_json::to_value(&meta).expect("serialize");
         assert_eq!(json["type"], "meta");

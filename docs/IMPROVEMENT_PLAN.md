@@ -113,8 +113,10 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
 
 ### P2 · 证据优先数据平面（超越 honeclaw 的核心）
 1. `evidence-port`：网页证据端口 + 所选供应商适配器（等用户定 Tavily 续费或替代品；供应商失败诚实降级，不重诊断——已知结论勿重推）。
-2. `filings-and-calendar`：财报日历（Finnhub）+ 公告/filings 读模型，字段带 source URL、
-   valid/knowledge time、currency、license。
+2. `filings-and-calendar`：财报日历（Finnhub）✅已接（`echo-data::CalendarService` +
+   `echo-db::CalendarRepository`，24h 陈旧回源，`ResearchPorts::load_earnings_calendar`→Web
+   `EarningsBadge`，见 rust-parity-matrix）+ 公告/filings 读模型（**仍 pending**，字段带
+   source URL、valid/knowledge time、currency、license，全新表/新 crate 模块，无既有骨架可接）。
 3. `peers-and-history`：同业对比事实 + 历史估值分位（A/H、capex、历史分位的数据可得性结论已在
    记忆/旧文档里，勿重新调研）。
 4. `api-hardening`：限流（含 `rate_limit_buckets` 接线或删表）、readiness、Origin 校验、body 上限。

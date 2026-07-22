@@ -9,9 +9,9 @@
 use crate::api;
 use echo_contracts::{
     AskRequest, AskResponse, CompanyResolveResponse, CompanySearchItem, CompanySearchResponse,
-    Decimal, GuardView, MutationResponse, ResearchSessionDetail, ResearchSessionResponse,
-    ResearchSessionsResponse, ResearchStreamEvent, ResearchStreamStageName, RouteView,
-    ValuationView,
+    Decimal, EarningsCalendarView, GuardView, MutationResponse, ResearchSessionDetail,
+    ResearchSessionResponse, ResearchSessionsResponse, ResearchStreamEvent,
+    ResearchStreamStageName, RouteView, ValuationView,
 };
 use leptos::*;
 
@@ -24,6 +24,7 @@ enum TurnStatus {
         meta_valuation: Option<ValuationView>,
         meta_completeness: Option<u8>,
         meta_sources: Vec<String>,
+        meta_earnings: Option<EarningsCalendarView>,
         delta_text: String,
         guard: Option<GuardView>,
     },
@@ -43,6 +44,7 @@ impl TurnStatus {
             meta_valuation: None,
             meta_completeness: None,
             meta_sources: Vec::new(),
+            meta_earnings: None,
             delta_text: String::new(),
             guard: None,
         }
@@ -187,6 +189,7 @@ fn attach_stream(
                 meta_valuation,
                 meta_completeness,
                 meta_sources,
+                meta_earnings,
                 delta_text,
                 guard,
             } = &mut turn.status
@@ -199,6 +202,7 @@ fn attach_stream(
                     *meta_valuation = Some(m.valuation);
                     *meta_completeness = Some(m.data_completeness);
                     *meta_sources = m.connected_sources;
+                    *meta_earnings = m.earnings;
                 }
                 ResearchStreamEvent::Stage(s) => *stage = Some(s.name),
                 ResearchStreamEvent::Delta(d) => delta_text.push_str(&d.text),
@@ -364,6 +368,26 @@ fn GuardBadge(guard: GuardView) -> impl IntoView {
     }
 }
 
+/// 下次财报日徽标——`None` 字段即不展示对应行，绝不占位。
+#[component]
+fn EarningsBadge(earnings: EarningsCalendarView) -> impl IntoView {
+    let Some(next_date) = earnings.next_date.clone() else {
+        return ().into_view();
+    };
+    let period = match (earnings.year, earnings.quarter) {
+        (Some(year), Some(quarter)) => Some(format!("{year} Q{quarter}")),
+        _ => None,
+    };
+    view! {
+        <div class="earnings-badge">
+            <span class="earnings-k">"下次财报"</span>
+            <span class="earnings-v">{next_date}</span>
+            {period.map(|p| view! { <span class="earnings-period">{p}</span> })}
+        </div>
+    }
+    .into_view()
+}
+
 /// 流式进行中的卡片：已到的 meta 骨架 + 阶段提示 + 打字机增量 + 取消按钮。
 #[component]
 fn StreamingCard(
@@ -372,6 +396,7 @@ fn StreamingCard(
     meta_valuation: Option<ValuationView>,
     meta_completeness: Option<u8>,
     meta_sources: Vec<String>,
+    meta_earnings: Option<EarningsCalendarView>,
     delta_text: String,
     guard: Option<GuardView>,
     on_cancel: Callback<()>,
@@ -389,6 +414,7 @@ fn StreamingCard(
 
             {meta_valuation.map(|v| view! { <ValuationBand v=v /> })}
             {meta_completeness.map(|c| view! { <CompletenessRow completeness=c /> })}
+            {meta_earnings.map(|e| view! { <EarningsBadge earnings=e /> })}
             <DataSources sources=meta_sources />
 
             <div class="answer-text-section">
@@ -425,6 +451,7 @@ fn DoneCard(res: AskResponse) -> impl IntoView {
 
             <ValuationBand v=res.valuation.clone() />
             <CompletenessRow completeness=completeness />
+            {res.earnings.clone().map(|e| view! { <EarningsBadge earnings=e /> })}
             <DataSources sources=res.connected_sources.clone() />
 
             <div class="answer-text-section">
@@ -804,7 +831,7 @@ pub fn ResearchPage(
                                 let result_view = match turn.status {
                                     TurnStatus::Streaming {
                                         stage, meta_route, meta_valuation, meta_completeness,
-                                        meta_sources, delta_text, guard,
+                                        meta_sources, meta_earnings, delta_text, guard,
                                     } => {
                                         let handle = turn.handle.clone();
                                         let on_cancel = Callback::new(move |_| {
@@ -827,6 +854,7 @@ pub fn ResearchPage(
                                                 meta_valuation=meta_valuation
                                                 meta_completeness=meta_completeness
                                                 meta_sources=meta_sources
+                                                meta_earnings=meta_earnings
                                                 delta_text=delta_text
                                                 guard=guard
                                                 on_cancel=on_cancel

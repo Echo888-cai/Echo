@@ -84,6 +84,17 @@ pub struct Financials {
     pub historical_valuation: Option<HistoricalValuation>,
 }
 
+/// 下一次财报日历（Finnhub）——独立于三表，缺数即 `provider_ok = false`，绝不用陈旧值冒充。
+#[derive(Clone, Debug, Default)]
+pub struct EarningsCalendar {
+    pub provider_ok: bool,
+    pub next_date: Option<String>,
+    pub quarter: Option<i32>,
+    pub year: Option<i32>,
+    pub eps_estimate: Option<Decimal>,
+    pub revenue_estimate: Option<Decimal>,
+}
+
 /// 内部人净买卖（Finnhub）——护栏只登金额与交易日。
 #[derive(Clone, Debug, Default)]
 pub struct InsiderActivity {

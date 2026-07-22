@@ -33,7 +33,7 @@ pub use intent::{
     route_research_intent,
 };
 pub use valuation::{
-    AssetStage, Company, Financials, HistoricalValuation, HkBuyback, InsiderActivity,
-    MarketSnapshot, MethodBand, MultipleType, PeerAnchor, Valuation, classify_asset_stage,
-    compute_valuation, display_valuation,
+    AssetStage, Company, EarningsCalendar, Financials, HistoricalValuation, HkBuyback,
+    InsiderActivity, MarketSnapshot, MethodBand, MultipleType, PeerAnchor, Valuation,
+    classify_asset_stage, compute_valuation, display_valuation,
 };

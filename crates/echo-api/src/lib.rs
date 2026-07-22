@@ -43,14 +43,15 @@ use echo_contracts::{
     UnreadResponse, UserPreferences, UserRole, WatchEntry, WatchListResponse, WatchMutationRequest,
 };
 use echo_data::{
-    FmpSearchService, FundamentalsRow, FundamentalsService, QuoteService, pct_change, pct_of,
+    CalendarService, FmpSearchService, FundamentalsRow, FundamentalsService, QuoteService,
+    pct_change, pct_of,
 };
 use echo_db::{
     CompanyRepository, MarketRepository, NotificationsRepository, Pool, PortfolioRepository,
     PortfolioUpsert, PreferencesPatch, PreferencesRepository, ResearchSessionRepository,
     SaveResearchSession, UserPreferencesRow, WatchlistRepository,
 };
-use echo_domain::{Financials, MarketSnapshot};
+use echo_domain::{EarningsCalendar, Financials, MarketSnapshot};
 use futures_util::Stream;
 use std::convert::Infallible;
 use tokio_stream::StreamExt;
@@ -68,6 +69,7 @@ pub struct AppState {
     pool: Option<Pool>,
     quotes: Option<QuoteService>,
     fundamentals: Option<FundamentalsService>,
+    calendar: Option<CalendarService>,
     fmp_search: Option<FmpSearchService>,
     auth_disabled: bool,
     auth_disabled_user_id: String,
@@ -82,6 +84,7 @@ impl AppState {
             pool: None,
             quotes: None,
             fundamentals: None,
+            calendar: None,
             fmp_search: None,
             auth_disabled: true,
             auth_disabled_user_id: "local".into(),
@@ -917,6 +920,19 @@ impl ResearchPorts for ApiResearchPorts {
         })
     }
 
+    async fn load_earnings_calendar(&self, ticker: &str) -> Option<EarningsCalendar> {
+        let service = self.state.calendar.as_ref()?;
+        let row = service.load(ticker).await?;
+        row.next_date.is_some().then_some(EarningsCalendar {
+            provider_ok: true,
+            next_date: row.next_date,
+            quarter: row.quarter,
+            year: row.year,
+            eps_estimate: row.eps_estimate,
+            revenue_estimate: row.revenue_estimate,
+        })
+    }
+
     async fn complete_answer(&self, system: &str, user: &str, user_id: &str) -> Option<String> {
         let audit = self
             .state
@@ -1088,11 +1104,15 @@ pub async fn run() {
         QuoteService::new(pool, config.data_sources.clone()).expect("build quote service")
     });
     let fundamentals = FundamentalsService::new(config.data_sources.clone()).ok();
+    let calendar = pool
+        .clone()
+        .and_then(|pool| CalendarService::new(pool, config.data_sources.clone()).ok());
     let fmp_search = FmpSearchService::new(config.data_sources.clone()).ok();
     let app = router(AppState {
         pool,
         quotes,
         fundamentals,
+        calendar,
         fmp_search,
         auth_disabled: config.auth_disabled,
         auth_disabled_user_id: config.auth_disabled_user_id,
@@ -1227,6 +1247,7 @@ mod tests {
             pool: Some(pool),
             quotes: None,
             fundamentals: None,
+            calendar: None,
             fmp_search: None,
             auth_disabled: false,
             auth_disabled_user_id: "local".into(),

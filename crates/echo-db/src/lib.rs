@@ -357,6 +357,82 @@ impl<'a> MarketRepository<'a> {
     }
 }
 
+/// 财报日历仓储——唯一读写入口（对齐 `earnings_calendar` 表；不分租户，公共参考数据）。
+pub struct CalendarRepository<'a> {
+    pool: &'a PgPool,
+}
+
+#[derive(Clone, Debug, FromRow)]
+pub struct CalendarRow {
+    pub ticker: String,
+    pub next_date: Option<String>,
+    pub quarter: Option<i32>,
+    pub year: Option<i32>,
+    pub eps_estimate: Option<Decimal>,
+    pub revenue_estimate: Option<Decimal>,
+    pub source: Option<String>,
+    pub knowledge_time: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CalendarUpsert {
+    pub ticker: String,
+    pub next_date: Option<String>,
+    pub quarter: Option<i32>,
+    pub year: Option<i32>,
+    pub eps_estimate: Option<Decimal>,
+    pub revenue_estimate: Option<Decimal>,
+    pub source: String,
+}
+
+impl<'a> CalendarRepository<'a> {
+    #[must_use]
+    pub fn new(pool: &'a PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// 取当前登记行。缺表项即断口——返回 `None`，绝不用陈旧值冒充。
+    pub async fn latest(&self, ticker: &str) -> Result<Option<CalendarRow>> {
+        let row = sqlx::query_as::<_, CalendarRow>(
+            "SELECT ticker, next_date, quarter, year, eps_estimate, revenue_estimate, source, \
+             knowledge_time FROM earnings_calendar WHERE ticker = $1",
+        )
+        .bind(ticker)
+        .fetch_optional(self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// 用最新供应商数据整行覆盖（`provider_status` 置 ok，`knowledge_time` 推进）。
+    pub async fn upsert(&self, value: &CalendarUpsert) -> Result<()> {
+        let ticker = value.ticker.trim().to_ascii_uppercase();
+        sqlx::query(
+            "INSERT INTO earnings_calendar \
+             (ticker, next_date, quarter, year, eps_estimate, revenue_estimate, source, provider_status, knowledge_time) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'ok', now()) \
+             ON CONFLICT (ticker) DO UPDATE SET \
+               next_date = EXCLUDED.next_date, \
+               quarter = EXCLUDED.quarter, \
+               year = EXCLUDED.year, \
+               eps_estimate = EXCLUDED.eps_estimate, \
+               revenue_estimate = EXCLUDED.revenue_estimate, \
+               source = EXCLUDED.source, \
+               provider_status = 'ok', \
+               knowledge_time = now()",
+        )
+        .bind(&ticker)
+        .bind(&value.next_date)
+        .bind(value.quarter)
+        .bind(value.year)
+        .bind(value.eps_estimate)
+        .bind(value.revenue_estimate)
+        .bind(&value.source)
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::truncate_error_detail;
