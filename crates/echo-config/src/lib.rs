@@ -33,6 +33,44 @@ impl DataSourceConfig {
     }
 }
 
+/// 简报邮件的 SMTP 配置——四项都非空才算配置完整，否则整体视为未配置（诚实降级到
+/// 仅站内通知，不拿半截配置去尝试发信）。故意不实现 `Debug`，避免密钥进日志。
+#[derive(Clone)]
+pub struct EmailConfig {
+    pub smtp_host: String,
+    pub smtp_port: u16,
+    pub smtp_user: String,
+    pub smtp_pass: String,
+    pub from_address: String,
+}
+
+impl EmailConfig {
+    #[must_use]
+    pub fn from_env() -> Option<Self> {
+        Self::from_lookup(&mut |key| std::env::var(key).ok())
+    }
+
+    fn from_lookup<F>(lookup: &mut F) -> Option<Self>
+    where
+        F: FnMut(&str) -> Option<String>,
+    {
+        let smtp_host = non_empty(lookup("SMTP_HOST"))?;
+        let smtp_user = non_empty(lookup("SMTP_USER"))?;
+        let smtp_pass = non_empty(lookup("SMTP_PASS"))?;
+        let from_address = non_empty(lookup("SMTP_FROM")).unwrap_or_else(|| smtp_user.clone());
+        let smtp_port = non_empty(lookup("SMTP_PORT"))
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(587);
+        Some(Self {
+            smtp_host,
+            smtp_port,
+            smtp_user,
+            smtp_pass,
+            from_address,
+        })
+    }
+}
+
 /// 模型 provider 配置——两层：DeepSeek 具名预设（默认 base/model，可用 `DEEPSEEK_BASE_URL`/
 /// `DEEPSEEK_MODEL` 覆盖），否则退到通用 `MODEL_*` 覆盖层（指向任意 OpenAI 兼容端点，
 /// 包括 OpenAI 本身——不再单独维护一套 `OPENAI_*` 预设，二者是同一形状的端点）。
@@ -181,6 +219,7 @@ pub struct WorkerConfig {
     pub tick_seconds: u64,
     pub backup_dir: String,
     pub data_sources: DataSourceConfig,
+    pub email: Option<EmailConfig>,
 }
 
 impl WorkerConfig {
@@ -205,6 +244,7 @@ impl WorkerConfig {
             60,
         )?;
         let data_sources = DataSourceConfig::from_lookup(&mut lookup);
+        let email = EmailConfig::from_lookup(&mut lookup);
         Ok(Self {
             database_url,
             max_connections,
@@ -212,6 +252,7 @@ impl WorkerConfig {
             backup_dir: non_empty(lookup("ECHO_BACKUP_DIR"))
                 .unwrap_or_else(|| "backups/postgres".into()),
             data_sources,
+            email,
         })
     }
 }
@@ -372,6 +413,40 @@ mod tests {
     #[test]
     fn no_keys_means_no_provider() {
         assert!(ModelProviderConfig::from_lookup(lookup(&[])).is_none());
+    }
+
+    #[test]
+    fn email_requires_host_user_and_pass() {
+        assert!(EmailConfig::from_lookup(&mut lookup(&[])).is_none());
+        assert!(
+            EmailConfig::from_lookup(&mut lookup(&[
+                ("SMTP_HOST", "smtp.example.com"),
+                ("SMTP_USER", "digest@example.com"),
+            ]))
+            .is_none()
+        );
+        let config = EmailConfig::from_lookup(&mut lookup(&[
+            ("SMTP_HOST", "smtp.example.com"),
+            ("SMTP_USER", "digest@example.com"),
+            ("SMTP_PASS", "secret"),
+        ]))
+        .expect("config");
+        assert_eq!(config.smtp_port, 587);
+        assert_eq!(config.from_address, "digest@example.com");
+    }
+
+    #[test]
+    fn email_from_address_overrides_default() {
+        let config = EmailConfig::from_lookup(&mut lookup(&[
+            ("SMTP_HOST", "smtp.example.com"),
+            ("SMTP_USER", "digest@example.com"),
+            ("SMTP_PASS", "secret"),
+            ("SMTP_PORT", "2525"),
+            ("SMTP_FROM", "no-reply@example.com"),
+        ]))
+        .expect("config");
+        assert_eq!(config.smtp_port, 2525);
+        assert_eq!(config.from_address, "no-reply@example.com");
     }
 
     #[test]

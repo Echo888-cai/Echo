@@ -877,6 +877,11 @@ body::after {
 .table-row strong, .table-row small { display: block; }
 .table-row small { margin-top: 3px; color: var(--muted); font-size: 10px; }
 .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.rules-desk { margin-top: 34px; }
+.rules-desk h2 { font-family: var(--font-serif); font-size: 20px; font-weight: 400; margin-bottom: 14px; }
+.rules-desk h3 { margin-top: 26px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; }
+.rule-row { display: grid; grid-template-columns: 1.4fr .8fr 1fr auto; gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--hairline); font-size: 12px; color: var(--ink-2); }
+.rule-row:first-of-type { border-top: 0; margin-top: 12px; }
 .settings-card h2 { margin-bottom: 18px; font-family: var(--font-serif); font-size: 24px; font-weight: 400; }
 .toggle-row { display: flex; justify-content: space-between; gap: 12px; padding: 13px 0; border-bottom: 1px solid var(--hairline); color: var(--ink-2); font-size: 13px; }
 .toggle-row:last-child { border-bottom: 0; }

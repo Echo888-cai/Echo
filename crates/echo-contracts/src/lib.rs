@@ -481,6 +481,62 @@ pub struct MutationResponse {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WatchRule {
+    pub id: i64,
+    pub ticker: String,
+    pub kind: String,
+    pub threshold: Decimal,
+    pub metric: Option<String>,
+    pub label: Option<String>,
+    pub active: bool,
+    pub created_at: String,
+    pub last_triggered_at: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WatchRulesListResponse {
+    pub rules: Vec<WatchRule>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WatchRuleCreateRequest {
+    pub ticker: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metric: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WatchRuleDeleteRequest {
+    pub id: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DeskTicker {
+    pub ticker: String,
+    pub company_name: Option<String>,
+    pub price: Option<Decimal>,
+    pub change_percent: Option<Decimal>,
+    pub rules: Vec<WatchRule>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DeskResponse {
+    pub tickers: Vec<DeskTicker>,
+    pub recent_triggers: Vec<Notification>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PortfolioPosition {
     pub ticker: String,
     pub company_name: String,

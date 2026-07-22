@@ -129,6 +129,89 @@ impl<'a> WatchlistRepository<'a> {
 }
 
 #[derive(Clone, Debug, FromRow)]
+pub struct WatchRuleDetailRow {
+    pub id: i64,
+    pub ticker: String,
+    pub kind: String,
+    pub threshold: Decimal,
+    pub metric: Option<String>,
+    pub label: Option<String>,
+    pub active: bool,
+    pub created_at: DateTime<Utc>,
+    pub last_triggered_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewWatchRule<'a> {
+    pub ticker: &'a str,
+    pub kind: &'a str,
+    pub threshold: Decimal,
+    pub metric: Option<&'a str>,
+    pub label: Option<&'a str>,
+}
+
+pub struct WatchRulesRepository<'a> {
+    pool: &'a Pool,
+}
+
+impl<'a> WatchRulesRepository<'a> {
+    #[must_use]
+    pub fn new(pool: &'a Pool) -> Self {
+        Self { pool }
+    }
+
+    pub async fn list(&self, user_id: &str) -> Result<Vec<WatchRuleDetailRow>> {
+        let mut tx = with_tenant(self.pool, user_id).await?;
+        let rows = sqlx::query_as::<_, WatchRuleDetailRow>(
+            "SELECT id, ticker, kind, threshold, metric, label, active, created_at, last_triggered_at \
+             FROM watch_rules WHERE user_id = $1 ORDER BY ticker, id",
+        )
+        .bind(user_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(rows)
+    }
+
+    /// 建规则前调用方须已核实 ticker 存在（`CompanyRepository::by_ticker`）——不在此仓储内隐式建档。
+    pub async fn create(
+        &self,
+        user_id: &str,
+        input: &NewWatchRule<'_>,
+    ) -> Result<WatchRuleDetailRow> {
+        let ticker = normalize_ticker(input.ticker);
+        let mut tx = with_tenant(self.pool, user_id).await?;
+        let row = sqlx::query_as::<_, WatchRuleDetailRow>(
+            "INSERT INTO watch_rules \
+             (user_id, ticker, kind, threshold, metric, label, source, active) \
+             VALUES ($1, $2, $3, $4, $5, $6, 'user', true) \
+             RETURNING id, ticker, kind, threshold, metric, label, active, created_at, last_triggered_at",
+        )
+        .bind(user_id)
+        .bind(&ticker)
+        .bind(input.kind)
+        .bind(input.threshold)
+        .bind(input.metric)
+        .bind(input.label)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(row)
+    }
+
+    pub async fn delete(&self, user_id: &str, id: i64) -> Result<bool> {
+        let mut tx = with_tenant(self.pool, user_id).await?;
+        let result = sqlx::query("DELETE FROM watch_rules WHERE user_id = $1 AND id = $2")
+            .bind(user_id)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(result.rows_affected() == 1)
+    }
+}
+
+#[derive(Clone, Debug, FromRow)]
 pub struct PortfolioPositionRow {
     pub ticker: String,
     pub company_name: Option<String>,

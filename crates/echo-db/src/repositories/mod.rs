@@ -11,9 +11,9 @@ pub use operations::{
 pub use rate_limit::RateLimitRepository;
 pub use workspace::{
     CompanyProfileRepository, CompanyProfileRow, CompanyProfileSummaryRow, CompanyProfileUpsert,
-    CompanySearchRow, NewNotification, NotificationRow, NotificationsRepository,
+    CompanySearchRow, NewNotification, NewWatchRule, NotificationRow, NotificationsRepository,
     PortfolioPositionRow, PortfolioRepository, PortfolioUpsert, PreferencesPatch,
     PreferencesRepository, ResearchSessionRepository, ResearchSessionRow,
     ResearchSessionSummaryRow, SaveResearchSession, UserPreferencesRow, WatchEntryRow,
-    WatchlistRepository, normalize_ticker,
+    WatchRuleDetailRow, WatchRulesRepository, WatchlistRepository, normalize_ticker,
 };

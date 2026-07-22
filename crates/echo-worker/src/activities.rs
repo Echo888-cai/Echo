@@ -1,12 +1,14 @@
 use chrono::{Datelike, Utc};
-use echo_data::QuoteService;
+use echo_data::{EmailService, HistoricalValuationService, QuoteService, looks_like_email};
 use echo_db::{
-    NewNotification, NotificationsRepository, OperationsRepository, Pool, PortfolioRepository,
+    AuthRepository, NewNotification, NotificationsRepository, OperationsRepository, Pool,
+    PortfolioRepository,
 };
 use rust_decimal::Decimal;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::process::Command;
+use tracing::warn;
 
 use crate::schedule::JobKind;
 
@@ -16,6 +18,8 @@ pub enum ActivityError {
     Database(#[from] echo_db::DbError),
     #[error(transparent)]
     Quote(#[from] echo_data::QuoteError),
+    #[error(transparent)]
+    HistoricalValuation(#[from] echo_data::HistoricalValuationError),
     #[error("备份目录无效")]
     InvalidBackupDirectory,
     #[error("pg_dump 启动失败: {0}")]
@@ -29,6 +33,8 @@ pub enum ActivityError {
 pub struct Activities {
     pool: Pool,
     quotes: QuoteService,
+    historical_valuation: HistoricalValuationService,
+    email: Option<EmailService>,
     database_url: String,
     backup_dir: PathBuf,
 }
@@ -37,6 +43,7 @@ impl Activities {
     pub fn new(
         pool: Pool,
         data_sources: echo_config::DataSourceConfig,
+        email: Option<echo_config::EmailConfig>,
         database_url: String,
         backup_dir: String,
     ) -> Result<Self, ActivityError> {
@@ -44,8 +51,17 @@ impl Activities {
         if backup_dir.as_os_str().is_empty() || backup_dir == Path::new("/") {
             return Err(ActivityError::InvalidBackupDirectory);
         }
+        let email = email.and_then(|config| match EmailService::new(&config) {
+            Ok(service) => Some(service),
+            Err(error) => {
+                warn!(error = %error, "SMTP 配置无效，简报邮件通道禁用，仅保留站内通知");
+                None
+            }
+        });
         Ok(Self {
-            quotes: QuoteService::new(pool.clone(), data_sources)?,
+            quotes: QuoteService::new(pool.clone(), data_sources.clone())?,
+            historical_valuation: HistoricalValuationService::new(pool.clone(), data_sources)?,
+            email,
             pool,
             database_url,
             backup_dir,
@@ -66,21 +82,55 @@ impl Activities {
         }
     }
 
+    /// 移动幅度超过此百分点才算简报里的"异动"，避免噪音行情把简报灌满。
+    const DIGEST_MOVER_THRESHOLD: i64 = 3;
+
     async fn digest(&self, slot: &str) -> Result<String, ActivityError> {
         let operations = OperationsRepository::new(&self.pool);
+        let portfolios = PortfolioRepository::new(&self.pool);
         let users = operations.user_ids().await?;
         let mut emitted = 0usize;
         let date = Utc::now().date_naive();
+        let mover_threshold = Decimal::from(Self::DIGEST_MOVER_THRESHOLD);
         for user_id in &users {
             let rule_count = operations.active_rules(user_id).await?.len();
+            let triggered_count = operations
+                .recently_triggered_rule_count(user_id, 12)
+                .await?;
+            let positions = portfolios.list(user_id).await?;
+            let mut movers = Vec::new();
+            for position in &positions {
+                if let Some(change) = operations
+                    .latest_market(&position.ticker)
+                    .await?
+                    .and_then(|market| market.change_percent)
+                {
+                    if change.abs() >= mover_threshold {
+                        let sign = if change.is_sign_positive() { "+" } else { "" };
+                        movers.push(format!("{}{sign}{}%", position.ticker, change.round_dp(1)));
+                    }
+                }
+            }
             let title = if slot == "premarket" {
                 "盘前研究速报"
             } else {
                 "盘后研究速报"
             };
-            let body = format!("当前有 {rule_count} 条有效监控条件。");
+            let mut body = format!(
+                "持仓 {} 个，其中 {} 个日内异动（>{}%）",
+                positions.len(),
+                movers.len(),
+                Self::DIGEST_MOVER_THRESHOLD
+            );
+            if !movers.is_empty() {
+                body.push('：');
+                body.push_str(&movers.join("、"));
+            }
+            body.push_str(&format!(
+                "。有效监控条件 {rule_count} 条，本轮触发 {triggered_count} 条。"
+            ));
             let key = format!("digest:{slot}:{date}");
-            emitted += self
+            let inserted = self
                 .notify(
                     user_id,
                     &NewNotification {
@@ -93,9 +143,34 @@ impl Activities {
                         dedupe_window_hours: 12,
                     },
                 )
-                .await? as usize;
+                .await?;
+            if inserted {
+                emitted += 1;
+                self.send_digest_email(user_id, title, &body).await;
+            }
         }
         Ok(format!("用户={}，推送={emitted}", users.len()))
+    }
+
+    /// 简报邮件是站内通知的镜像通道：只有通知已经过偏好/免打扰/去重咽喉真正落库
+    /// （调用方传入的 `inserted` 已隐含这一点），才尝试同步发信；未配置 SMTP 或账号
+    /// 不是邮箱形态时静默跳过，绝不因为邮件通道缺失而影响站内通知本身。
+    async fn send_digest_email(&self, user_id: &str, title: &str, body: &str) {
+        let Some(email) = &self.email else { return };
+        let user = match AuthRepository::new(&self.pool).user_by_id(user_id).await {
+            Ok(Some(user)) => user,
+            Ok(None) => return,
+            Err(error) => {
+                warn!(user_id, error = %error, "读取用户账号失败，跳过简报邮件");
+                return;
+            }
+        };
+        if !looks_like_email(&user.username) {
+            return;
+        }
+        if let Err(error) = email.send(&user.username, title, body).await {
+            warn!(user_id, error = %error, "简报邮件发送失败，站内通知已落库");
+        }
     }
 
     async fn refresh_market(&self) -> Result<String, ActivityError> {
@@ -176,13 +251,25 @@ impl Activities {
                         }
                         None => None,
                     }
+                } else if matches!(
+                    rule.kind.as_str(),
+                    "valuation_percentile_below" | "valuation_percentile_above"
+                ) {
+                    self.historical_valuation
+                        .load(&rule.ticker)
+                        .await
+                        .and_then(|summary| summary.percentile)
                 } else {
                     None
                 };
                 let Some(current) = current else { continue };
                 let hit = match rule.kind.as_str() {
-                    "price_below" | "fundamental_below" => current <= rule.threshold,
-                    "price_above" | "fundamental_above" => current >= rule.threshold,
+                    "price_below" | "fundamental_below" | "valuation_percentile_below" => {
+                        current <= rule.threshold
+                    }
+                    "price_above" | "fundamental_above" | "valuation_percentile_above" => {
+                        current >= rule.threshold
+                    }
                     _ => false,
                 };
                 if !hit {
@@ -231,34 +318,59 @@ impl Activities {
                 decimal_or_gap(candidate.last_eps_estimate)
             );
             for user_id in &users {
-                let Some(company_name) =
+                if let Some(company_name) =
                     operations.profile_name(user_id, &candidate.ticker).await?
-                else {
-                    continue;
-                };
-                operations
-                    .append_earnings_event(user_id, candidate, &summary)
-                    .await?;
-                let title = format!("{company_name} 业绩闭环");
-                let key = format!(
-                    "earnings:{}:{}",
-                    candidate.ticker,
-                    candidate.last_date.as_deref().unwrap_or("unknown")
-                );
-                emitted += self
-                    .notify(
-                        user_id,
-                        &NewNotification {
-                            kind: "earnings_review",
-                            title: &title,
-                            body: &summary,
-                            ticker: Some(&candidate.ticker),
-                            payload: None,
-                            dedupe_key: Some(&key),
-                            dedupe_window_hours: 12,
-                        },
-                    )
-                    .await? as usize;
+                {
+                    operations
+                        .append_earnings_event(user_id, candidate, &summary)
+                        .await?;
+                    let title = format!("{company_name} 业绩闭环");
+                    let key = format!(
+                        "earnings:{}:{}",
+                        candidate.ticker,
+                        candidate.last_date.as_deref().unwrap_or("unknown")
+                    );
+                    emitted += self
+                        .notify(
+                            user_id,
+                            &NewNotification {
+                                kind: "earnings_review",
+                                title: &title,
+                                body: &summary,
+                                ticker: Some(&candidate.ticker),
+                                payload: None,
+                                dedupe_key: Some(&key),
+                                dedupe_window_hours: 12,
+                            },
+                        )
+                        .await? as usize;
+                }
+                for rule in operations.active_rules(user_id).await? {
+                    if rule.kind != "event_earnings" || rule.ticker != candidate.ticker {
+                        continue;
+                    }
+                    let title = format!("{} 触发事件监控", rule.ticker);
+                    let key = format!(
+                        "event_earnings:{}:{}",
+                        rule.id,
+                        candidate.last_date.as_deref().unwrap_or("unknown")
+                    );
+                    emitted += self
+                        .notify(
+                            user_id,
+                            &NewNotification {
+                                kind: "falsify_alert",
+                                title: &title,
+                                body: &summary,
+                                ticker: Some(&candidate.ticker),
+                                payload: None,
+                                dedupe_key: Some(&key),
+                                dedupe_window_hours: 24,
+                            },
+                        )
+                        .await? as usize;
+                    operations.mark_rule_triggered(user_id, rule.id).await?;
+                }
             }
         }
         Ok(format!("候选={}，闭环推送={emitted}", candidates.len()))
@@ -447,4 +559,47 @@ fn decimal_or_gap(value: Option<Decimal>) -> String {
     value
         .map(|value| value.normalize().to_string())
         .unwrap_or_else(|| "未核到".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 活库集成：对真实开发库跑一遍简报/证伪巡检/业绩复盘（IMPROVEMENT_PLAN §4 P4-2/P4-3），
+    /// 证明新增的估值分位/事件触发规则种类与真实简报内容生成不会在真数据上崩掉，且落库的
+    /// 通知走的是同一条偏好/免打扰/去重咽喉。默认 `#[ignore]`，只在配了 DATABASE_URL 时手动跑：
+    /// `cargo test -p echo-worker -- --ignored`。
+    #[tokio::test]
+    #[ignore = "需要活库 DATABASE_URL"]
+    async fn live_digest_and_rule_checks_run_against_real_data() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            return;
+        };
+        let pool = echo_db::connect(&url, 2).await.expect("connect");
+        let activities = Activities::new(
+            pool,
+            echo_config::DataSourceConfig::default(),
+            None,
+            url,
+            "backups/postgres".into(),
+        )
+        .expect("build activities");
+
+        let digest = activities
+            .run(JobKind::PremarketDigest)
+            .await
+            .expect("digest runs against real users/portfolios/rules");
+        assert!(digest.contains("用户="), "digest={digest}");
+
+        let falsifiers = activities.run(JobKind::FalsifierCheck).await.expect(
+            "falsifier check evaluates every active rule kind including valuation_percentile_*",
+        );
+        assert!(falsifiers.contains("核对="), "falsifiers={falsifiers}");
+
+        let earnings = activities
+            .run(JobKind::EarningsReview)
+            .await
+            .expect("earnings review also sweeps event_earnings rules");
+        assert!(earnings.contains("候选="), "earnings={earnings}");
+    }
 }

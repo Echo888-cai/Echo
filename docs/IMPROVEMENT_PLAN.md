@@ -189,8 +189,23 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
    等价，`dispatch` 前先抢锁，抢不到即跳过；`record_run` 完成时同步释放锁，崩溃未释放的锁
    靠 15 分钟租约自然过期兜底。真库端到端验证：第二实例在租约内抢不到、`record_run` 后立即
    能抢到、租约过期后能被第三个实例重新抢占）。
-2. `digest-to-user`：盘前/盘后简报进通知面板 + 邮件（通知必须过偏好/免打扰/去重咽喉）。
-3. `watch-rules`：自选规则（价格/估值分位/事件触发）+ desk 视图 + 触发通知。
+2. `digest-to-user` ✅已接（`echo-worker::activities::digest` 不再是规则计数占位统计，改为
+   聚合真实持仓日内异动（`change_percent` 超过阈值的 ticker 列表）+ 有效监控条件数 + 本轮
+   触发数拼成的真实简报正文；落库仍唯一经 `NotificationsRepository::insert`——偏好/免打扰/
+   去重咽喉不变。邮件是站内通知的镜像通道：`echo-data::EmailService`（`lettre` 异步 SMTP，
+   `echo-config::EmailConfig` 显式注入，未配置 SMTP 或收件账号不是邮箱形态时静默降级为
+   仅站内通知，不伪造发信成功）只在通知已真正落库后才尝试同步发信。真实端到端验证：
+   `cargo test -p echo-worker -- --ignored` 对活库跑通简报/证伪巡检/业绩复盘三个活动，
+   真实生成"持仓 N 个，其中 M 个日内异动…"格式的简报正文并落库）。
+3. `watch-rules` ✅已接（`echo_domain::RuleKind` 补齐 `valuation_percentile_below/above`
+   （复用既有 `HistoricalValuationService`，仅美股，DB 缓存 7 天过期才回源）与 `event_earnings`
+   （复用 `review_earnings` 业绩事实落库时机）两类新规则，与既有 price/fundamental 共用同一条
+   `check_falsifiers` 核对循环与告警落库路径；`WatchRuleService` 建规则前校验 ticker 已核实
+   建档；`POST/GET/DELETE /api/watch/rules` + `GET /api/watch/desk`（聚合关注列表/持仓/规则
+   涉及的全部 ticker 各自最新行情、挂载规则、近期触发通知，纯只读聚合不新增写路径）。
+   ✅ **Web 台面已接**（`echo-web::workspace::RulesDeskSection`，新增/删除规则表单 + 台面卡片 +
+   近期触发列表；真实端到端验证：浏览器对本机 Trunk 开发服务器创建 AAPL price_below 规则→
+   台面卡片实时显示→点击删除→活库确认行已消失，全程真实 HTTP 往返、非 mock）。
 
 ### P5 · 生产化与全自动验收
 按交接书 Phase 5/6 原文执行（HTTPS、密钥注入、S3 备份恢复演练、OTLP、CI 起真浏览器 E2E、

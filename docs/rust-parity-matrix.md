@@ -8,7 +8,8 @@
 > P2-4 (api-hardening: rate limit / readiness / Origin / body limit), P2-3 remainder
 > (comp_peers 同业锚点接线), P2 remainder (company_filings 公告读模型接线, migration 0011), and
 > P3-2 (company_profiles repository/API + Web 编辑页接线；自动沉淀仍 pending), Web 对比视图/
-> 深度报告导出接线, P4-1 (worker-lease claim/lease 接线)。
+> 深度报告导出接线, P4-1 (worker-lease claim/lease 接线), P4-2 (digest 真实内容 + 邮件通道接线),
+> P4-3 (watch_rules CRUD + desk 视图接线)。
 
 ## 1. Purpose and update rules
 
@@ -63,7 +64,7 @@ The baseline contained 45 REST surfaces: `/healthz` plus 44 registered REST cont
 | Chat alias | `POST /api/chat` | Unified `POST /api/ask` | replaced | ask contract tests | keep | #44 / Phase 3 | 统一研究入口可替代独立 chat；需 ADR/兼容说明。 |
 | Generate deep report | `POST /api/report/generate` | `ReportService` + `echo-api` adapter + `echo-web::research::ReportCard` | rust-accepted | application unit tests（本地兜底/模型路径/落库）+ 纯核路径真实 HTTP 端到端验证 + Web 端真实生成/下载实测（AAPL 完整七段报告） | keep | IMPROVEMENT_PLAN §4 P3-3 | 与 `/api/ask` 共用 `assemble_facts`/`build_panel`/护栏；报告专属提示词固定七段结构，模型不可用或输出短于 200 字退化为本地确定性报告，落库归位同一研究会话。Web 视图/导出已接（研究页 composer 按钮，客户端 Blob 下载 `.md`）。 |
 | Discover | `POST /api/discover` | — | product-decide | — | product-decide | Product / ADR | 是否保留“发现”工作流未裁决。 |
-| Events digest | `GET /api/events/digest` | Worker digest 内部活动 | pending | worker activity tests only | keep | Phase 3 | Worker 可发摘要，不等价用户读取 API。 |
+| Events digest | 通知面板 + 邮件 | `NotificationsRepository`/`EmailService`（SMTP，未配置诚实降级） | done | live worker test `live_digest_and_rule_checks_run_against_real_data` | keep | P4-2 | Digest 内容改为真实持仓异动/规则计数/触发计数（不再是占位统计），经偏好/免打扰/去重咽喉后镜像发邮件；`GET /api/events/digest` 单独端点未做，站内通知走既有 `/api/notifications`。 |
 | Ingest HK financials | `POST /api/hk-financials/ingest` | — | pending | — | keep | Phase 2–3 | HKEX/filing ingestion 未迁移。 |
 | Read HK financials | `GET /api/hk-financials` | — | pending | — | keep | Phase 2–3 | `hk_financials` 读模型/API 未迁移。 |
 | Unread notification count | `GET /api/notifications/unread` | `NotificationsRepository::unread` | rust-accepted | repository/API tests | keep | #43 | 已有用户过滤。 |
@@ -71,7 +72,7 @@ The baseline contained 45 REST surfaces: `/healthz` plus 44 registered REST cont
 | Send notification test | `POST /api/notifications/test` | — | pending | — | keep | Phase 3 | 测试通知契约未迁移。 |
 | List notifications | `GET /api/notifications` | `NotificationsRepository::list` | rust-accepted | repository/API tests | keep | #43 | 基础列表已落地。 |
 | Scheduler status | `GET /api/scheduler/status` | scheduler state 仅 Worker 内部 | pending | scheduler unit + CI live | keep | Phase 3 / #45 | 缺 owner/API status 投影。 |
-| Watch desk | `GET /api/watch/desk` | `GET /api/watch/list` | skeleton | repository/API + CI live | keep | #43 / #45 | 基础列表可用；缺 desk、事件、规则聚合。 |
+| Watch desk | `GET /api/watch/desk` | `GET /api/watch/desk` | done | live curl + browser round-trip against dev DB | keep | P4-3 | 聚合关注列表+持仓+规则涉及的全部 ticker，各自最新行情、挂载规则、近期触发通知；只读聚合，不新增写路径。 |
 | Watch stock detail | `GET /api/watch/stock` | — | pending | — | keep | Phase 3–4 | 缺单股详情、证据、事件与规则视图。 |
 | Track watch item | `POST /api/watch/track` | `watch_track` | skeleton | repository/API + CI live | keep | #43 / #45 | 基础增删有；未连同 desk/detail/rules。 |
 | Untrack watch item | `POST /api/watch/untrack` | `watch_untrack` | skeleton | repository/API + CI live | keep | #43 / #45 | 同上。 |
@@ -99,8 +100,9 @@ The baseline contained 45 REST surfaces: `/healthz` plus 44 registered REST cont
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Login/register | `/login` | `echo-web::LoginPage` | rust-accepted | Rust WebDriver E2E currently ignored | keep | #43 | 基础登录、注册可用；需解除 E2E ignore。 |
 | Research | `/`, `/research` | `ResearchPage` | skeleton | component tests absent; E2E ignored; Web 手动浏览器验证 | keep | Phase 4 | 已接类型化 SSE：阶段反馈、打字机 delta、护栏徽标、取消与原地重试；仍缺来源卡、会话历史继续及深链接（P1 后续切片）。 |
-| Watch list | `/watch` | `WatchPage` | skeleton | component tests absent | keep | Phase 4 | 基础自选增删；缺 desk、规则、事件。 |
-| Stock detail | `/watch/:ticker` | — | pending | — | keep | Phase 4 | 无详情页、引用证据、事件与规则管理。 |
+| Watch list | `/watch` | `WatchPage` + `RulesDeskSection` | done | browser round-trip (create/list/delete rule against dev DB) | keep | P4-3 | 自选增删 + 监控规则创建/删除表单 + 台面聚合 + 近期触发列表，均已接线真实 API。 |
+| Watch rules | `/api/watch/rules` (CRUD) | `WatchRuleService` + `WatchRulesRepository` | done | curl + browser round-trip against dev DB | keep | P4-3 | 规则种类：price/fundamental（既有）+ valuation_percentile_*/event_earnings（新增）；创建前校验 ticker 已核实建档。 |
+| Stock detail | `/watch/:ticker` | — | pending | — | keep | Phase 4 | 无独立详情页；当前台面卡片已覆盖行情/规则/触发聚合，详情页（引用证据等）仍未做。 |
 | Portfolio | `/portfolio` | `PortfolioPage` | skeleton | component tests absent | keep | Phase 4 | 基础 CRUD；缺实时市值、盈亏、风险、复盘、历史曲线。 |
 | Settings | `/settings` | `SettingsPage`, notification bell | skeleton | component tests absent | keep | Phase 4 | 仅偏好；缺邀请、反馈、导出、画像等设置能力。 |
 | Membership | `/membership` | — | product-decide | — | product-decide | Product / ADR | 计费/会员是否继续属于产品范围未裁决。 |

@@ -1,9 +1,10 @@
 use crate::{api, compare::ComparePage, profiles::ProfilesPage, research::ResearchPage};
 use echo_contracts::{
     AuthLoginRequest, AuthLogoutResponse, AuthRegisterRequest, AuthUserResponse,
-    ChangedCountResponse, Decimal, MutationResponse, NotificationReadRequest,
+    ChangedCountResponse, Decimal, DeskResponse, MutationResponse, NotificationReadRequest,
     NotificationsListResponse, PortfolioListResponse, PortfolioUpsertRequest, PreferencesResponse,
     PreferencesUpdateRequest, PublicUser, UnreadResponse, WatchListResponse, WatchMutationRequest,
+    WatchRuleCreateRequest,
 };
 use leptos::*;
 
@@ -375,7 +376,158 @@ fn WatchPage(on_research: Callback<()>) -> impl IntoView {
                     }.into_view() }
                 },
             }}
+            <RulesDeskSection />
         </main>
+    }
+}
+
+/// 监控规则 + 台面：新增/删除 `watch_rules`，聚合展示已跟踪 ticker 的行情、挂载的规则与
+/// 近期触发通知——只读聚合，不新增写路径（写路径就是下面的新增/删除规则表单）。
+#[component]
+fn RulesDeskSection() -> impl IntoView {
+    const KIND_OPTIONS: &[(&str, &str)] = &[
+        ("price_below", "现价 ≤ 阈值"),
+        ("price_above", "现价 ≥ 阈值"),
+        ("fundamental_below", "基本面指标 ≤ 阈值"),
+        ("fundamental_above", "基本面指标 ≥ 阈值"),
+        (
+            "valuation_percentile_below",
+            "历史估值分位 ≤ 阈值（仅美股）",
+        ),
+        (
+            "valuation_percentile_above",
+            "历史估值分位 ≥ 阈值（仅美股）",
+        ),
+        ("event_earnings", "有新业绩事实（无需阈值）"),
+    ];
+
+    let (rule_ticker, set_rule_ticker) = create_signal(String::new());
+    let (rule_kind, set_rule_kind) = create_signal("price_below".to_string());
+    let (rule_threshold, set_rule_threshold) = create_signal(String::new());
+    let (rule_metric, set_rule_metric) = create_signal(String::new());
+    let (rule_label, set_rule_label) = create_signal(String::new());
+    let (form_error, set_form_error) = create_signal(None::<String>);
+
+    let desk = create_resource(|| (), |_| api::get::<DeskResponse>("/api/watch/desk"));
+    let create_rule = create_action(|input: &WatchRuleCreateRequest| {
+        let input = input.clone();
+        async move { api::post::<_, echo_contracts::WatchRule>("/api/watch/rules", &input).await }
+    });
+    let delete_rule = create_action(|id: &i64| {
+        let path = format!("/api/watch/rules?id={id}");
+        async move { api::delete::<MutationResponse>(&path).await }
+    });
+    create_effect(move |_| {
+        if matches!(create_rule.value().get(), Some(Ok(_))) {
+            desk.refetch();
+            set_rule_threshold.set(String::new());
+            set_rule_metric.set(String::new());
+            set_rule_label.set(String::new());
+        }
+    });
+    create_effect(move |_| {
+        if matches!(delete_rule.value().get(), Some(Ok(_))) {
+            desk.refetch();
+        }
+    });
+
+    let submit = move || {
+        let ticker = rule_ticker.get().trim().to_uppercase();
+        if ticker.is_empty() {
+            set_form_error.set(Some("请填写 ticker".into()));
+            return;
+        }
+        let kind = rule_kind.get();
+        let needs_threshold = kind != "event_earnings";
+        let threshold = if needs_threshold {
+            match rule_threshold.get().trim().parse::<Decimal>() {
+                Ok(value) => Some(value),
+                Err(_) => {
+                    set_form_error.set(Some("阈值必须是有效数字".into()));
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        let needs_metric = kind == "fundamental_below" || kind == "fundamental_above";
+        if needs_metric && rule_metric.get().trim().is_empty() {
+            set_form_error.set(Some("该规则种类需要填写 metric".into()));
+            return;
+        }
+        set_form_error.set(None);
+        create_rule.dispatch(WatchRuleCreateRequest {
+            ticker,
+            kind,
+            threshold,
+            metric: (!rule_metric.get().trim().is_empty()).then(|| rule_metric.get()),
+            label: (!rule_label.get().trim().is_empty()).then(|| rule_label.get()),
+        });
+    };
+
+    view! {
+        <section class="rules-desk">
+            <h2>"监控规则 / 台面"</h2>
+            <section class="inline-form">
+                <input placeholder="Ticker" prop:value=rule_ticker on:input=move |event| set_rule_ticker.set(event_target_value(&event).to_uppercase()) />
+                <select on:change=move |event| set_rule_kind.set(event_target_value(&event))>
+                    {KIND_OPTIONS.iter().map(|(value, label)| view! {
+                        <option value=*value selected=move || rule_kind.get() == *value>{*label}</option>
+                    }).collect_view()}
+                </select>
+                <input placeholder="阈值" inputmode="decimal" prop:value=rule_threshold on:input=move |event| set_rule_threshold.set(event_target_value(&event)) />
+                <input placeholder="metric（基本面规则必填，如 gross_margin）" prop:value=rule_metric on:input=move |event| set_rule_metric.set(event_target_value(&event)) />
+                <input placeholder="说明（可选）" prop:value=rule_label on:input=move |event| set_rule_label.set(event_target_value(&event)) />
+                <button class="primary-button compact" on:click=move |_| submit()>"新增规则"</button>
+            </section>
+            {move || form_error.get().map(|error| view! { <p class="form-error">{error}</p> })}
+            {move || create_rule.value().get().and_then(Result::err).map(|error| view! { <p class="form-error">{error}</p> })}
+            {move || match desk.get() {
+                None => loading_view(),
+                Some(Err(error)) => error_view(error),
+                Some(Ok(data)) if data.tickers.is_empty() => empty_view("还没有跟踪任何 ticker。"),
+                Some(Ok(data)) => view! {
+                    <div class="card-grid">
+                        {data.tickers.into_iter().map(|item| {
+                            view! { <article class="workspace-card">
+                                <p class="eyebrow">{item.ticker.clone()}</p>
+                                <h3>{item.company_name.unwrap_or_else(|| item.ticker.clone())}</h3>
+                                <p class="muted">
+                                    {"现价 "}{decimal_text(item.price)}
+                                    {"，涨跌 "}{decimal_text(item.change_percent)}{"%"}
+                                </p>
+                                {if item.rules.is_empty() {
+                                    view! { <p class="muted">"未挂监控规则"</p> }.into_view()
+                                } else {
+                                    item.rules.into_iter().map(|rule| {
+                                        let rule_id = rule.id;
+                                        view! {
+                                            <div class="rule-row">
+                                                <span>{rule.kind.clone()}</span>
+                                                <span>{rule.threshold.to_string()}</span>
+                                                <span>{rule.label.unwrap_or_default()}</span>
+                                                <button class="danger-link" on:click=move |_| delete_rule.dispatch(rule_id)>"删除"</button>
+                                            </div>
+                                        }
+                                    }).collect_view().into_view()
+                                }}
+                            </article> }
+                        }).collect_view()}
+                    </div>
+                }.into_view(),
+            }}
+            <h3>"近期触发"</h3>
+            {move || match desk.get() {
+                None => loading_view(),
+                Some(Err(error)) => error_view(error),
+                Some(Ok(data)) if data.recent_triggers.is_empty() => empty_view("暂无触发记录。"),
+                Some(Ok(data)) => data.recent_triggers.into_iter().map(|item| view! {
+                    <article class="notice">
+                        <strong>{item.title}</strong><p>{item.body}</p><time>{item.created_at}</time>
+                    </article>
+                }).collect_view().into_view(),
+            }}
+        </section>
     }
 }
 

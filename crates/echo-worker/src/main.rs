@@ -113,6 +113,7 @@ async fn main() {
     let activities = Activities::new(
         pool.clone(),
         config.data_sources,
+        config.email,
         config.database_url,
         config.backup_dir,
     )

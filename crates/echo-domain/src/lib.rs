@@ -14,6 +14,7 @@ pub mod derivations;
 pub mod fact_guard;
 pub mod intent;
 pub mod valuation;
+pub mod watch_rules;
 
 pub use company_aliases::{
     CompanyAlias, HK_COMPANY_ALIASES, HK_US_LINKS, HkUsLink, HkUsLinkKind, US_COMPANY_ALIASES,
@@ -37,3 +38,4 @@ pub use valuation::{
     InsiderActivity, MarketSnapshot, MethodBand, MultipleType, PeerAnchor, Valuation,
     classify_asset_stage, compute_valuation, display_valuation,
 };
+pub use watch_rules::RuleKind;

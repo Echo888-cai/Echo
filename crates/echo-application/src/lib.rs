@@ -18,6 +18,7 @@ pub mod from_db;
 pub mod model_gateway;
 pub mod report;
 pub mod research;
+pub mod watch_rules;
 
 pub use answer_prompt::{AnswerContext, build_system_prompt, build_user_prompt};
 pub use auth::{AuthError, AuthService, Session, hash_password, verify_password};
@@ -35,6 +36,7 @@ pub use research::{
     CompareResearchFacts, LoadedFundamentals, PersistResearchSession, PriorTurn, ResearchFacts,
     ResearchOutcome, ResearchPorts, ResearchService,
 };
+pub use watch_rules::{WatchRuleError, WatchRuleService};
 
 /// 一轮研究请求——公司是必到字段（由公司解析闭环在边界处兑现），history 只用于代词承接。
 #[derive(Clone, Debug)]

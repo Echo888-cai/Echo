@@ -27,8 +27,8 @@ use echo_application::model_gateway::{
 use echo_application::{
     AuthError, AuthService, CompanyResolvePorts, CompanyResolveService, DbCompanyHit,
     ExternalSymbolHit, LoadedFundamentals, PersistResearchSession, PriorTurn, ReportService,
-    ResearchPorts, ResearchService, ResolvedCompany, market_snapshot_from_rows,
-    resolved_company_from_rows,
+    ResearchPorts, ResearchService, ResolvedCompany, WatchRuleError, WatchRuleService,
+    market_snapshot_from_rows, resolved_company_from_rows,
 };
 use echo_config::ApiConfig;
 use echo_contracts::{
@@ -38,12 +38,14 @@ use echo_contracts::{
     CompanyProfileUpsertRequest, CompanyProfilesListResponse, CompanyResolveItem,
     CompanyResolveQuery, CompanyResolveResponse, CompanySearchItem, CompanySearchQuery,
     CompanySearchResponse, CompanyVerifyQuery, CompanyVerifyResponse, CompanyVerifySuggestion,
-    CompareRequest, CompareResponse, ErrorResponse, HealthResponse, ListQuery, MutationResponse,
-    Notification, NotificationReadRequest, NotificationsListResponse, PortfolioListResponse,
-    PortfolioPosition, PortfolioUpsertRequest, PreferencesResponse, PreferencesUpdateRequest,
-    PublicUser, ReportGenerateResponse, ResearchSessionDetail, ResearchSessionResponse,
-    ResearchSessionSummary, ResearchSessionsResponse, ResearchStreamEvent, TickerQuery,
-    UnreadResponse, UserPreferences, UserRole, WatchEntry, WatchListResponse, WatchMutationRequest,
+    CompareRequest, CompareResponse, DeskResponse, DeskTicker, ErrorResponse, HealthResponse,
+    ListQuery, MutationResponse, Notification, NotificationReadRequest, NotificationsListResponse,
+    PortfolioListResponse, PortfolioPosition, PortfolioUpsertRequest, PreferencesResponse,
+    PreferencesUpdateRequest, PublicUser, ReportGenerateResponse, ResearchSessionDetail,
+    ResearchSessionResponse, ResearchSessionSummary, ResearchSessionsResponse, ResearchStreamEvent,
+    TickerQuery, UnreadResponse, UserPreferences, UserRole, WatchEntry, WatchListResponse,
+    WatchMutationRequest, WatchRule, WatchRuleCreateRequest, WatchRuleDeleteRequest,
+    WatchRulesListResponse,
 };
 use echo_data::{
     CalendarService, FilingsService, FmpSearchService, FundamentalsRow, FundamentalsService,
@@ -166,6 +168,13 @@ fn map_auth_error(error: AuthError) -> ApiError {
 fn map_db_error(error: echo_db::DbError) -> ApiError {
     error!(error = %error, "数据库操作失败");
     ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "数据库操作失败")
+}
+
+fn map_watch_rule_error(error: WatchRuleError) -> ApiError {
+    match error {
+        WatchRuleError::Db(error) => map_db_error(error),
+        other => ApiError::new(StatusCode::BAD_REQUEST, other.to_string()),
+    }
 }
 
 fn require_pool(state: &AppState) -> Result<&Pool, ApiError> {
@@ -640,6 +649,141 @@ async fn watch_untrack(
     Ok(Json(MutationResponse { changed }))
 }
 
+fn watch_rule_view(row: echo_db::WatchRuleDetailRow) -> WatchRule {
+    WatchRule {
+        id: row.id,
+        ticker: row.ticker,
+        kind: row.kind,
+        threshold: row.threshold,
+        metric: row.metric,
+        label: row.label,
+        active: row.active,
+        created_at: row.created_at.to_rfc3339(),
+        last_triggered_at: row.last_triggered_at.map(|value| value.to_rfc3339()),
+    }
+}
+
+async fn watch_rules_list(
+    State(state): State<AppState>,
+    Extension(user): Extension<PublicUser>,
+) -> Result<Json<WatchRulesListResponse>, ApiError> {
+    let rules = WatchRuleService::new(require_pool(&state)?)
+        .list(&user.id)
+        .await
+        .map_err(map_watch_rule_error)?
+        .into_iter()
+        .map(watch_rule_view)
+        .collect();
+    Ok(Json(WatchRulesListResponse { rules }))
+}
+
+async fn watch_rules_create(
+    State(state): State<AppState>,
+    Extension(user): Extension<PublicUser>,
+    Json(input): Json<WatchRuleCreateRequest>,
+) -> Result<Json<WatchRule>, ApiError> {
+    let row = WatchRuleService::new(require_pool(&state)?)
+        .create(
+            &user.id,
+            &input.ticker,
+            &input.kind,
+            input.threshold,
+            input.metric.as_deref(),
+            input.label.as_deref(),
+        )
+        .await
+        .map_err(map_watch_rule_error)?;
+    Ok(Json(watch_rule_view(row)))
+}
+
+async fn watch_rules_delete(
+    State(state): State<AppState>,
+    Extension(user): Extension<PublicUser>,
+    Query(input): Query<WatchRuleDeleteRequest>,
+) -> Result<Json<MutationResponse>, ApiError> {
+    let changed = WatchRuleService::new(require_pool(&state)?)
+        .delete(&user.id, input.id)
+        .await
+        .map_err(map_watch_rule_error)?;
+    Ok(Json(MutationResponse { changed }))
+}
+
+/// 自选台面聚合：已跟踪 ticker（关注列表 + 持仓 + 有规则但未在前两者出现的 ticker）
+/// 各自的最新行情、挂载的监控规则，以及近期触发通知——全部只读聚合已有仓储，不新增写路径。
+async fn watch_desk(
+    State(state): State<AppState>,
+    Extension(user): Extension<PublicUser>,
+) -> Result<Json<DeskResponse>, ApiError> {
+    let pool = require_pool(&state)?;
+    let watchlist = WatchlistRepository::new(pool)
+        .list(&user.id)
+        .await
+        .map_err(map_db_error)?;
+    let positions = PortfolioRepository::new(pool)
+        .list(&user.id)
+        .await
+        .map_err(map_db_error)?;
+    let rules = WatchRuleService::new(pool)
+        .list(&user.id)
+        .await
+        .map_err(map_watch_rule_error)?;
+
+    let mut names: std::collections::BTreeMap<String, Option<String>> =
+        std::collections::BTreeMap::new();
+    for entry in watchlist.into_iter().filter(|entry| entry.mode == "add") {
+        names.insert(entry.ticker, entry.company_name);
+    }
+    for position in &positions {
+        names
+            .entry(position.ticker.clone())
+            .or_insert_with(|| position.company_name.clone());
+    }
+    let mut rules_by_ticker: std::collections::BTreeMap<String, Vec<WatchRule>> =
+        std::collections::BTreeMap::new();
+    for rule in rules {
+        names.entry(rule.ticker.clone()).or_insert(None);
+        rules_by_ticker
+            .entry(rule.ticker.clone())
+            .or_default()
+            .push(watch_rule_view(rule));
+    }
+
+    let market = MarketRepository::new(pool);
+    let mut tickers = Vec::with_capacity(names.len());
+    for (ticker, company_name) in names {
+        let snapshot = market
+            .latest_snapshot(&ticker)
+            .await
+            .map_err(map_db_error)?;
+        tickers.push(DeskTicker {
+            ticker: ticker.clone(),
+            company_name,
+            price: snapshot.as_ref().and_then(|row| row.price),
+            change_percent: snapshot.as_ref().and_then(|row| row.change_percent),
+            rules: rules_by_ticker.remove(&ticker).unwrap_or_default(),
+        });
+    }
+
+    let recent_triggers = NotificationsRepository::new(pool)
+        .list(&user.id, 10)
+        .await
+        .map_err(map_db_error)?
+        .into_iter()
+        .filter(|row| {
+            matches!(
+                row.kind.as_str(),
+                "falsify_alert" | "position_alert" | "earnings_review"
+            )
+        })
+        .map(notification_view)
+        .collect();
+
+    Ok(Json(DeskResponse {
+        tickers,
+        recent_triggers,
+    }))
+}
+
 fn portfolio_position(row: echo_db::PortfolioPositionRow) -> PortfolioPosition {
     PortfolioPosition {
         company_name: row.company_name.unwrap_or_else(|| row.ticker.clone()),
@@ -894,6 +1038,19 @@ async fn preferences_update(
     }))
 }
 
+fn notification_view(row: echo_db::NotificationRow) -> Notification {
+    Notification {
+        id: row.id,
+        kind: row.kind,
+        title: row.title,
+        body: row.body.unwrap_or_default(),
+        ticker: row.ticker,
+        payload: row.payload,
+        created_at: row.created_at.to_rfc3339(),
+        read_at: row.read_at.map(|date| date.to_rfc3339()),
+    }
+}
+
 async fn notifications_list(
     State(state): State<AppState>,
     Extension(user): Extension<PublicUser>,
@@ -904,16 +1061,7 @@ async fn notifications_list(
         .await
         .map_err(map_db_error)?
         .into_iter()
-        .map(|row| Notification {
-            id: row.id,
-            kind: row.kind,
-            title: row.title,
-            body: row.body.unwrap_or_default(),
-            ticker: row.ticker,
-            payload: row.payload,
-            created_at: row.created_at.to_rfc3339(),
-            read_at: row.read_at.map(|date| date.to_rfc3339()),
-        })
+        .map(notification_view)
         .collect();
     Ok(Json(NotificationsListResponse { notifications }))
 }
@@ -1376,6 +1524,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/watch/list", get(watch_list))
         .route("/api/watch/track", post(watch_track))
         .route("/api/watch/untrack", post(watch_untrack))
+        .route(
+            "/api/watch/rules",
+            get(watch_rules_list)
+                .post(watch_rules_create)
+                .delete(watch_rules_delete),
+        )
+        .route("/api/watch/desk", get(watch_desk))
         .route(
             "/api/portfolio",
             get(portfolio_list)
