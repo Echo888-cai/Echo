@@ -8,9 +8,10 @@
 
 use crate::api;
 use echo_contracts::{
-    AskRequest, AskResponse, CompanyResolveResponse, CompanySearchItem, CompanySearchResponse,
-    Decimal, EarningsCalendarView, GuardView, MutationResponse, ReportGenerateResponse,
-    ResearchSessionDetail, ResearchSessionResponse, ResearchSessionsResponse, ResearchStreamEvent,
+    AnswerSource, AskRequest, AskResponse, CompanyResolveResponse, CompanySearchItem,
+    CompanySearchResponse, CompareLegView, CompareResponse, Decimal, EarningsCalendarView,
+    GuardView, MutationResponse, ReportGenerateResponse, ReportMode, ResearchSessionDetail,
+    ResearchSessionResponse, ResearchSessionsResponse, ResearchStreamEvent,
     ResearchStreamStageName, RouteView, ValuationView,
 };
 use leptos::*;
@@ -29,6 +30,8 @@ enum TurnStatus {
         guard: Option<GuardView>,
     },
     Done(AskResponse),
+    /// 对话内双主体对比完成——两腿独立取数/独立护栏；对比结果暂不落库。
+    CompareDone(Box<CompareResponse>),
     /// 从历史会话加载——字段比 [`AskResponse`] 更少（未持久化路由/完备度/护栏明细），
     /// 缺的就是缺的，不拿假数据补全。
     Loaded(ResearchSessionDetail),
@@ -239,6 +242,16 @@ fn attach_stream(
                     on_persisted.call(());
                     return;
                 }
+                ResearchStreamEvent::Compare(c) => {
+                    // 对比结果一次性到达；暂不落库，所以不触发 on_persisted。
+                    turn.ticker = format!(
+                        "{} vs {}",
+                        c.response.primary.ticker, c.response.peer.ticker
+                    );
+                    turn.status = TurnStatus::CompareDone(Box::new(c.response));
+                    turn.handle = None;
+                    return;
+                }
                 ResearchStreamEvent::Error(e) => {
                     turn.status = TurnStatus::Failed(e.message);
                     turn.handle = None;
@@ -246,6 +259,7 @@ fn attach_stream(
                 }
                 _ => {}
             }
+            let turn_ticker = &mut turn.ticker;
             let TurnStatus::Streaming {
                 stage,
                 meta_route,
@@ -261,6 +275,10 @@ fn attach_stream(
             };
             match event {
                 ResearchStreamEvent::Meta(m) => {
+                    // 服务端从问题里识别出的主体回填到本轮——气泡标签与后续追问都用它。
+                    if turn_ticker.is_empty() {
+                        *turn_ticker = m.ticker;
+                    }
                     *meta_route = Some(m.route);
                     *meta_valuation = Some(m.valuation);
                     *meta_completeness = Some(m.data_completeness);
@@ -270,7 +288,9 @@ fn attach_stream(
                 ResearchStreamEvent::Stage(s) => *stage = Some(s.name),
                 ResearchStreamEvent::Delta(d) => delta_text.push_str(&d.text),
                 ResearchStreamEvent::Guard(g) => *guard = g.fact_guard,
-                ResearchStreamEvent::Final(_) | ResearchStreamEvent::Error(_) => unreachable!(),
+                ResearchStreamEvent::Final(_)
+                | ResearchStreamEvent::Compare(_)
+                | ResearchStreamEvent::Error(_) => unreachable!(),
             }
         });
     };
@@ -518,6 +538,79 @@ fn EarningsBadge(earnings: EarningsCalendarView) -> impl IntoView {
     .into_view()
 }
 
+/// 作答来源的用户可读中文标签——纯 UI 展示映射，接口层仍传英文枚举值。
+const fn answer_source_label(source: AnswerSource) -> &'static str {
+    match source {
+        AnswerSource::Draft => "结构化草稿",
+        AnswerSource::Generated => "模型生成",
+        AnswerSource::Unavailable => "未作答",
+    }
+}
+
+/// 深度报告生成方式的中文标签——同上，仅 UI 展示。
+const fn report_mode_label(mode: ReportMode) -> &'static str {
+    match mode {
+        ReportMode::Model => "模型生成",
+        ReportMode::Local => "本地模板兜底",
+    }
+}
+
+/// 折叠的「研究依据」面板——答案文本永远优先，估值带/完备度/来源/护栏收进一行摘要，
+/// 点开展开。摘要只汇总真实到手的字段，缺的既不出现在摘要也不出现在面板里。
+#[component]
+fn EvidencePanel(
+    valuation: Option<ValuationView>,
+    completeness: Option<u8>,
+    earnings: Option<EarningsCalendarView>,
+    sources: Vec<String>,
+    guard: Option<GuardView>,
+    answer_source: Option<String>,
+) -> impl IntoView {
+    let has_content = valuation.is_some()
+        || completeness.is_some()
+        || earnings.is_some()
+        || !sources.is_empty()
+        || guard.is_some();
+    if !has_content {
+        return ().into_view();
+    }
+    let mut summary_parts: Vec<String> = Vec::new();
+    if let Some(value) = completeness {
+        summary_parts.push(format!("完备度 {value}%"));
+    }
+    if !sources.is_empty() {
+        summary_parts.push(format!("{} 个数据源", sources.len()));
+    }
+    let guard_hard = guard.as_ref().is_some_and(|g| g.has_hard_fail);
+    if let Some(g) = &guard {
+        summary_parts.push(format!("护栏 过 {}/{}", g.pass, g.total));
+    }
+    let summary_text = if summary_parts.is_empty() {
+        "研究依据".to_string()
+    } else {
+        format!("研究依据 · {}", summary_parts.join(" · "))
+    };
+    view! {
+        <details class=if guard_hard { "evidence-panel has-hard" } else { "evidence-panel" }>
+            <summary>
+                <span class="evidence-summary-text">{summary_text}</span>
+                <svg class="evidence-chevron" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </summary>
+            <div class="evidence-body">
+                {valuation.map(|v| view! { <ValuationBand v=v /> })}
+                {completeness.map(|c| view! { <CompletenessRow completeness=c /> })}
+                {earnings.map(|e| view! { <EarningsBadge earnings=e /> })}
+                <DataSources sources=sources />
+                {guard.map(|g| view! { <GuardBadge guard=g /> })}
+                {answer_source.map(|s| view! { <p class="evidence-provenance">"作答来源 · " {s}</p> })}
+            </div>
+        </details>
+    }
+    .into_view()
+}
+
 /// 流式进行中的卡片：已到的 meta 骨架 + 阶段提示 + 打字机增量 + 取消按钮。
 #[component]
 fn StreamingCard(
@@ -534,14 +627,11 @@ fn StreamingCard(
     let html = (!delta_text.is_empty()).then(|| crate::markdown::render(&delta_text));
     view! {
         <div class="answer-card">
-            <div class="answer-brand">
-                <div class="answer-mark">
-                    <i class="pulse"></i>
-                    <span>"ECHO RESEARCH"</span>
-                </div>
-                {meta_route.clone().map(|route| view! { <RouteChips route=route /> })}
-            </div>
+            {meta_route.clone().map(|route| view! {
+                <div class="answer-head"><RouteChips route=route /></div>
+            })}
 
+            // 流式期间骨架直接可见——meta 先到先画，答案生成前用户就能看到估值区间在成形。
             {meta_valuation.map(|v| view! { <ValuationBand v=v /> })}
             {meta_completeness.map(|c| view! { <CompletenessRow completeness=c /> })}
             {meta_earnings.map(|e| view! { <EarningsBadge earnings=e /> })}
@@ -565,27 +655,16 @@ fn StreamingCard(
     }
 }
 
-/// 干净完成后的答案卡——复用 meta 期同款 route/valuation/completeness/sources 展示块。
+/// 干净完成后的答案卡——答案文本优先，估值/完备度/来源/护栏全部收进折叠的证据面板。
 #[component]
 fn DoneCard(res: AskResponse) -> impl IntoView {
-    let completeness = res.data_completeness;
     view! {
         <div class="answer-card">
-            <div class="answer-brand">
-                <div class="answer-mark">
-                    <i></i>
-                    <span>"ECHO RESEARCH"</span>
-                </div>
+            <div class="answer-head">
                 <RouteChips route=res.route.clone() />
             </div>
 
-            <ValuationBand v=res.valuation.clone() />
-            <CompletenessRow completeness=completeness />
-            {res.earnings.clone().map(|e| view! { <EarningsBadge earnings=e /> })}
-            <DataSources sources=res.connected_sources.clone() />
-
             <div class="answer-text-section">
-                <p class="answer-source-label">"作答 · " {res.answer_source.as_str()}</p>
                 {match res.answer.clone() {
                     Some(text) => {
                         let html = crate::markdown::render(&text);
@@ -599,7 +678,14 @@ fn DoneCard(res: AskResponse) -> impl IntoView {
                 }}
             </div>
 
-            {res.fact_guard.clone().map(|g| view! { <GuardBadge guard=g /> })}
+            <EvidencePanel
+                valuation=Some(res.valuation.clone())
+                completeness=Some(res.data_completeness)
+                earnings=res.earnings.clone()
+                sources=res.connected_sources.clone()
+                guard=res.fact_guard.clone()
+                answer_source=Some(answer_source_label(res.answer_source).to_string())
+            />
         </div>
     }
 }
@@ -625,19 +711,11 @@ fn HistoryCard(detail: ResearchSessionDetail) -> impl IntoView {
 
     view! {
         <div class="answer-card">
-            <div class="answer-brand">
-                <div class="answer-mark">
-                    <i></i>
-                    <span>"ECHO RESEARCH"</span>
-                </div>
+            <div class="answer-head">
                 <span class="ac-chip dim">"历史记录 · " {detail.created_at.clone()}</span>
             </div>
 
-            {valuation.map(|v| view! { <ValuationBand v=v /> })}
-            <DataSources sources=sources />
-
             <div class="answer-text-section">
-                <p class="answer-source-label">"作答 · 历史存档"</p>
                 {match answer {
                     Some(text) => {
                         let html = crate::markdown::render(&text);
@@ -648,6 +726,15 @@ fn HistoryCard(detail: ResearchSessionDetail) -> impl IntoView {
                     }.into_view(),
                 }}
             </div>
+
+            <EvidencePanel
+                valuation=valuation
+                completeness=None
+                earnings=None
+                sources=sources
+                guard=None
+                answer_source=Some("历史存档".to_string())
+            />
         </div>
     }
 }
@@ -657,11 +744,8 @@ fn HistoryCard(detail: ResearchSessionDetail) -> impl IntoView {
 fn ReportPendingCard() -> impl IntoView {
     view! {
         <div class="answer-card">
-            <div class="answer-brand">
-                <div class="answer-mark">
-                    <i class="pulse"></i>
-                    <span>"ECHO RESEARCH · 深度报告"</span>
-                </div>
+            <div class="answer-head">
+                <span class="ac-chip">"深度报告"</span>
             </div>
             <p class="working-text">"正在生成深度报告…"</p>
         </div>
@@ -678,25 +762,75 @@ fn ReportCard(res: ReportGenerateResponse) -> impl IntoView {
         move |_| api::download_text_file(&filename, "text/markdown;charset=utf-8", &markdown);
     view! {
         <div class="answer-card">
-            <div class="answer-brand">
-                <div class="answer-mark">
-                    <i></i>
-                    <span>"ECHO RESEARCH · 深度报告"</span>
-                </div>
+            <div class="answer-head">
+                <span class="ac-chip">"深度报告"</span>
                 <RouteChips route=res.route.clone() />
             </div>
 
-            <ValuationBand v=res.valuation.clone() />
-            {res.earnings.clone().map(|e| view! { <EarningsBadge earnings=e /> })}
-
             <div class="answer-text-section">
-                <p class="answer-source-label">"报告 · " {res.mode.as_str()}</p>
                 <div class="answer-text" inner_html=html></div>
             </div>
 
-            {res.fact_guard.clone().map(|g| view! { <GuardBadge guard=g /> })}
+            <EvidencePanel
+                valuation=Some(res.valuation.clone())
+                completeness=None
+                earnings=res.earnings.clone()
+                sources=Vec::new()
+                guard=res.fact_guard.clone()
+                answer_source=Some(report_mode_label(res.mode).to_string())
+            />
 
             <button class="stream-retry" on:click=download>"下载 Markdown"</button>
+        </div>
+    }
+}
+
+/// 对话内双主体对比卡——结论优先，两腿证据（估值/完备度/来源/护栏）双栏排在下方，
+/// 每腿一个独立折叠面板，绝不把两腿数字混进同一个面板。
+#[component]
+fn CompareCard(res: CompareResponse) -> impl IntoView {
+    let answer_html = res
+        .answer
+        .clone()
+        .map(|text| crate::markdown::render(&text));
+    view! {
+        <div class="answer-card">
+            <div class="answer-head">
+                <span class="ac-chip">"双主体对比"</span>
+                <RouteChips route=res.route.clone() />
+            </div>
+
+            <div class="answer-text-section">
+                {match answer_html {
+                    Some(html) => view! { <div class="answer-text" inner_html=html></div> }.into_view(),
+                    None => view! {
+                        <p class="answer-unavailable">
+                            "未核到模型作答（未配 provider）——仅给两腿结构化事实，不臆造。"
+                        </p>
+                    }.into_view(),
+                }}
+            </div>
+
+            <div class="compare-columns">
+                <CompareLeg leg=res.primary.clone() />
+                <CompareLeg leg=res.peer.clone() />
+            </div>
+
+            <p class="compare-note">"两腿独立取数、独立护栏核对；对比结果暂不写入研究历史。"</p>
+        </div>
+    }
+}
+
+/// 对比单腿——ticker 标签 + 该腿自己的证据面板（默认展开首屏可见的估值带）。
+#[component]
+fn CompareLeg(leg: CompareLegView) -> impl IntoView {
+    view! {
+        <div class="compare-leg">
+            <p class="compare-leg-ticker">{leg.ticker.clone()}</p>
+            <ValuationBand v=leg.valuation.clone() />
+            <CompletenessRow completeness=leg.data_completeness />
+            <DataSources sources=leg.connected_sources.clone() />
+            {leg.fact_guard.clone().map(|g| view! { <GuardBadge guard=g /> })}
         </div>
     }
 }
@@ -833,6 +967,12 @@ pub fn ResearchPage(
                     Some(session) => {
                         let id = next_id.get();
                         set_next_id.set(id + 1);
+                        // 恢复研究对象确认态——续接历史会话的追问不需要重填公司。
+                        if let Some(ticker) =
+                            session.ticker.clone().filter(|value| !value.is_empty())
+                        {
+                            set_resolved.set(Some((ticker.clone(), ticker)));
+                        }
                         set_thread.set(vec![Turn {
                             id,
                             question: session.question.clone(),
@@ -878,6 +1018,21 @@ pub fn ResearchPage(
     let pending = move || thread.get().iter().any(|turn| turn.status.is_busy());
     let on_persisted = Callback::new(move |_| sessions.refetch());
 
+    // 服务端从问题里识别出主体后（meta 回填了最后一轮的 ticker），若 composer 还没有
+    // 确认公司，就把它补成 chip——追问自然续接。只看最后一轮：不许把更早轮次的旧公司
+    // 回填到一个正在等服务端识别的新问题上；对比轮（"A vs B"）也不回填。
+    create_effect(move |_| {
+        let latest = thread.get().last().and_then(|turn| {
+            let ticker = turn.ticker.trim();
+            (!ticker.is_empty() && !ticker.contains(" vs ")).then(|| ticker.to_string())
+        });
+        if let Some(ticker) = latest {
+            if resolved.get_untracked().is_none() {
+                set_resolved.set(Some((ticker.clone(), ticker)));
+            }
+        }
+    });
+
     // 研究对象输入变化——本地 DB 候选（便宜）实时查，旧一代请求用 gen 挡掉不覆盖新结果。
     let on_query_input = move |ev| {
         let value = event_target_value(&ev);
@@ -912,8 +1067,9 @@ pub fn ResearchPage(
         set_resolve_error.set(None);
     };
 
-    // 确认好的候选（点选或 resolve 验证成功）才真正起一轮研究；输入框和确认态一并清空。
-    let fire = move |mode: SubmitMode, target_ticker: String| {
+    // 确认好的候选（点选或 resolve 验证成功）才真正起一轮研究。研究对象在会话内保持
+    // 确认态不清空——追问同一家公司是最高频路径，绝不让用户每轮重填；换公司点掉 chip 即可。
+    let fire = move |mode: SubmitMode, target_ticker: String, target_label: String| {
         let q = question.get().trim().to_string();
         let q = if q.is_empty() && mode == SubmitMode::Report {
             "生成深度研究报告".to_string()
@@ -929,7 +1085,7 @@ pub fn ResearchPage(
             SubmitMode::Ask => start_turn(
                 id,
                 q,
-                target_ticker,
+                target_ticker.clone(),
                 current_session_id.get(),
                 set_thread,
                 set_current_session_id,
@@ -938,7 +1094,7 @@ pub fn ResearchPage(
             SubmitMode::Report => fire_report(
                 id,
                 q,
-                target_ticker,
+                target_ticker.clone(),
                 current_session_id.get(),
                 set_thread,
                 set_current_session_id,
@@ -946,8 +1102,12 @@ pub fn ResearchPage(
             ),
         }
         set_question.set(String::new());
+        // 显式确认过的公司 chip 常驻；主体留给服务端识别时（空 ticker）不放假 chip，
+        // 等 meta 回填后由 thread 效应补上。
+        if !target_ticker.is_empty() {
+            set_resolved.set(Some((target_ticker, target_label)));
+        }
         set_company_query.set(String::new());
-        set_resolved.set(None);
         set_candidates.set(Vec::new());
     };
 
@@ -958,13 +1118,15 @@ pub fn ResearchPage(
         if mode == SubmitMode::Ask && question.get().trim().is_empty() {
             return;
         }
-        if let Some((target_ticker, _)) = resolved.get() {
-            fire(mode, target_ticker);
+        if let Some((target_ticker, target_label)) = resolved.get() {
+            fire(mode, target_ticker, target_label);
             return;
         }
         let query = company_query.get().trim().to_string();
         if query.is_empty() {
-            set_resolve_error.set(Some("请先填写研究对象（公司名或代码）。".to_string()));
+            // 没有显式研究对象——把识别交给服务端（resolve 链跑问题文本；
+            // 双主体对比问题也在服务端分流）。识别失败会以流错误诚实返回。
+            fire(mode, String::new(), String::new());
             return;
         }
         set_resolving.set(true);
@@ -975,7 +1137,14 @@ pub fn ResearchPage(
             set_resolving.set(false);
             match outcome {
                 Ok(response) => match response.company {
-                    Some(company) => fire(mode, company.ticker),
+                    Some(company) => {
+                        let label = company_display(
+                            &company.name_zh,
+                            company.name_en.as_deref(),
+                            &company.ticker,
+                        );
+                        fire(mode, company.ticker, label);
+                    }
                     None => set_resolve_error.set(Some(format!(
                         "未能把「{query}」识别为可研究的公司，请换个更准确的名称或代码。"
                     ))),
@@ -1022,9 +1191,9 @@ pub fn ResearchPage(
                                 <span class="line-2">"让证据发声。"</span>
                             </h1>
                             <p class="echo-empty-sub">
-                                "以证据为核心，连接公告、财报、产业与市场信号，"
+                                "直接提问即可——现状、估值、风险、证伪条件；"
                                 <br />
-                                "帮助研究回归清晰判断。"
+                                "点到两家公司的问题会自动进入双主体对比。"
                             </p>
                         </div>
                     }.into_view()
@@ -1084,6 +1253,7 @@ pub fn ResearchPage(
                                         }.into_view()
                                     }
                                     TurnStatus::Done(response) => view! { <DoneCard res=response /> }.into_view(),
+                                    TurnStatus::CompareDone(response) => view! { <CompareCard res=*response /> }.into_view(),
                                     TurnStatus::Loaded(detail) => view! { <HistoryCard detail=detail /> }.into_view(),
                                     TurnStatus::ReportPending => view! { <ReportPendingCard /> }.into_view(),
                                     TurnStatus::ReportDone(response) => view! { <ReportCard res=response /> }.into_view(),
@@ -1095,10 +1265,13 @@ pub fn ResearchPage(
                                     }.into_view(),
                                 };
                                 view! {
-                                    // user bubble
+                                    // user bubble——问题为主体，研究对象作为小标签而不是拼接文本
                                     <div class="message user">
                                         <div class="bubble">
-                                            {question} " · " <strong>{ticker_label}</strong>
+                                            {(!ticker_label.is_empty()).then(|| view! {
+                                                <span class="bubble-ticker">{ticker_label.clone()}</span>
+                                            })}
+                                            <p class="bubble-text">{question}</p>
                                         </div>
                                     </div>
                                     // assistant card
@@ -1126,36 +1299,51 @@ pub fn ResearchPage(
                                 submit(SubmitMode::Ask);
                             }
                         }
-                        placeholder="研究一家美股 / 港股科技公司……"
+                        placeholder="想研究什么？现状、估值、护城河、风险、证伪条件……"
                         rows="2"
                     />
                     <div class="composer-footer">
                         <div class="company-picker">
-                            <input
-                                class="company-input"
-                                prop:value=company_query
-                                on:input=on_query_input
-                                on:keydown=move |ev| {
-                                    if ev.key() == "Enter" {
-                                        submit(SubmitMode::Ask);
-                                    } else if ev.key() == "Escape" && !candidates.get_untracked().is_empty() {
-                                        ev.stop_propagation();
-                                        set_candidates.set(Vec::new());
-                                    }
-                                }
-                                placeholder="研究对象，如 苹果 / AAPL / 9988.HK"
-                                disabled=resolving
-                                role="combobox"
-                                aria-expanded=move || !candidates.get().is_empty()
-                                aria-autocomplete="list"
-                            />
-                            {move || if resolving.get() {
-                                view! { <span class="company-status">"核实中…"</span> }.into_view()
-                            } else if resolved.get().is_some() {
-                                view! { <span class="company-status is-confirmed">"✓ 已确认"</span> }.into_view()
-                            } else {
-                                view! {}.into_view()
+                            {move || match resolved.get() {
+                                // 已确认研究对象——chip 常驻，追问免重填；点 × 更换公司。
+                                Some((_, label)) => view! {
+                                    <div class="company-chip">
+                                        <span class="company-chip-label">{label}</span>
+                                        <button
+                                            class="company-chip-clear"
+                                            title="更换研究对象"
+                                            aria-label="更换研究对象"
+                                            on:click=move |_| {
+                                                set_resolved.set(None);
+                                                set_company_query.set(String::new());
+                                            }
+                                        >"×"</button>
+                                    </div>
+                                }.into_view(),
+                                None => view! {
+                                    <input
+                                        class="company-input"
+                                        prop:value=company_query
+                                        on:input=on_query_input
+                                        on:keydown=move |ev| {
+                                            if ev.key() == "Enter" {
+                                                submit(SubmitMode::Ask);
+                                            } else if ev.key() == "Escape" && !candidates.get_untracked().is_empty() {
+                                                ev.stop_propagation();
+                                                set_candidates.set(Vec::new());
+                                            }
+                                        }
+                                        placeholder="研究对象（可留空，自动从问题识别）"
+                                        disabled=resolving
+                                        role="combobox"
+                                        aria-expanded=move || !candidates.get().is_empty()
+                                        aria-autocomplete="list"
+                                    />
+                                }.into_view(),
                             }}
+                            {move || resolving.get().then(|| view! {
+                                <span class="company-status">"核实中…"</span>
+                            })}
                             {move || {
                                 let items = candidates.get();
                                 if items.is_empty() {

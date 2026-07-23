@@ -11,9 +11,10 @@ use crate::model_gateway::{ModelStreamEvent, ModelStreamStart};
 use crate::{DecisionPanel, ResolvedCompany, build_panel};
 use echo_contracts::{
     AnswerSource, AskRequest, AskResponse, AssetStageView, CompareLegView, CompareResponse,
-    EarningsCalendarView, FilingView, GuardView, MethodBandView, ResearchStreamDelta,
-    ResearchStreamError, ResearchStreamEvent, ResearchStreamFinal, ResearchStreamGuard,
-    ResearchStreamMeta, ResearchStreamStage, ResearchStreamStageName, RouteView, ValuationView,
+    EarningsCalendarView, FilingView, GuardView, MethodBandView, ResearchStreamCompare,
+    ResearchStreamDelta, ResearchStreamError, ResearchStreamEvent, ResearchStreamFinal,
+    ResearchStreamGuard, ResearchStreamMeta, ResearchStreamStage, ResearchStreamStageName,
+    RouteView, ValuationView,
 };
 use echo_domain::{
     AssetStage, Company, EarningsCalendar, Filing, Financials, HistoricalValuation, MarketSnapshot,
@@ -387,6 +388,38 @@ impl ResearchService {
             },
             route,
         }
+    }
+
+    /// 对话内双主体对比的流式外壳：`stage(assembling)` → `compare`。对比本身无逐字流
+    /// （模型作答是单次调用），走与问答同一条 SSE 通道让 Web 复用 thread/取消/超时机制。
+    pub fn compare_stream<P>(
+        ports: P,
+        user_id: String,
+        question: String,
+        primary_ticker: String,
+        peer_ticker: String,
+    ) -> mpsc::Receiver<ResearchStreamEvent>
+    where
+        P: ResearchPorts + Send + Sync + 'static,
+    {
+        let (tx, rx) = mpsc::channel(8);
+        tokio::spawn(async move {
+            let _ = tx
+                .send(ResearchStreamEvent::Stage(ResearchStreamStage {
+                    name: ResearchStreamStageName::Assembling,
+                }))
+                .await;
+            let outcome =
+                Self::compare(&ports, &user_id, question, primary_ticker, peer_ticker).await;
+            let _ = tx
+                .send(ResearchStreamEvent::Compare(Box::new(
+                    ResearchStreamCompare {
+                        response: outcome.response,
+                    },
+                )))
+                .await;
+        });
+        rx
     }
 
     /// 类型化流式研究：事件顺序为 stage → meta → generating → delta* → verifying → guard →

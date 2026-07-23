@@ -59,7 +59,7 @@ use echo_db::{
 };
 use echo_domain::{
     EarningsCalendar, Filing, Financials, HistoricalValuation, MarketSnapshot, MultipleType,
-    PeerAnchor,
+    PeerAnchor, company_identity_key, has_compare_cue, match_company_mentions,
 };
 use futures_util::Stream;
 use std::convert::Infallible;
@@ -111,7 +111,7 @@ impl AppState {
             auth_disabled_user_id: "local".into(),
             secure_cookie: false,
             model_provider: None,
-            allowed_origins: vec!["http://localhost:5190".into()],
+            allowed_origins: vec!["http://localhost:5191".into()],
             ask_rate_limit_per_minute: 20,
         }
     }
@@ -1410,12 +1410,35 @@ impl ResearchPorts for ApiResearchPorts {
     }
 }
 
+/// 主体识别失败的统一诚实报错——绝不带着空 ticker 往下走（那会产出无事实的臆造面）。
+const UNRESOLVED_SUBJECT_MESSAGE: &str =
+    "未能从问题中识别出研究对象——请补充公司名称或代码（如 苹果 / AAPL / 0700.HK）。";
+
+/// 对话内自动对比：问题带对比语气、且点名了与主体不同的第二家公司时，返回对比腿候选。
+/// 纯规则识别；候选仍要走 `prepare_research_request` 验证/建档后才真正成腿。
+fn detect_compare_peer(primary_ticker: &str, question: &str) -> Option<String> {
+    if !has_compare_cue(question) {
+        return None;
+    }
+    let primary_key = company_identity_key(primary_ticker);
+    match_company_mentions(question)
+        .into_iter()
+        .map(|mention| mention.ticker)
+        .find(|ticker| company_identity_key(ticker) != primary_key)
+}
+
 async fn ask(
     State(state): State<AppState>,
     Extension(current_user): Extension<PublicUser>,
     Json(req): Json<AskRequest>,
-) -> Json<AskResponse> {
+) -> Result<Json<AskResponse>, ApiError> {
     let req = prepare_research_request(&state, req).await;
+    if req.ticker.trim().is_empty() {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            UNRESOLVED_SUBJECT_MESSAGE,
+        ));
+    }
     let ports = ApiResearchPorts {
         state: state.clone(),
     };
@@ -1423,7 +1446,7 @@ async fn ask(
     if !outcome.persisted && state.pool.is_some() {
         warn!(ticker = req.ticker, "研究会话落库失败，保留本轮响应");
     }
-    Json(outcome.response)
+    Ok(Json(outcome.response))
 }
 
 /// 双主体对比研究：`POST /api/compare` —— 两个 ticker 各自走同一条单公司解析/建档管线
@@ -1465,8 +1488,14 @@ async fn report_generate(
     State(state): State<AppState>,
     Extension(current_user): Extension<PublicUser>,
     Json(req): Json<AskRequest>,
-) -> Json<ReportGenerateResponse> {
+) -> Result<Json<ReportGenerateResponse>, ApiError> {
     let req = prepare_research_request(&state, req).await;
+    if req.ticker.trim().is_empty() {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            UNRESOLVED_SUBJECT_MESSAGE,
+        ));
+    }
     let ports = ApiResearchPorts {
         state: state.clone(),
     };
@@ -1474,19 +1503,61 @@ async fn report_generate(
     if !outcome.persisted && state.pool.is_some() {
         warn!(ticker = req.ticker, "深度报告会话落库失败，保留本轮响应");
     }
-    Json(outcome.response)
+    Ok(Json(outcome.response))
 }
 
 /// 流式作答：`POST /api/ask/stream` —— 类型化 SSE（meta/stage/delta/guard/final/error）；
 /// 仅在干净完成后跑护栏并落库，由 `final.persisted` 报告落库结果。
+/// 单事件 SSE 流——主体识别失败等一次性终态用。
+fn one_shot_stream(
+    event: echo_contracts::ResearchStreamEvent,
+) -> tokio::sync::mpsc::Receiver<echo_contracts::ResearchStreamEvent> {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(async move {
+        let _ = tx.send(event).await;
+    });
+    rx
+}
+
 async fn ask_stream(
     State(state): State<AppState>,
     Extension(current_user): Extension<PublicUser>,
     Json(req): Json<AskRequest>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let req = prepare_research_request(&state, req).await;
-    let ports = ApiResearchPorts { state };
-    let rx = ResearchService::ask_stream(ports, current_user.id, req);
+    let ports = ApiResearchPorts {
+        state: state.clone(),
+    };
+    let rx = if req.ticker.trim().is_empty() {
+        // 主体识别失败：诚实报错，绝不带空 ticker 起研究。
+        one_shot_stream(echo_contracts::ResearchStreamEvent::Error(
+            echo_contracts::ResearchStreamError {
+                message: UNRESOLVED_SUBJECT_MESSAGE.into(),
+            },
+        ))
+    } else if let Some(peer_candidate) = detect_compare_peer(&req.ticker, &req.question) {
+        // 对话内自动对比：对比腿走同一条验证/建档管线；验证失败或与主体同司则回落单主体。
+        let peer = prepare_research_request(
+            &state,
+            AskRequest::minimal(req.question.clone(), peer_candidate),
+        )
+        .await;
+        if !peer.ticker.trim().is_empty()
+            && company_identity_key(&peer.ticker) != company_identity_key(&req.ticker)
+        {
+            ResearchService::compare_stream(
+                ports,
+                current_user.id,
+                req.question.clone(),
+                req.ticker.clone(),
+                peer.ticker,
+            )
+        } else {
+            ResearchService::ask_stream(ports, current_user.id, req)
+        }
+    } else {
+        ResearchService::ask_stream(ports, current_user.id, req)
+    };
     let stream = ReceiverStream::new(rx).map(|event: ResearchStreamEvent| {
         let name = event.event_name();
         let data = serde_json::to_string(&event).unwrap_or_else(|_| {
@@ -1813,7 +1884,7 @@ mod tests {
                     .method("POST")
                     .uri("/api/ask")
                     .header("content-type", "application/json")
-                    .header("origin", "http://localhost:5190")
+                    .header("origin", "http://localhost:5191")
                     .body(Body::from(serde_json::to_vec(&request).expect("json")))
                     .expect("request"),
             )
@@ -1852,7 +1923,7 @@ mod tests {
             auth_disabled_user_id: "local".into(),
             secure_cookie: false,
             model_provider: None,
-            allowed_origins: vec!["http://localhost:5190".into()],
+            allowed_origins: vec!["http://localhost:5191".into()],
             ask_rate_limit_per_minute: 20,
         });
 

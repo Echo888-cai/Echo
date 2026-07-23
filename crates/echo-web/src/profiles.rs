@@ -64,7 +64,7 @@ fn decimal_text(value: Option<Decimal>) -> String {
 }
 
 #[component]
-pub fn ProfilesPage() -> impl IntoView {
+pub fn ProfilesSection() -> impl IntoView {
     let (selected, set_selected) = create_signal(None::<String>);
     let (new_ticker, set_new_ticker) = create_signal(String::new());
 
@@ -165,12 +165,8 @@ pub fn ProfilesPage() -> impl IntoView {
     };
 
     view! {
-        <header class="page-header">
-            <p class="eyebrow">"PROFILES / RESEARCH MEMORY"</p>
-            <h1>"公司档案"</h1>
-            <p>"长期研究记忆——论点、多空逻辑、监控项与证伪条件；手动编辑，估值字段由研究会话写入。"</p>
-        </header>
-        <main class="page-content profiles-page">
+        <section class="library-section profiles-page">
+            <p class="section-note">"长期研究记忆——论点、多空逻辑、监控项与证伪条件；手动编辑，估值字段由研究会话写入。"</p>
             <section class="inline-form">
                 <input
                     placeholder="新建档案，输入 Ticker"
@@ -328,6 +324,6 @@ pub fn ProfilesPage() -> impl IntoView {
                     }}
                 </div>
             </div>
-        </main>
+        </section>
     }
 }

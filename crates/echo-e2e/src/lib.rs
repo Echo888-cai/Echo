@@ -7,14 +7,13 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "需要运行中的 WebDriver(127.0.0.1:4444)、echo-api 与 trunk serve"]
-    async fn research_watch_portfolio_settings_core_flow() -> Result<(), Box<dyn std::error::Error>>
-    {
+    async fn research_library_settings_core_flow() -> Result<(), Box<dyn std::error::Error>> {
         let client = ClientBuilder::rustls()?
             .connect("http://127.0.0.1:4444")
             .await?;
         client.goto("http://127.0.0.1:5191/").await?;
         client
-            .find(Locator::Css("textarea[placeholder*='研究']"))
+            .find(Locator::Css("textarea[placeholder*='想研究什么']"))
             .await?
             .send_keys("AAPL 的估值判断")
             .await?;
@@ -29,8 +28,10 @@ mod tests {
             .click()
             .await?;
         client.find(Locator::Css(".answer-card")).await?;
+        // 发送后研究对象保持确认态（chip 常驻），追问不需要重填公司。
+        client.find(Locator::Css(".company-chip")).await?;
         client
-            .find(Locator::XPath("//button[normalize-space()='自选']"))
+            .find(Locator::XPath("//button[normalize-space()='资料库']"))
             .await?
             .click()
             .await?;

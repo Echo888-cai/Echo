@@ -30,6 +30,9 @@ impl HealthResponse {
 #[serde(deny_unknown_fields)]
 pub struct AskRequest {
     pub question: String,
+    /// 研究主体代码。可省略/留空——服务端会从问题文本走公司解析链识别主体；
+    /// 识别失败时诚实报错，不猜。
+    #[serde(default)]
     pub ticker: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name_zh: Option<String>,
@@ -228,6 +231,7 @@ pub enum ResearchStreamEvent {
     Delta(ResearchStreamDelta),
     Guard(ResearchStreamGuard),
     Final(ResearchStreamFinal),
+    Compare(Box<ResearchStreamCompare>),
     Error(ResearchStreamError),
 }
 
@@ -241,6 +245,7 @@ impl ResearchStreamEvent {
             Self::Delta(_) => "delta",
             Self::Guard(_) => "guard",
             Self::Final(_) => "final",
+            Self::Compare(_) => "compare",
             Self::Error(_) => "error",
         }
     }
@@ -291,6 +296,14 @@ pub struct ResearchStreamGuard {
 pub struct ResearchStreamFinal {
     pub response: AskResponse,
     pub persisted: bool,
+}
+
+/// 对话内双主体对比完成事件——两腿独立取数/独立护栏的结果一次性到达
+/// （对比无逐字流，模型作答是单次调用）。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchStreamCompare {
+    pub response: CompareResponse,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

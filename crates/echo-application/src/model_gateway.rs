@@ -146,7 +146,9 @@ fn parse_sse_line(line: &str) -> SseFrame {
     let Ok(json) = serde_json::from_str::<serde_json::Value>(data) else {
         return SseFrame::Ignore;
     };
-    if json.get("usage").is_some() {
+    // DeepSeek 的每个增量帧都带 `"usage": null`，只有真 usage 对象才算 usage 帧——
+    // 拿 `is_some()` 判会把全部 delta 吞成 usage（真 E2E 查出：正文一字不到前端）。
+    if json.get("usage").is_some_and(|u| !u.is_null()) {
         let (i, o) = usage_from_response(&json);
         return SseFrame::Usage(i, o);
     }
@@ -599,6 +601,14 @@ mod tests {
     fn sse_usage_frame_extracted() {
         let line = r#"data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":20}}"#;
         assert_eq!(parse_sse_line(line), SseFrame::Usage(Some(10), Some(20)));
+    }
+
+    #[test]
+    fn sse_delta_with_null_usage_is_still_delta() {
+        // DeepSeek 真实帧形状：开 include_usage 后每个增量帧都带 "usage": null，
+        // 内容帧还并排一个 "reasoning_content": null——都不能把 delta 吞成 usage 帧。
+        let line = r#"data: {"choices":[{"index":0,"delta":{"content":"苹果","reasoning_content":null},"finish_reason":null}],"usage":null}"#;
+        assert_eq!(parse_sse_line(line), SseFrame::Delta("苹果".to_string()));
     }
 
     #[test]

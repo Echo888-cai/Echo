@@ -7,8 +7,8 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 const DEFAULT_API_PORT: u16 = 4180;
 const DEFAULT_DB_CONNECTIONS: u32 = 5;
 /// Trunk 开发代理默认来源（`crates/echo-web/Trunk.toml` 把 `/api` 代到 4180，浏览器侧 Origin
-/// 仍是 5190）；生产部署必须显式设置 `ECHO_ALLOWED_ORIGINS` 覆盖。
-const DEFAULT_ALLOWED_ORIGIN: &str = "http://localhost:5190";
+/// 仍是 5191）；生产部署必须显式设置 `ECHO_ALLOWED_ORIGINS` 覆盖。
+const DEFAULT_ALLOWED_ORIGIN: &str = "http://localhost:5191";
 const DEFAULT_ASK_RATE_LIMIT_PER_MINUTE: u32 = 20;
 
 /// 外部数据源配置。所有密钥只在进程组合根读取，再显式注入数据层。
@@ -361,7 +361,7 @@ mod tests {
         assert_eq!(config.max_connections, 5);
         assert!(!config.auth_disabled);
         assert!(!config.secure_cookie);
-        assert_eq!(config.allowed_origins, vec!["http://localhost:5190"]);
+        assert_eq!(config.allowed_origins, vec!["http://localhost:5191"]);
         assert_eq!(config.ask_rate_limit_per_minute, 20);
     }
 
