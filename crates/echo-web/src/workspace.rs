@@ -1,48 +1,79 @@
-use crate::{api, research::ResearchPage};
+use crate::{api, profiles::ProfilesSection, research::ResearchPage};
 use echo_contracts::{
     AuthLoginRequest, AuthLogoutResponse, AuthRegisterRequest, AuthUserResponse,
-    ChangedCountResponse, Decimal, MutationResponse, NotificationReadRequest,
+    ChangedCountResponse, Decimal, DeskResponse, MutationResponse, NotificationReadRequest,
     NotificationsListResponse, PortfolioListResponse, PortfolioUpsertRequest, PreferencesResponse,
     PreferencesUpdateRequest, PublicUser, UnreadResponse, WatchListResponse, WatchMutationRequest,
+    WatchRuleCreateRequest,
 };
 use leptos::*;
 
+/// 资料库内的三个切面——同一批公司的自选监控、持仓与研究档案。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Page {
-    Research,
+enum LibraryTab {
     Watch,
     Portfolio,
+    Profiles,
+}
+
+impl LibraryTab {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Watch => "自选与监控",
+            Self::Portfolio => "持仓",
+            Self::Profiles => "研究档案",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Page {
+    /// 研究页——可选携带会话 id，对应深链 `/research/:session_id`。
+    Research(Option<String>),
+    Library(LibraryTab),
     Settings,
 }
 
 impl Page {
     #[cfg(target_arch = "wasm32")]
-    const fn path(self) -> &'static str {
+    fn path(&self) -> String {
         match self {
-            Self::Research => "/research",
-            Self::Watch => "/watch",
-            Self::Portfolio => "/portfolio",
-            Self::Settings => "/settings",
+            Self::Research(None) => "/research".to_string(),
+            Self::Research(Some(id)) => format!("/research/{id}"),
+            Self::Library(LibraryTab::Watch) => "/library".to_string(),
+            Self::Library(LibraryTab::Portfolio) => "/library/portfolio".to_string(),
+            Self::Library(LibraryTab::Profiles) => "/library/profiles".to_string(),
+            Self::Settings => "/settings".to_string(),
         }
     }
 
-    const fn label(self) -> &'static str {
+    const fn label(&self) -> &'static str {
         match self {
-            Self::Research => "研究",
-            Self::Watch => "自选",
-            Self::Portfolio => "持仓",
+            Self::Research(_) => "研究",
+            Self::Library(_) => "资料库",
             Self::Settings => "设置",
         }
+    }
+
+    /// 导航栏高亮只看落在哪个 tab，不看研究页携带的具体会话 id / 资料库切面。
+    fn same_tab(&self, other: &Page) -> bool {
+        std::mem::discriminant(self) == std::mem::discriminant(other)
     }
 }
 
 #[cfg(target_arch = "wasm32")]
 fn page_from_path(path: &str) -> Page {
+    if let Some(rest) = path.strip_prefix("/research/") {
+        let id = rest.trim_matches('/');
+        return Page::Research((!id.is_empty()).then(|| id.to_string()));
+    }
     match path {
-        "/watch" => Page::Watch,
-        "/portfolio" => Page::Portfolio,
+        // 旧的独立页面路径一并归位到资料库对应切面，深链/书签不失效。
+        "/library" | "/watch" => Page::Library(LibraryTab::Watch),
+        "/library/portfolio" | "/portfolio" => Page::Library(LibraryTab::Portfolio),
+        "/library/profiles" | "/profiles" => Page::Library(LibraryTab::Profiles),
         "/settings" => Page::Settings,
-        _ => Page::Research,
+        _ => Page::Research(None),
     }
 }
 
@@ -53,14 +84,16 @@ fn initial_page() -> Page {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn initial_page() -> Page {
-    Page::Research
+    Page::Research(None)
 }
 
 fn navigate(set_page: WriteSignal<Page>, page: Page) {
+    #[cfg(target_arch = "wasm32")]
+    let path = page.path();
     set_page.set(page);
     #[cfg(target_arch = "wasm32")]
     if let Ok(history) = leptos::window().history() {
-        let _ = history.push_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(page.path()));
+        let _ = history.push_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&path));
     }
 }
 
@@ -94,11 +127,14 @@ pub fn Workspace(user: PublicUser, on_auth_changed: Callback<()>) -> impl IntoVi
         .display_name
         .clone()
         .unwrap_or_else(|| user.username.clone());
+    let on_research_navigate = Callback::new(move |session_id: Option<String>| {
+        navigate(set_page, Page::Research(session_id))
+    });
 
     view! {
         <div class="app-shell">
             <header class="echo-topbar workspace-topbar">
-                <button class="echo-brand brand-button" on:click=move |_| navigate(set_page, Page::Research)>
+                <button class="echo-brand brand-button" on:click=move |_| navigate(set_page, Page::Research(None))>
                     <div class="echo-brand-mark">
                         <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
                             <path d="M6 26 L16 6 L26 26" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -109,13 +145,17 @@ pub fn Workspace(user: PublicUser, on_auth_changed: Callback<()>) -> impl IntoVi
                     <span class="echo-brand-sub">"Research"</span>
                 </button>
                 <nav class="workspace-nav" aria-label="主导航">
-                    {[Page::Research, Page::Watch, Page::Portfolio, Page::Settings]
+                    {[Page::Research(None), Page::Library(LibraryTab::Watch), Page::Settings]
                         .into_iter()
-                        .map(|item| view! {
-                            <button
-                                class=move || if page.get() == item { "nav-item is-active" } else { "nav-item" }
-                                on:click=move |_| navigate(set_page, item)
-                            >{item.label()}</button>
+                        .map(|item| {
+                            let item_for_class = item.clone();
+                            let item_for_click = item.clone();
+                            view! {
+                                <button
+                                    class=move || if page.get().same_tab(&item_for_class) { "nav-item is-active" } else { "nav-item" }
+                                    on:click=move |_| navigate(set_page, item_for_click.clone())
+                                >{item.label()}</button>
+                            }
                         })
                         .collect_view()}
                 </nav>
@@ -127,9 +167,16 @@ pub fn Workspace(user: PublicUser, on_auth_changed: Callback<()>) -> impl IntoVi
             </header>
             <section class="workspace-stage">
                 {move || match page.get() {
-                    Page::Research => view! { <ResearchPage /> }.into_view(),
-                    Page::Watch => view! { <WatchPage on_research=Callback::new(move |_| navigate(set_page, Page::Research)) /> }.into_view(),
-                    Page::Portfolio => view! { <PortfolioPage /> }.into_view(),
+                    Page::Research(session_id) => view! {
+                        <ResearchPage initial_session=session_id on_navigate=on_research_navigate />
+                    }.into_view(),
+                    Page::Library(tab) => view! {
+                        <LibraryPage
+                            tab=tab
+                            on_tab=Callback::new(move |tab| navigate(set_page, Page::Library(tab)))
+                            on_research=Callback::new(move |_| navigate(set_page, Page::Research(None)))
+                        />
+                    }.into_view(),
                     Page::Settings => view! { <SettingsPage /> }.into_view(),
                 }}
             </section>
@@ -198,7 +245,7 @@ pub fn LoginPage(on_authenticated: Callback<()>) -> impl IntoView {
     view! {
         <main class="auth-page">
             <section class="auth-story">
-                <p class="eyebrow">"ECHO / EVIDENCE FIRST"</p>
+                <p class="auth-brand-line">"Echo Research"</p>
                 <h1>"让噪音退场，"<br/><em>"让证据发声。"</em></h1>
                 <p>"面向美股与港股科技公司的研究工作台。事实、估值、证伪与复盘，归到同一条证据链。"</p>
             </section>
@@ -251,7 +298,10 @@ fn NotificationsPanel() -> impl IntoView {
     view! {
         <div class="notification-center">
             <button class="notification-button" aria-label="通知" on:click=move |_| set_open.update(|value| *value = !*value)>
-                "◌"
+                <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <path d="M10 3a4.6 4.6 0 0 0-4.6 4.6c0 3.1-.9 4.2-1.6 5a.55.55 0 0 0 .42.9h11.56a.55.55 0 0 0 .42-.9c-.7-.8-1.6-1.9-1.6-5A4.6 4.6 0 0 0 10 3Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+                    <path d="M8.4 16.2a1.7 1.7 0 0 0 3.2 0" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                </svg>
                 {move || unread.get().and_then(Result::ok).filter(|value| value.unread > 0).map(|value| view! { <span>{value.unread}</span> })}
             </button>
             {move || open.get().then(|| view! {
@@ -273,6 +323,38 @@ fn NotificationsPanel() -> impl IntoView {
     }
 }
 
+/// 资料库页——自选/持仓/档案三个切面的统一容器，Apple 风分段控件切换。
+#[component]
+fn LibraryPage(
+    tab: LibraryTab,
+    on_tab: Callback<LibraryTab>,
+    on_research: Callback<()>,
+) -> impl IntoView {
+    view! {
+        <PageHeader title="资料库" detail="自选、持仓与研究档案——同一批公司的三个切面。" />
+        <main class="page-content">
+            <div class="segmented" role="tablist" aria-label="资料库切面">
+                {[LibraryTab::Watch, LibraryTab::Portfolio, LibraryTab::Profiles]
+                    .into_iter()
+                    .map(|item| view! {
+                        <button
+                            class=if item == tab { "segmented-item is-active" } else { "segmented-item" }
+                            role="tab"
+                            aria-selected=if item == tab { "true" } else { "false" }
+                            on:click=move |_| on_tab.call(item)
+                        >{item.label()}</button>
+                    })
+                    .collect_view()}
+            </div>
+            {match tab {
+                LibraryTab::Watch => view! { <WatchSection on_research=on_research /> }.into_view(),
+                LibraryTab::Portfolio => view! { <PortfolioSection /> }.into_view(),
+                LibraryTab::Profiles => view! { <ProfilesSection /> }.into_view(),
+            }}
+        </main>
+    }
+}
+
 #[derive(Clone)]
 struct WatchAction {
     track: bool,
@@ -281,7 +363,7 @@ struct WatchAction {
 }
 
 #[component]
-fn WatchPage(on_research: Callback<()>) -> impl IntoView {
+fn WatchSection(on_research: Callback<()>) -> impl IntoView {
     let (ticker, set_ticker) = create_signal(String::new());
     let (company_name, set_company_name) = create_signal(String::new());
     let entries = create_resource(|| (), |_| api::get::<WatchListResponse>("/api/watch/list"));
@@ -308,8 +390,7 @@ fn WatchPage(on_research: Callback<()>) -> impl IntoView {
         }
     });
     view! {
-        <PageHeader eyebrow="WATCH / SIGNALS" title="自选与证据监控" detail="只保留你主动关注的对象；隐藏不是删除历史。" />
-        <main class="page-content">
+        <section class="library-section">
             <section class="inline-form">
                 <input placeholder="Ticker，如 AAPL / 0700.HK" prop:value=ticker on:input=move |event| set_ticker.set(event_target_value(&event).to_uppercase()) />
                 <input placeholder="公司名称（可选）" prop:value=company_name on:input=move |event| set_company_name.set(event_target_value(&event)) />
@@ -343,16 +424,183 @@ fn WatchPage(on_research: Callback<()>) -> impl IntoView {
                     }.into_view() }
                 },
             }}
-        </main>
+            <RulesDeskSection />
+        </section>
+    }
+}
+
+/// 规则种类的用户可读标签——列表里不给用户看 `price_below` 这类内部代码。
+fn rule_kind_label(kind: &str) -> &str {
+    match kind {
+        "price_below" => "现价 ≤ 阈值",
+        "price_above" => "现价 ≥ 阈值",
+        "fundamental_below" => "基本面 ≤ 阈值",
+        "fundamental_above" => "基本面 ≥ 阈值",
+        "valuation_percentile_below" => "估值分位 ≤ 阈值",
+        "valuation_percentile_above" => "估值分位 ≥ 阈值",
+        "event_earnings" => "有新业绩事实",
+        other => other,
+    }
+}
+
+/// 监控规则 + 台面：新增/删除 `watch_rules`，聚合展示已跟踪 ticker 的行情、挂载的规则与
+/// 近期触发通知——只读聚合，不新增写路径（写路径就是下面的新增/删除规则表单）。
+#[component]
+fn RulesDeskSection() -> impl IntoView {
+    const KIND_OPTIONS: &[(&str, &str)] = &[
+        ("price_below", "现价 ≤ 阈值"),
+        ("price_above", "现价 ≥ 阈值"),
+        ("fundamental_below", "基本面指标 ≤ 阈值"),
+        ("fundamental_above", "基本面指标 ≥ 阈值"),
+        (
+            "valuation_percentile_below",
+            "历史估值分位 ≤ 阈值（仅美股）",
+        ),
+        (
+            "valuation_percentile_above",
+            "历史估值分位 ≥ 阈值（仅美股）",
+        ),
+        ("event_earnings", "有新业绩事实（无需阈值）"),
+    ];
+
+    let (rule_ticker, set_rule_ticker) = create_signal(String::new());
+    let (rule_kind, set_rule_kind) = create_signal("price_below".to_string());
+    let (rule_threshold, set_rule_threshold) = create_signal(String::new());
+    let (rule_metric, set_rule_metric) = create_signal(String::new());
+    let (rule_label, set_rule_label) = create_signal(String::new());
+    let (form_error, set_form_error) = create_signal(None::<String>);
+
+    let desk = create_resource(|| (), |_| api::get::<DeskResponse>("/api/watch/desk"));
+    let create_rule = create_action(|input: &WatchRuleCreateRequest| {
+        let input = input.clone();
+        async move { api::post::<_, echo_contracts::WatchRule>("/api/watch/rules", &input).await }
+    });
+    let delete_rule = create_action(|id: &i64| {
+        let path = format!("/api/watch/rules?id={id}");
+        async move { api::delete::<MutationResponse>(&path).await }
+    });
+    create_effect(move |_| {
+        if matches!(create_rule.value().get(), Some(Ok(_))) {
+            desk.refetch();
+            set_rule_threshold.set(String::new());
+            set_rule_metric.set(String::new());
+            set_rule_label.set(String::new());
+        }
+    });
+    create_effect(move |_| {
+        if matches!(delete_rule.value().get(), Some(Ok(_))) {
+            desk.refetch();
+        }
+    });
+
+    let submit = move || {
+        let ticker = rule_ticker.get().trim().to_uppercase();
+        if ticker.is_empty() {
+            set_form_error.set(Some("请填写 ticker".into()));
+            return;
+        }
+        let kind = rule_kind.get();
+        let needs_threshold = kind != "event_earnings";
+        let threshold = if needs_threshold {
+            match rule_threshold.get().trim().parse::<Decimal>() {
+                Ok(value) => Some(value),
+                Err(_) => {
+                    set_form_error.set(Some("阈值必须是有效数字".into()));
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        let needs_metric = kind == "fundamental_below" || kind == "fundamental_above";
+        if needs_metric && rule_metric.get().trim().is_empty() {
+            set_form_error.set(Some("该规则种类需要填写 metric".into()));
+            return;
+        }
+        set_form_error.set(None);
+        create_rule.dispatch(WatchRuleCreateRequest {
+            ticker,
+            kind,
+            threshold,
+            metric: (!rule_metric.get().trim().is_empty()).then(|| rule_metric.get()),
+            label: (!rule_label.get().trim().is_empty()).then(|| rule_label.get()),
+        });
+    };
+
+    view! {
+        <section class="rules-desk">
+            <h2>"监控规则 / 台面"</h2>
+            <section class="inline-form">
+                <input placeholder="Ticker" prop:value=rule_ticker on:input=move |event| set_rule_ticker.set(event_target_value(&event).to_uppercase()) />
+                <select on:change=move |event| set_rule_kind.set(event_target_value(&event))>
+                    {KIND_OPTIONS.iter().map(|(value, label)| view! {
+                        <option value=*value selected=move || rule_kind.get() == *value>{*label}</option>
+                    }).collect_view()}
+                </select>
+                <input placeholder="阈值" inputmode="decimal" prop:value=rule_threshold on:input=move |event| set_rule_threshold.set(event_target_value(&event)) />
+                <input placeholder="metric（基本面规则必填，如 gross_margin）" prop:value=rule_metric on:input=move |event| set_rule_metric.set(event_target_value(&event)) />
+                <input placeholder="说明（可选）" prop:value=rule_label on:input=move |event| set_rule_label.set(event_target_value(&event)) />
+                <button class="primary-button compact" on:click=move |_| submit()>"新增规则"</button>
+            </section>
+            {move || form_error.get().map(|error| view! { <p class="form-error">{error}</p> })}
+            {move || create_rule.value().get().and_then(Result::err).map(|error| view! { <p class="form-error">{error}</p> })}
+            {move || match desk.get() {
+                None => loading_view(),
+                Some(Err(error)) => error_view(error),
+                Some(Ok(data)) if data.tickers.is_empty() => empty_view("还没有跟踪任何 ticker。"),
+                Some(Ok(data)) => view! {
+                    <div class="card-grid">
+                        {data.tickers.into_iter().map(|item| {
+                            view! { <article class="workspace-card">
+                                <p class="eyebrow">{item.ticker.clone()}</p>
+                                <h3>{item.company_name.unwrap_or_else(|| item.ticker.clone())}</h3>
+                                <p class="muted">
+                                    {"现价 "}{decimal_text(item.price)}
+                                    {"，涨跌 "}{decimal_text(item.change_percent)}{"%"}
+                                </p>
+                                {if item.rules.is_empty() {
+                                    view! { <p class="muted">"未挂监控规则"</p> }.into_view()
+                                } else {
+                                    item.rules.into_iter().map(|rule| {
+                                        let rule_id = rule.id;
+                                        view! {
+                                            <div class="rule-row">
+                                                <span>{rule_kind_label(&rule.kind).to_string()}</span>
+                                                <span>{rule.threshold.to_string()}</span>
+                                                <span>{rule.label.unwrap_or_default()}</span>
+                                                <button class="danger-link" on:click=move |_| delete_rule.dispatch(rule_id)>"删除"</button>
+                                            </div>
+                                        }
+                                    }).collect_view().into_view()
+                                }}
+                            </article> }
+                        }).collect_view()}
+                    </div>
+                }.into_view(),
+            }}
+            <h3>"近期触发"</h3>
+            {move || match desk.get() {
+                None => loading_view(),
+                Some(Err(error)) => error_view(error),
+                Some(Ok(data)) if data.recent_triggers.is_empty() => empty_view("暂无触发记录。"),
+                Some(Ok(data)) => data.recent_triggers.into_iter().map(|item| view! {
+                    <article class="notice">
+                        <strong>{item.title}</strong><p>{item.body}</p><time>{item.created_at}</time>
+                    </article>
+                }).collect_view().into_view(),
+            }}
+        </section>
     }
 }
 
 #[component]
-fn PortfolioPage() -> impl IntoView {
+fn PortfolioSection() -> impl IntoView {
     let (ticker, set_ticker) = create_signal(String::new());
     let (company_name, set_company_name) = create_signal(String::new());
     let (shares, set_shares) = create_signal(String::new());
     let (avg_cost, set_avg_cost) = create_signal(String::new());
+    let (stop_loss, set_stop_loss) = create_signal(String::new());
+    let (take_profit, set_take_profit) = create_signal(String::new());
     let (form_error, set_form_error) = create_signal(None::<String>);
     let positions = create_resource(
         || (),
@@ -375,8 +623,19 @@ fn PortfolioPage() -> impl IntoView {
     let submit = move || {
         let parsed_shares = shares.get().parse::<Decimal>();
         let parsed_cost = avg_cost.get().parse::<Decimal>();
-        match (parsed_shares, parsed_cost) {
-            (Ok(shares), Ok(avg_cost)) => {
+        // 止损/止盈可选——留空即不设，但填了就必须是有效数字，不能静默丢弃。
+        let parse_optional = |text: String| -> Result<Option<Decimal>, ()> {
+            let trimmed = text.trim().to_string();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                trimmed.parse::<Decimal>().map(Some).map_err(|_| ())
+            }
+        };
+        let parsed_stop = parse_optional(stop_loss.get());
+        let parsed_take = parse_optional(take_profit.get());
+        match (parsed_shares, parsed_cost, parsed_stop, parsed_take) {
+            (Ok(shares), Ok(avg_cost), Ok(stop_loss), Ok(take_profit)) => {
                 set_form_error.set(None);
                 save.dispatch(PortfolioUpsertRequest {
                     ticker: ticker.get().trim().to_uppercase(),
@@ -384,22 +643,23 @@ fn PortfolioPage() -> impl IntoView {
                         .then(|| company_name.get()),
                     shares,
                     avg_cost,
-                    stop_loss: None,
-                    take_profit: None,
+                    stop_loss,
+                    take_profit,
                     note: String::new(),
                 });
             }
-            _ => set_form_error.set(Some("股数和成本必须是有效数字".into())),
+            _ => set_form_error.set(Some("股数、成本与风控线必须是有效数字".into())),
         }
     };
     view! {
-        <PageHeader eyebrow="PORTFOLIO / EXACT DECIMAL" title="持仓与成本" detail="股数、成本和盈亏全程使用十进制定点，不用二进制浮点。" />
-        <main class="page-content">
+        <section class="library-section">
             <section class="portfolio-form inline-form">
                 <input placeholder="Ticker" prop:value=ticker on:input=move |event| set_ticker.set(event_target_value(&event).to_uppercase()) />
                 <input placeholder="公司名称" prop:value=company_name on:input=move |event| set_company_name.set(event_target_value(&event)) />
                 <input placeholder="股数" inputmode="decimal" prop:value=shares on:input=move |event| set_shares.set(event_target_value(&event)) />
                 <input placeholder="平均成本" inputmode="decimal" prop:value=avg_cost on:input=move |event| set_avg_cost.set(event_target_value(&event)) />
+                <input placeholder="止损（可选）" inputmode="decimal" prop:value=stop_loss on:input=move |event| set_stop_loss.set(event_target_value(&event)) />
+                <input placeholder="止盈（可选）" inputmode="decimal" prop:value=take_profit on:input=move |event| set_take_profit.set(event_target_value(&event)) />
                 <button class="primary-button compact" on:click=move |_| submit()>"保存持仓"</button>
             </section>
             {move || form_error.get().map(|error| view! { <p class="form-error">{error}</p> })}
@@ -422,7 +682,7 @@ fn PortfolioPage() -> impl IntoView {
                     }).collect_view()}
                 </div> }.into_view(),
             }}
-        </main>
+        </section>
     }
 }
 
@@ -461,7 +721,7 @@ fn SettingsPage() -> impl IntoView {
         async move { api::patch::<_, PreferencesResponse>("/api/preferences", &input).await }
     });
     view! {
-        <PageHeader eyebrow="SETTINGS / SIGNAL HYGIENE" title="通知与免打扰" detail="开关在通知写入咽喉生效，后台作业无法绕过。" />
+        <PageHeader title="通知与免打扰" detail="开关在通知写入咽喉生效，后台作业无法绕过。" />
         <main class="page-content settings-grid">
             <section class="settings-card">
                 <h2>"通知类型"</h2>
@@ -511,8 +771,8 @@ fn Toggle(
 }
 
 #[component]
-fn PageHeader(eyebrow: &'static str, title: &'static str, detail: &'static str) -> impl IntoView {
-    view! { <header class="page-header"><p class="eyebrow">{eyebrow}</p><h1>{title}</h1><p>{detail}</p></header> }
+fn PageHeader(title: &'static str, detail: &'static str) -> impl IntoView {
+    view! { <header class="page-header"><h1>{title}</h1><p>{detail}</p></header> }
 }
 
 fn decimal_text(value: Option<Decimal>) -> String {

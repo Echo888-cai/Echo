@@ -14,10 +14,12 @@ pub mod derivations;
 pub mod fact_guard;
 pub mod intent;
 pub mod valuation;
+pub mod watch_rules;
 
 pub use company_aliases::{
-    CompanyAlias, HK_COMPANY_ALIASES, HK_US_LINKS, HkUsLink, HkUsLinkKind, US_COMPANY_ALIASES,
-    adr_for_hk, dual_listing_by_name, dual_listing_by_ticker, dual_listings, match_hk_alias,
+    CompanyAlias, CompanyMention, HK_COMPANY_ALIASES, HK_US_LINKS, HkUsLink, HkUsLinkKind,
+    US_COMPANY_ALIASES, adr_for_hk, company_identity_key, dual_listing_by_name,
+    dual_listing_by_ticker, dual_listings, has_compare_cue, match_company_mentions, match_hk_alias,
     match_us_alias,
 };
 pub use company_identity::{
@@ -33,7 +35,8 @@ pub use intent::{
     route_research_intent,
 };
 pub use valuation::{
-    AssetStage, Company, Financials, HistoricalValuation, HkBuyback, InsiderActivity,
-    MarketSnapshot, MethodBand, MultipleType, PeerAnchor, Valuation, classify_asset_stage,
-    compute_valuation, display_valuation,
+    AssetStage, Company, EarningsCalendar, Filing, Financials, HistoricalValuation, HkBuyback,
+    InsiderActivity, MarketSnapshot, MethodBand, MultipleType, PeerAnchor, Valuation,
+    classify_asset_stage, compute_valuation, display_valuation,
 };
+pub use watch_rules::RuleKind;

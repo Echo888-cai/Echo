@@ -6,7 +6,8 @@
 //! 全是纯函数（事实进、字符串出），不碰网络/时钟，可离线单测每条红线分支。
 
 use crate::DecisionPanel;
-use echo_domain::{Financials, MarketSnapshot};
+use crate::research::PriorTurn;
+use echo_domain::{Filing, Financials, MarketSnapshot};
 use rust_decimal::Decimal;
 
 /// 作答上下文——本请求这一家公司的全部已核事实（单一主体，无跨公司泄漏面）。
@@ -16,6 +17,9 @@ pub struct AnswerContext<'a> {
     pub panel: &'a DecisionPanel,
     pub market: &'a MarketSnapshot,
     pub financials: &'a Financials,
+    pub filings: &'a [Filing],
+    /// 同一研究会话此前几轮的问答——只帮模型承接代词/实体指代，不得当作本轮数字来源。
+    pub history: &'a [PriorTurn],
 }
 
 /// 固定的 system 红线——研究助手人设 + 不可逾越的护栏。与 composer 的 system 段同义：
@@ -32,8 +36,18 @@ pub fn build_system_prompt() -> String {
     .join("\n")
 }
 
+/// 按字符边界截断（多字节安全），超长追加省略号提示这是摘要而非全文。
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max).collect();
+    out.push('…');
+    out
+}
+
 /// 把一个可选定点数渲染成事实行的值；缺就「未核到」。
-fn field(value: Option<Decimal>, unit: &str) -> String {
+pub(crate) fn field(value: Option<Decimal>, unit: &str) -> String {
     match value {
         Some(v) => format!("{v}{unit}"),
         None => "未核到".to_string(),
@@ -41,7 +55,7 @@ fn field(value: Option<Decimal>, unit: &str) -> String {
 }
 
 /// 估值区间事实行——给不出可信带子（`cannot_value_reason`）时如实说未核到，绝不硬凑数字。
-fn valuation_line(panel: &DecisionPanel) -> String {
+pub(crate) fn valuation_line(panel: &DecisionPanel) -> String {
     let v = &panel.valuation;
     if !v.is_valued() {
         let reason = v.cannot_value_reason.as_deref().unwrap_or("数据不足");
@@ -62,11 +76,34 @@ fn valuation_line(panel: &DecisionPanel) -> String {
 #[must_use]
 pub fn build_user_prompt(ctx: &AnswerContext) -> String {
     let name = ctx.name_zh.unwrap_or(&ctx.panel.ticker);
-    let has_live_fin = ctx.financials.provider_ok;
 
     let mut out = String::new();
     out.push_str(&format!("研究对象：{name}（{}）\n", ctx.panel.ticker));
+
+    if !ctx.history.is_empty() {
+        out.push_str(
+            "\n== 本次会话此前几轮问答（仅供理解代词/实体指代，不得引用其中任何数字作为本轮核对依据——本轮所有数字以下方事实块为准）==\n",
+        );
+        let recent = ctx.history.iter().rev().take(3).collect::<Vec<_>>();
+        for turn in recent.into_iter().rev() {
+            out.push_str(&format!(
+                "用户问：{}\n上轮作答摘要：{}\n\n",
+                turn.question,
+                truncate_chars(&turn.answer, 300)
+            ));
+        }
+    }
+
     out.push_str(&format!("用户问题：{}\n\n", ctx.question));
+    out.push_str(&facts_block(ctx));
+    out
+}
+
+/// 单公司「已核到的事实」块——`build_user_prompt` 与深度报告提示词（`report.rs`）共用同一份
+/// 事实格式化，确保报告引用的数字与聊天回答核对同一份 `FactsRegistry`，不会各拼一套口径。
+pub(crate) fn facts_block(ctx: &AnswerContext) -> String {
+    let has_live_fin = ctx.financials.provider_ok;
+    let mut out = String::new();
 
     out.push_str("== 已核到的事实（只用这些数字）==\n");
     out.push_str(&format!("现价：{}\n", field(ctx.market.price, "")));
@@ -112,6 +149,81 @@ pub fn build_user_prompt(ctx: &AnswerContext) -> String {
              风险并说明置信度下降；要数字就明说「需核最新财报」。",
         );
     }
+
+    if let Some(hv) = &ctx.financials.historical_valuation {
+        out.push_str("\n\n== 已核到的历史估值分位（近5年月度PE，仅美股）==\n");
+        out.push_str(&format!("当前分位：{}\n", field(hv.percentile, "%")));
+        out.push_str(&format!(
+            "历史区间：{} ~ {}（中位 {}）\n",
+            field(hv.min, "x"),
+            field(hv.max, "x"),
+            field(hv.median, "x")
+        ));
+    }
+
+    if !ctx.filings.is_empty() {
+        out.push_str("\n\n== 已核到的最新公司公告（SEC filings，可引用表单类型与日期）==\n");
+        for filing in ctx.filings {
+            let date = filing.filed_date.as_deref().unwrap_or("未核到日期");
+            out.push_str(&format!(
+                "{} · {date} · {}\n",
+                filing.form, filing.source_url
+            ));
+        }
+    }
+    out
+}
+
+/// 对比研究一腿的事实——与 [`AnswerContext`] 同源，但刻意不含 `history`：两家公司各自
+/// 独立取数，任何一方都不该被历史问答里提到的第三方数字污染。
+pub struct CompareLegContext<'a> {
+    pub name_zh: Option<&'a str>,
+    pub panel: &'a DecisionPanel,
+    pub market: &'a MarketSnapshot,
+    pub financials: &'a Financials,
+}
+
+/// 单腿事实块——与 `build_user_prompt` 里的"已核到的事实"段落同构，供对比 prompt 各标一份。
+fn leg_facts_block(label: &str, ctx: &CompareLegContext) -> String {
+    let name = ctx.name_zh.unwrap_or(&ctx.panel.ticker);
+    let mut out = format!("=== {label}：{name}（{}）===\n", ctx.panel.ticker);
+    out.push_str(&format!("现价：{}\n", field(ctx.market.price, "")));
+    out.push_str(&valuation_line(ctx.panel));
+    out.push('\n');
+    if ctx.financials.provider_ok {
+        let cur = ctx.financials.currency.as_deref().unwrap_or("");
+        out.push_str(&format!("营收：{}\n", field(ctx.financials.revenue, cur)));
+        out.push_str(&format!(
+            "净利润：{}\n",
+            field(ctx.financials.net_income, cur)
+        ));
+        out.push_str(&format!(
+            "净利率：{}\n",
+            field(ctx.financials.net_margin, "%")
+        ));
+    } else {
+        out.push_str("本轮无实时财报：这一方严禁给出任何具体财务数字或估算值，只能定性判断。\n");
+    }
+    out
+}
+
+/// 对比研究 user 提示词：两腿事实各标各的名字/代码，且首行硬性禁止互相借用数字。
+#[must_use]
+pub fn build_compare_user_prompt(
+    question: &str,
+    primary: &CompareLegContext,
+    peer: &CompareLegContext,
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("用户问题（对比研究）：{question}\n\n"));
+    out.push_str(
+        "铁律：以下两家公司的事实完全独立核实，绝不允许把一家的数字当成另一家的数字引用、\n\
+         也不允许凭常识/记忆给出未在对应事实块里出现的数字。你在作答里提到任何具体数字时，\n\
+         必须明确说明这个数字属于哪家公司（用公司名或代码标注），不得含糊带过。\n\n",
+    );
+    out.push_str(&leg_facts_block("公司A", primary));
+    out.push('\n');
+    out.push_str(&leg_facts_block("公司B", peer));
     out
 }
 
@@ -144,7 +256,7 @@ mod tests {
             ..Default::default()
         };
         let valuation = display_valuation(&company.company, &market, &financials, None);
-        let panel = crate::build_panel(&company, &market, &financials, None);
+        let panel = crate::build_panel(&company, &market, &financials, None, &[]);
         let _ = valuation;
         (panel, financials)
     }
@@ -169,6 +281,8 @@ mod tests {
             panel: &panel,
             market: &market,
             financials: &financials,
+            filings: &[],
+            history: &[],
         });
         assert!(prompt.contains("严禁给出任何具体财务数字"));
         assert!(!prompt.contains("已核到的实时财报"));
@@ -188,6 +302,8 @@ mod tests {
             panel: &panel,
             market: &market,
             financials: &financials,
+            filings: &[],
+            history: &[],
         });
         assert!(prompt.contains("已核到的实时财报"));
         assert!(prompt.contains("383000USD"));
@@ -205,7 +321,162 @@ mod tests {
             panel: &panel,
             market: &market,
             financials: &financials,
+            filings: &[],
+            history: &[],
         });
         assert!(prompt.contains("现价：未核到"));
+    }
+
+    #[test]
+    fn filings_block_cites_form_and_source_url() {
+        let (panel, financials) = panel_with(Some(dec!(190)), false);
+        let market = MarketSnapshot {
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let filings = vec![Filing {
+            form: "10-K".into(),
+            filed_date: Some("2026-05-01".into()),
+            source_url: "https://www.sec.gov/example".into(),
+        }];
+        let prompt = build_user_prompt(&AnswerContext {
+            question: "最近有什么公告？",
+            name_zh: Some("苹果"),
+            panel: &panel,
+            market: &market,
+            financials: &financials,
+            filings: &filings,
+            history: &[],
+        });
+        assert!(prompt.contains("已核到的最新公司公告"));
+        assert!(prompt.contains("10-K"));
+        assert!(prompt.contains("2026-05-01"));
+        assert!(prompt.contains("https://www.sec.gov/example"));
+    }
+
+    #[test]
+    fn empty_filings_omit_the_block() {
+        let (panel, financials) = panel_with(Some(dec!(190)), false);
+        let market = MarketSnapshot {
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let prompt = build_user_prompt(&AnswerContext {
+            question: "最近有什么公告？",
+            name_zh: Some("苹果"),
+            panel: &panel,
+            market: &market,
+            financials: &financials,
+            filings: &[],
+            history: &[],
+        });
+        assert!(!prompt.contains("已核到的最新公司公告"));
+    }
+
+    #[test]
+    fn history_carries_pronouns_but_is_labeled_not_a_fact_source() {
+        let (panel, financials) = panel_with(Some(dec!(190)), false);
+        let market = MarketSnapshot {
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let history = vec![PriorTurn {
+            question: "苹果的护城河是什么？".into(),
+            answer: "苹果的护城河主要在生态锁定与服务收入占比提升。".into(),
+        }];
+        let prompt = build_user_prompt(&AnswerContext {
+            question: "它的估值贵不贵？",
+            name_zh: Some("苹果"),
+            panel: &panel,
+            market: &market,
+            financials: &financials,
+            filings: &[],
+            history: &history,
+        });
+        assert!(prompt.contains("不得引用其中任何数字作为本轮核对依据"));
+        assert!(prompt.contains("苹果的护城河是什么？"));
+        assert!(prompt.contains("生态锁定"));
+    }
+
+    #[test]
+    fn history_answer_beyond_limit_is_truncated() {
+        let (panel, financials) = panel_with(Some(dec!(190)), false);
+        let market = MarketSnapshot {
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let long_answer = "壁".repeat(400);
+        let history = vec![PriorTurn {
+            question: "护城河？".into(),
+            answer: long_answer.clone(),
+        }];
+        let prompt = build_user_prompt(&AnswerContext {
+            question: "它的估值贵不贵？",
+            name_zh: Some("苹果"),
+            panel: &panel,
+            market: &market,
+            financials: &financials,
+            filings: &[],
+            history: &history,
+        });
+        assert!(!prompt.contains(&long_answer));
+        assert!(prompt.contains('…'));
+    }
+
+    #[test]
+    fn compare_prompt_labels_each_leg_and_forbids_cross_borrowing() {
+        let (apple_panel, apple_financials) = panel_with(Some(dec!(190)), true);
+        let apple_market = MarketSnapshot {
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let (tencent_panel, tencent_financials) = {
+            let company = ResolvedCompany {
+                ticker: "0700.HK".into(),
+                name_zh: Some("腾讯".into()),
+                company: Company {
+                    price: Some(dec!(300)),
+                    ..Default::default()
+                },
+            };
+            let market = MarketSnapshot {
+                price: Some(dec!(300)),
+                ..Default::default()
+            };
+            let financials = Financials {
+                provider_ok: true,
+                revenue: Some(dec!(160000)),
+                net_income: Some(dec!(30000)),
+                currency: Some("HKD".into()),
+                ..Default::default()
+            };
+            let panel = crate::build_panel(&company, &market, &financials, None, &[]);
+            (panel, financials)
+        };
+        let tencent_market = MarketSnapshot {
+            price: Some(dec!(300)),
+            ..Default::default()
+        };
+
+        let prompt = build_compare_user_prompt(
+            "苹果和腾讯谁的利润质量更好？",
+            &CompareLegContext {
+                name_zh: Some("苹果"),
+                panel: &apple_panel,
+                market: &apple_market,
+                financials: &apple_financials,
+            },
+            &CompareLegContext {
+                name_zh: Some("腾讯"),
+                panel: &tencent_panel,
+                market: &tencent_market,
+                financials: &tencent_financials,
+            },
+        );
+        assert!(prompt.contains("绝不允许把一家的数字当成另一家的数字"));
+        assert!(prompt.contains("苹果（AAPL）"));
+        assert!(prompt.contains("腾讯（0700.HK）"));
+        assert!(prompt.contains("383000USD"));
+        assert!(prompt.contains("160000HKD"));
     }
 }

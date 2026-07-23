@@ -3,6 +3,7 @@
 
 mod api;
 mod markdown;
+mod profiles;
 mod research;
 mod workspace;
 
@@ -19,7 +20,7 @@ pub fn App() -> impl IntoView {
     );
     let refresh_auth = Callback::new(move |_| set_auth_epoch.update(|value| *value += 1));
     view! {
-        <Suspense fallback=move || view! { <main class="boot-screen">"ECHO / LOADING"</main> }>
+        <Suspense fallback=move || view! { <main class="boot-screen">"Echo"</main> }>
             {move || match auth.get() {
                 None => ().into_view(),
                 Some(Ok(response)) => match response.user {

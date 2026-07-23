@@ -42,9 +42,9 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
 
 | 差距 | Honeclaw 现状 | Echo 现状 | 落点 |
 | --- | --- | --- | --- |
-| 证据平面 | 有新闻/事件输入 | filings/网页证据/日历/同业全 pending | §4 P2 |
+| 证据平面 | 有新闻/事件输入 | 日历/历史分位/同业/filings 已接；网页证据仍 pending | §4 P2 |
 | 深度报告 | 有报告工作流 | `/api/report/generate` 未迁移 | §4 P3 |
-| 公司档案记忆 | Markdown 长期记忆 | `company_profiles` 无 Rust 读写 | §4 P3 |
+| 公司档案记忆 | Markdown 长期记忆 | `company_profiles` repository/API 已接（手动编辑）；Web 编辑页/自动沉淀仍 pending | §4 P3 |
 | 定时简报触达用户 | 盘前/财报简报直达 IM | worker digest 只写库，无用户触达面 | §4 P4 |
 | 多轮对话研究 | 有 | 每次独立 turn，Web 不加载历史 | §4 P1 |
 | 流式体验 | SSE 已接 UI | 服务端 SSE 已实现但 Web 不消费 | §4 P1 |
@@ -91,8 +91,8 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
    刷新即丢全部对话。→ §4 P1-2。
 6. **强制手输 ticker**：resolve 链（DB→别名→FMP→探活）已上线，composer 仍要求用户自己给
    `AAPL / 9988.HK` 格式代码。应支持输入公司名自动解析 + 候选确认。→ §4 P1-3。
-7. **API 安全缺口**（矩阵 §9）：无应用层限流、无 readiness、无 CSRF/Origin 防护、无 JSON body 上限；
-   昂贵研究端点裸奔。→ §4 P2-4。
+7. **API 安全缺口**（矩阵 §9）✅已接（P2-4）：应用层限流、readiness、Origin 防护、JSON body 上限
+   均已接线并真库端到端验证，见 §4 P2-4。
 8. **Worker 无 claim/lease**：多实例会重复执行同一 job（矩阵 §5 全 skeleton 根因）。→ §4 P4。
 9. **e2e 全 ignored**：`cargo xtask e2e` 需手工起 WebDriver，CI 不跑真浏览器。→ §4 P5。
 
@@ -113,27 +113,148 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
 
 ### P2 · 证据优先数据平面（超越 honeclaw 的核心）
 1. `evidence-port`：网页证据端口 + 所选供应商适配器（等用户定 Tavily 续费或替代品；供应商失败诚实降级，不重诊断——已知结论勿重推）。
-2. `filings-and-calendar`：财报日历（Finnhub）+ 公告/filings 读模型，字段带 source URL、
-   valid/knowledge time、currency、license。
-3. `peers-and-history`：同业对比事实 + 历史估值分位（A/H、capex、历史分位的数据可得性结论已在
-   记忆/旧文档里，勿重新调研）。
-4. `api-hardening`：限流（含 `rate_limit_buckets` 接线或删表）、readiness、Origin 校验、body 上限。
+2. `filings-and-calendar`：财报日历（Finnhub）✅已接（`echo-data::CalendarService` +
+   `echo-db::CalendarRepository`，24h 陈旧回源，`ResearchPorts::load_earnings_calendar`→Web
+   `EarningsBadge`，见 rust-parity-matrix）+ 公告/filings 读模型 ✅已接（`echo-data::FilingsService`：
+   Finnhub `/stock/filings`，新表 `company_filings`（migration 0011，首个冻结后新增迁移）+
+   `echo-db::FilingsRepository`；只留实质公告表单 10-K/10-Q/8-K/proxy/registration 等，剔除内部人
+   交易表单 3/4/5/144；美股专属（EDGAR 本身不覆盖港股/A股）；接入 `ResearchPorts::load_recent_filings`
+   →`answer_prompt`（模型可引用 form/日期/URL）→`AskResponse.filings`；真库+真 Finnhub 端到端验证：
+   AAPL 8 条入库并被模型引用，0700.HK 正确空表退出，24h 缓存命中）。
+3. `peers-and-history`：历史估值分位 ✅已接（`echo-data::HistoricalValuationService`，美股专属，
+   FMP 年度 EPS 按 `filingDate` 截止匹配 Yahoo 月度收盘价，避免未来数据反推历史；港股/A股
+   诚实返回 `None`，不读表里可能是别口径的陈旧点位冒充支持；接入 `answer_prompt` + `fact_guard`）。
+   同业对比事实（`comp_peers`/`PeerAnchor`）✅已接（`echo-data::PeerService`：FMP `stock-peers`
+   选可比公司 + `ratios-ttm`/`key-metrics-ttm` 取 PE/EV-Sales，按分位缓存 24h；按公司自身盈利/
+   亏损阶段选 PE 或 EV/Sales 口径，接入 `ResearchPorts::load_peer_anchor`→`build_panel`→
+   `compute_valuation`/`compute_ev_sales`→`answer_prompt`；真库+真 FMP 端到端验证：AAPL 4/5 家
+   可比成分位、RIVN 单点位诚实拒绝成分位，见 rust-parity-matrix）。
+4. `api-hardening` ✅已接（`echo-db::RateLimitRepository` 接线 `rate_limit_buckets` + `/api/ask`、
+   `/api/ask/stream` 每用户每分钟限流；`GET /ready` 真连库；`enforce_origin` 中间件校验状态变更
+   请求 Origin；`DefaultBodyLimit::max` 512KiB 请求体上限；真库端到端验证：3 次放行第 4 次
+   429，`/ready` 掉库返 503，跨站 Origin 返 403，见 rust-parity-matrix）。优雅停机 ✅已接，见 §4 P5-1。
 
 ### P3 · 报告、记忆、对比（研究资产化）
-1. `compare-legs`：`CompareResearchFacts` 双腿隔离取数 + 对比提示词 + Web 对比视图。
-2. `company-profiles`：公司档案 repository/API/编辑页——每次研究沉淀可复用的长期判断
-   （对标并超越 honeclaw 的 Markdown 记忆：我们的档案每条数字可溯源、过护栏）。
-3. `deep-report`：深度报告生成 + 导出；报告只引用 registry 内已核数字。
-4. `multi-turn`：conversation 分组、代词承接；历史只帮承接，旧数字不得注入新事实。
+1. `compare-legs` ✅已接（架构判断已定：**按公司分别验证**，不碰 `merge_facts_registry`——
+   两腿全程各自独立 `assemble_facts`/`FactsRegistry`，`ResearchService::compare` 新增编排：
+   `build_compare_user_prompt` 拼两个标了名字/代码的独立事实块 + 首行硬性禁止互相借用数字；
+   护栏对同一段作答分别跑两次 `verify_answer_numbers`（各用各的 registry），两份 `GuardView`
+   独立返回，绝不合并登记表——避免了"腾讯的营收"被当成"苹果营收"合法核对来源的红线污染。
+   `POST /api/compare`（`CompareRequest`/`CompareResponse`，`echo-contracts`）不落库、不支持
+   多轮（对比会话的持久化/续问形态待产品判断，非本次范围）。真实端到端验证：AAPL vs MSFT
+   对比问"利润质量"，模型正确分别引用两家净利润/净利率并显式标注归属公司，两腿护栏各自
+   4 项核对、0 hard fail。**已知限制**（`fact_guard.rs` 现有代码，非本次引入）：裸数字的货币
+   标签识别窗口只看前 10 字符，当两个不同币种数字在原文中紧邻（<10 字符）出现时，后一个
+   数字可能误吞前一个的货币标签——对比研究场景比单公司场景更容易触发；调研时用真实文本
+   复现过，已用更长间隔的答案文本绕开，但护栏本身未修（不在本次架构判断范围内，需要时另开
+   小 PR：把货币标签窗口从"字符距离"改成"就近原则"或要求标签与数字之间不能跨越另一个数字）。
+   ✅ **Web 对比视图已接**（`echo-web::compare::ComparePage`，双 ticker 输入 + 独立双栏渲染，
+   两腿的估值/护栏卡片各自独立，绝不混排；真实端到端验证：AAPL vs MSFT 利润质量对比，
+   两栏各自 26 项核对/25 soft/0 hard，模型作答正确分别引用双方数字）。**仍未做**：对比会话
+   落库/续问（需要先定"对比会话"在 `research_sessions` 单 ticker schema 下怎么存，或要不要
+   新表——产品判断，非本次范围）。
+2. `company-profiles` ✅已接 repository/API（`echo-db::CompanyProfileRepository` + `GET/PUT/DELETE
+   /api/profiles[/:ticker]`，真库 tenant-isolation 单测 + live HTTP 验证：建档→部分更新保留
+   未传字段→turn_count 按轮次递增→删除不复活）。✅ **Web 编辑页已接**（`echo-web::profiles::
+   ProfilesPage`，列表+详情编辑表单，thesis/bull/bear/monitors/falsifiers/自由笔记；真库端到端
+   验证：编辑 AAPL 档案 thesis 字段，PUT 后 `company_profiles` 表真实落值）。**仍 pending**：
+   研究会话自动沉淀 thesis/bull/bear 到档案（需先定"从答案抽取什么、怎么抽"的语义，产品判断，
+   未做——当前只有手动 PUT 编辑）。
+3. `deep-report` ✅已接生成（`POST /api/report/generate`，`echo-application::ReportService::generate`
+   与 `/api/ask` 共用同一条 `assemble_facts`/`build_panel` 取数管线——不是另起一条编排，
+   只在提示词与产物形态上分叉：`build_report_prompt` 复用与聊天回答同一份 `facts_block`
+   事实格式化，外面套判断优先的固定七段结构（核心判断/赚钱机制与护城河/财务质量/估值与
+   赔率/风险与证伪条件/关键监控与下一步/来源），1200-2500 字。模型不可用或输出短于 200
+   字（截断/拒答）退化为 `compose_report_fallback`——只用同一份已核事实拼接，不发明业务
+   定性描述（Rust 侧研究管线目前不接 company_profiles 定性字段，见下条 P3-2 pending）。
+   护栏对最终产出的 markdown（无论模型或本地路径）跑 `verify_answer_numbers`，与聊天回答
+   同一份 `FactsRegistry`。落库复用 `PersistResearchSession`，`session_id` 续接同一研究会话。
+   真实端到端验证：纯核路径（无 DB/无模型配置）真实 HTTP 调用 AAPL 请求，本地兜底 0.1s
+   出带真实数字的完整 Markdown 报告，估值区间正确算出，fact_guard 9 项核对 6 pass/3
+   soft/0 hard fail，会话落库返回 session_id。✅ **Web 报告视图/导出已接**（研究页 composer 加
+   "深度报告"按钮，复用同一对话 thread 渲染报告卡片；客户端 Blob+`<a download>` 导出 `.md`，
+   零 JS 依赖；真实端到端验证：AAPL 深度报告页面渲染完整七段结构，落库归位研究历史）。
+4. `multi-turn` ✅已接（`echo_contracts::AskRequest.session_id` + `AskResponse.session_id`；
+   `ResearchPorts::load_prior_turns` 读回本会话此前几轮问答，`answer_prompt` 拼一段明确标注
+   "仅供代词/实体承接、不得引用其中数字"的历史块，`fact_guard` 仍只用本轮现取事实核数——
+   历史绝不进 `FactsRegistry`；`persist_outcome` 用 `session_id` 归位同一行而非插入新行，
+   `turn_count`/`thread_json` 按轮次累加；Web 页面级 `current_session_id` 信号在第一轮落库后
+   自动续接，后续追问在同一页面自动带 `session_id`。真库端到端验证：连续两轮问答落成同一行，
+   `turn_count` 2、`thread_json` 累积两轮问答，未污染其他会话）。
 
 ### P4 · 主动研究（简报触达）
-1. `worker-lease`：`SELECT ... FOR UPDATE SKIP LOCKED` + `locked_until`，job 幂等；完成前 worker 单实例。
-2. `digest-to-user`：盘前/盘后简报进通知面板 + 邮件（通知必须过偏好/免打扰/去重咽喉）。
-3. `watch-rules`：自选规则（价格/估值分位/事件触发）+ desk 视图 + 触发通知。
+1. `worker-lease` ✅已接（`scheduler_state` 加 `locked_until`/`locked_by`，migration 0012；
+   `SchedulerStateRepository::try_claim` 用原子 `UPDATE ... WHERE (locked_until IS NULL OR
+   locked_until < now())` 抢占——单行 upsert 场景下与 `SELECT ... FOR UPDATE SKIP LOCKED`
+   等价，`dispatch` 前先抢锁，抢不到即跳过；`record_run` 完成时同步释放锁，崩溃未释放的锁
+   靠 15 分钟租约自然过期兜底。真库端到端验证：第二实例在租约内抢不到、`record_run` 后立即
+   能抢到、租约过期后能被第三个实例重新抢占）。
+2. `digest-to-user` ✅已接（`echo-worker::activities::digest` 不再是规则计数占位统计，改为
+   聚合真实持仓日内异动（`change_percent` 超过阈值的 ticker 列表）+ 有效监控条件数 + 本轮
+   触发数拼成的真实简报正文；落库仍唯一经 `NotificationsRepository::insert`——偏好/免打扰/
+   去重咽喉不变。邮件是站内通知的镜像通道：`echo-data::EmailService`（`lettre` 异步 SMTP，
+   `echo-config::EmailConfig` 显式注入，未配置 SMTP 或收件账号不是邮箱形态时静默降级为
+   仅站内通知，不伪造发信成功）只在通知已真正落库后才尝试同步发信。真实端到端验证：
+   `cargo test -p echo-worker -- --ignored` 对活库跑通简报/证伪巡检/业绩复盘三个活动，
+   真实生成"持仓 N 个，其中 M 个日内异动…"格式的简报正文并落库）。
+3. `watch-rules` ✅已接（`echo_domain::RuleKind` 补齐 `valuation_percentile_below/above`
+   （复用既有 `HistoricalValuationService`，仅美股，DB 缓存 7 天过期才回源）与 `event_earnings`
+   （复用 `review_earnings` 业绩事实落库时机）两类新规则，与既有 price/fundamental 共用同一条
+   `check_falsifiers` 核对循环与告警落库路径；`WatchRuleService` 建规则前校验 ticker 已核实
+   建档；`POST/GET/DELETE /api/watch/rules` + `GET /api/watch/desk`（聚合关注列表/持仓/规则
+   涉及的全部 ticker 各自最新行情、挂载规则、近期触发通知，纯只读聚合不新增写路径）。
+   ✅ **Web 台面已接**（`echo-web::workspace::RulesDeskSection`，新增/删除规则表单 + 台面卡片 +
+   近期触发列表；真实端到端验证：浏览器对本机 Trunk 开发服务器创建 AAPL price_below 规则→
+   台面卡片实时显示→点击删除→活库确认行已消失，全程真实 HTTP 往返、非 mock）。
 
 ### P5 · 生产化与全自动验收
 按交接书 Phase 5/6 原文执行（HTTPS、密钥注入、S3 备份恢复演练、OTLP、CI 起真浏览器 E2E、
-镜像 smoke）。前提：P1–P4 完成且平价矩阵无 skeleton 主链条目。
+镜像 smoke）。前提：P1–P4 完成且平价矩阵研究主链无 skeleton 条目——2026-07-22 核对通过（`/api/
+companies/resolve`、`/api/ask` 此前矩阵行滞后于实际代码，已校正为 rust-accepted，详见
+rust-parity-matrix 变更记录）。
+
+1. `graceful-shutdown` ✅已接：`echo-api`（`axum::serve().with_graceful_shutdown`，SIGTERM/Ctrl+C
+   停止接受新连接、排空存量请求再退出）与 `echo-worker`（主循环 `tokio::select!` 只在空闲等待
+   下一跳时参与停机信号选择，一旦某个 `tick()` 已经开始执行就会跑到完成，不会在活动持有
+   worker-lease 的中途被杀死——避免容器滚动更新把租约晾到过期才被下一实例接手）共用同一套
+   SIGTERM/SIGINT 信号处理。真实进程验证：`cargo run` 起两个进程，`kill -TERM` 后确认停机日志
+   打印、进程干净退出（非僵死/非崩溃）。fmt/clippy(-D warnings)/test(全绿)/wasm check 门禁全过。
+2. `backup-s3-upload` ✅已接：`echo-postgres-backup` 在本地 `pg_dump` 成功落盘后（本地文件
+   仍是备份唯一真源），若配置了 `ECHO_BACKUP_BUCKET`/`ECHO_BACKUP_REGION`/`AWS_ACCESS_KEY_ID`/
+   `AWS_SECRET_ACCESS_KEY`（`echo-config::BackupConfig`，四项均非空才算配置完整）则镜像上传
+   到 S3——同 email 的镜像通道策略：未配置诚实降级为仅本地备份，配置了但上传失败也不推翻
+   已完成的本地备份，只把失败信息写进活动结果字符串。直连 S3 REST API 手签 SigV4
+   （`echo-data::BackupStorageService`），没用官方 `aws-sdk-s3`——它的传递依赖
+   `aws-sdk-sts` 1.9x 要求 rustc 1.88，高于本仓库 `rust-toolchain.toml`/CI 钉的 1.85，
+   工具链升级是跨切片的基础设施决定，不在本次范围内顺带做；SigV4 用工作区已有的
+   `hmac`/`sha2`/`hex`（RustCrypto 同源，无新增 MSRV 风险）手工实现，单一 PUT Object
+   请求，算法边界小。验证分两层：①签名算法用独立 Python `hmac`/`hashlib` 脚本重算同一组
+   固定输入（AKIDEXAMPLE 系列示例凭据），逐字节比对签名密钥与完整 Authorization 头，
+   证明两套互不共享代码的实现算出同一结果；②真实端到端跑 `cargo test -p echo-worker --
+   --ignored`，对活库真实 `pg_dump` 落盘，验证未配置 `ECHO_BACKUP_BUCKET` 时诚实降级为
+   `S3=未配置`（真实 S3 桶/凭据需用户本人在 AWS 侧配置后才能验证上传成功路径，见 §2.2）。
+3. `otlp-tracing` ✅已接：`echo-observability::init` 在 `OTEL_EXPORTER_OTLP_ENDPOINT`
+   （标准 OTel 环境变量名，明文 HTTP，收集端通常是同网/同机 sidecar；HTTPS 收集端需要
+   额外 TLS 后端选型，本次不支持）非空时挂一层 OTLP span 导出，与既有 stdout 日志并行、
+   互不替代；未配置时完全不建 `TracerProvider`（不是失败降级，是真正不起任何后台导出
+   线程）。用 `opentelemetry_sdk::trace::span_processor_with_async_runtime::
+   BatchSpanProcessor`（`experimental_trace_batch_span_processor_with_async_runtime`
+   feature）+ `runtime::Tokio`——默认的 `with_batch_exporter` 走独立 OS 线程，会在
+   reqwest 底层 hyper 需要 tokio reactor 时直接 panic（"no reactor running"，本地真实
+   复现过）。**同 PR 必须接上真实调用方**（frozen-table 教训，只加导出通路没有调用方
+   等于没做）：`echo-api` 在路由上挂 `tower_http::trace::TraceLayer`（新依赖）生成每请求
+   span；`echo-worker` 在 `dispatch` 加 `#[tracing::instrument]` 生成每作业 span。两处都
+   踩了同一个坑并修了：`TraceLayer`/`#[instrument]` 缺省 span 级别是 DEBUG，而生产默认
+   `RUST_LOG=info` 会在 span 到达 OTLP 层之前就被过滤掉——本地起真实 OTLP 收集端复现过
+   "配了端点但一条 span 都导不出"，已显式把 echo-api 的 `TraceLayer` 调到 INFO 级修正
+   （`echo-worker` 的 `#[instrument]` 默认级别本身是 INFO，不受影响）。优雅停机路径
+   （P5-1）同步接了 `echo_observability::shutdown()`，退出前排空批处理队列，不丢尾部
+   span。真实端到端验证：本地起一个捕获 HTTP POST 的假收集端（Python http.server），
+   `echo-api`/`echo-worker` 分别指向它，各自打真实请求/真实作业，SIGTERM 触发 flush 后
+   逐字节核对收到的 protobuf 载荷里 `service.name`=`echo-api`/`echo-worker`、span 名
+   `request`/`dispatch`，不是自洽测试。
+4. HTTPS、密钥注入、CI 真浏览器 E2E、镜像 smoke、S3 备份恢复演练：待续，部分需要用户
+   本人操作云账号/证书（见 §2.2）。
 
 ## 5. 完成定义
 

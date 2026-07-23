@@ -6,6 +6,10 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 const DEFAULT_API_PORT: u16 = 4180;
 const DEFAULT_DB_CONNECTIONS: u32 = 5;
+/// Trunk 开发代理默认来源（`crates/echo-web/Trunk.toml` 把 `/api` 代到 4180，浏览器侧 Origin
+/// 仍是 5191）；生产部署必须显式设置 `ECHO_ALLOWED_ORIGINS` 覆盖。
+const DEFAULT_ALLOWED_ORIGIN: &str = "http://localhost:5191";
+const DEFAULT_ASK_RATE_LIMIT_PER_MINUTE: u32 = 20;
 
 /// 外部数据源配置。所有密钥只在进程组合根读取，再显式注入数据层。
 /// 故意不实现 `Debug`，避免密钥进入日志或错误快照。
@@ -26,6 +30,86 @@ impl DataSourceConfig {
             fmp_api_key: non_empty(lookup("FMP_API_KEY")),
             commercial_mode: flag(non_empty(lookup("ECHO_COMMERCIAL_MODE"))),
         }
+    }
+}
+
+/// 简报邮件的 SMTP 配置——四项都非空才算配置完整，否则整体视为未配置（诚实降级到
+/// 仅站内通知，不拿半截配置去尝试发信）。故意不实现 `Debug`，避免密钥进日志。
+#[derive(Clone)]
+pub struct EmailConfig {
+    pub smtp_host: String,
+    pub smtp_port: u16,
+    pub smtp_user: String,
+    pub smtp_pass: String,
+    pub from_address: String,
+}
+
+impl EmailConfig {
+    #[must_use]
+    pub fn from_env() -> Option<Self> {
+        Self::from_lookup(&mut |key| std::env::var(key).ok())
+    }
+
+    fn from_lookup<F>(lookup: &mut F) -> Option<Self>
+    where
+        F: FnMut(&str) -> Option<String>,
+    {
+        let smtp_host = non_empty(lookup("SMTP_HOST"))?;
+        let smtp_user = non_empty(lookup("SMTP_USER"))?;
+        let smtp_pass = non_empty(lookup("SMTP_PASS"))?;
+        let from_address = non_empty(lookup("SMTP_FROM")).unwrap_or_else(|| smtp_user.clone());
+        let smtp_port = non_empty(lookup("SMTP_PORT"))
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(587);
+        Some(Self {
+            smtp_host,
+            smtp_port,
+            smtp_user,
+            smtp_pass,
+            from_address,
+        })
+    }
+}
+
+/// pg_dump 产物的 S3 镜像通道配置——bucket/region/access key/secret key 四项都非空才算配置
+/// 完整，否则整体视为未配置（诚实降级到仅本地备份，不拿半截配置去尝试签名请求）。
+/// 故意不实现 `Debug`，避免密钥进日志。本 crate 是唯一读取 `AWS_*` 环境变量的地方——
+/// `echo-data` 只拿到已解析好的结构体，不直接散读环境。
+#[derive(Clone)]
+pub struct BackupConfig {
+    pub bucket: String,
+    pub region: String,
+    pub prefix: String,
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: Option<String>,
+}
+
+impl BackupConfig {
+    #[must_use]
+    pub fn from_env() -> Option<Self> {
+        Self::from_lookup(&mut |key| std::env::var(key).ok())
+    }
+
+    fn from_lookup<F>(lookup: &mut F) -> Option<Self>
+    where
+        F: FnMut(&str) -> Option<String>,
+    {
+        let bucket = non_empty(lookup("ECHO_BACKUP_BUCKET"))?;
+        let region = non_empty(lookup("ECHO_BACKUP_REGION"))?;
+        let access_key_id = non_empty(lookup("AWS_ACCESS_KEY_ID"))?;
+        let secret_access_key = non_empty(lookup("AWS_SECRET_ACCESS_KEY"))?;
+        let session_token = non_empty(lookup("AWS_SESSION_TOKEN"));
+        let prefix =
+            non_empty(lookup("ECHO_BACKUP_S3_PREFIX")).unwrap_or_else(|| "postgres".into());
+        Some(Self {
+            bucket,
+            region,
+            prefix,
+            access_key_id,
+            secret_access_key,
+            session_token,
+        })
     }
 }
 
@@ -98,6 +182,10 @@ pub struct ApiConfig {
     pub secure_cookie: bool,
     pub data_sources: DataSourceConfig,
     pub model_provider: Option<ModelProviderConfig>,
+    /// 允许携带 `Origin` 头做状态变更请求的来源；Origin 不在其中时拒绝（缺 Origin 头放行，
+    /// 覆盖非浏览器客户端）。
+    pub allowed_origins: Vec<String>,
+    pub ask_rate_limit_per_minute: u32,
 }
 
 impl ApiConfig {
@@ -134,6 +222,22 @@ impl ApiConfig {
         )?;
         let data_sources = DataSourceConfig::from_lookup(&mut lookup);
         let model_provider = ModelProviderConfig::from_lookup(&mut lookup);
+        let allowed_origins = non_empty(lookup("ECHO_ALLOWED_ORIGINS")).map_or_else(
+            || vec![DEFAULT_ALLOWED_ORIGIN.to_string()],
+            |value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|origin| !origin.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            },
+        );
+        let ask_rate_limit_per_minute = positive_u32(
+            "ECHO_ASK_RATE_LIMIT_PER_MINUTE",
+            non_empty(lookup("ECHO_ASK_RATE_LIMIT_PER_MINUTE")),
+            DEFAULT_ASK_RATE_LIMIT_PER_MINUTE,
+        )?;
         Ok(Self {
             listen_addr: SocketAddr::new(host, port),
             database_url: non_empty(lookup("DATABASE_URL")),
@@ -144,6 +248,8 @@ impl ApiConfig {
             secure_cookie: flag(non_empty(lookup("ECHO_TRUST_PROXY"))),
             data_sources,
             model_provider,
+            allowed_origins,
+            ask_rate_limit_per_minute,
         })
     }
 }
@@ -154,7 +260,9 @@ pub struct WorkerConfig {
     pub max_connections: u32,
     pub tick_seconds: u64,
     pub backup_dir: String,
+    pub backup_s3: Option<BackupConfig>,
     pub data_sources: DataSourceConfig,
+    pub email: Option<EmailConfig>,
 }
 
 impl WorkerConfig {
@@ -179,13 +287,17 @@ impl WorkerConfig {
             60,
         )?;
         let data_sources = DataSourceConfig::from_lookup(&mut lookup);
+        let email = EmailConfig::from_lookup(&mut lookup);
+        let backup_s3 = BackupConfig::from_lookup(&mut lookup);
         Ok(Self {
             database_url,
             max_connections,
             tick_seconds,
             backup_dir: non_empty(lookup("ECHO_BACKUP_DIR"))
                 .unwrap_or_else(|| "backups/postgres".into()),
+            backup_s3,
             data_sources,
+            email,
         })
     }
 }
@@ -249,6 +361,36 @@ mod tests {
         assert_eq!(config.max_connections, 5);
         assert!(!config.auth_disabled);
         assert!(!config.secure_cookie);
+        assert_eq!(config.allowed_origins, vec!["http://localhost:5191"]);
+        assert_eq!(config.ask_rate_limit_per_minute, 20);
+    }
+
+    #[test]
+    fn allowed_origins_parses_comma_list_and_trims() {
+        let config = ApiConfig::from_lookup(lookup(&[(
+            "ECHO_ALLOWED_ORIGINS",
+            " https://echo.example, https://app.echo.example ",
+        )]))
+        .expect("config");
+        assert_eq!(
+            config.allowed_origins,
+            vec!["https://echo.example", "https://app.echo.example"]
+        );
+    }
+
+    #[test]
+    fn ask_rate_limit_rejects_non_positive_override() {
+        let Err(error) = ApiConfig::from_lookup(lookup(&[("ECHO_ASK_RATE_LIMIT_PER_MINUTE", "0")]))
+        else {
+            panic!("zero must be rejected");
+        };
+        assert_eq!(
+            error,
+            ConfigError::InvalidPositiveInteger {
+                key: "ECHO_ASK_RATE_LIMIT_PER_MINUTE",
+                value: "0".into(),
+            }
+        );
     }
 
     #[test]
@@ -316,6 +458,40 @@ mod tests {
     #[test]
     fn no_keys_means_no_provider() {
         assert!(ModelProviderConfig::from_lookup(lookup(&[])).is_none());
+    }
+
+    #[test]
+    fn email_requires_host_user_and_pass() {
+        assert!(EmailConfig::from_lookup(&mut lookup(&[])).is_none());
+        assert!(
+            EmailConfig::from_lookup(&mut lookup(&[
+                ("SMTP_HOST", "smtp.example.com"),
+                ("SMTP_USER", "digest@example.com"),
+            ]))
+            .is_none()
+        );
+        let config = EmailConfig::from_lookup(&mut lookup(&[
+            ("SMTP_HOST", "smtp.example.com"),
+            ("SMTP_USER", "digest@example.com"),
+            ("SMTP_PASS", "secret"),
+        ]))
+        .expect("config");
+        assert_eq!(config.smtp_port, 587);
+        assert_eq!(config.from_address, "digest@example.com");
+    }
+
+    #[test]
+    fn email_from_address_overrides_default() {
+        let config = EmailConfig::from_lookup(&mut lookup(&[
+            ("SMTP_HOST", "smtp.example.com"),
+            ("SMTP_USER", "digest@example.com"),
+            ("SMTP_PASS", "secret"),
+            ("SMTP_PORT", "2525"),
+            ("SMTP_FROM", "no-reply@example.com"),
+        ]))
+        .expect("config");
+        assert_eq!(config.smtp_port, 2525);
+        assert_eq!(config.from_address, "no-reply@example.com");
     }
 
     #[test]

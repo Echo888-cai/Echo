@@ -30,6 +30,9 @@ impl HealthResponse {
 #[serde(deny_unknown_fields)]
 pub struct AskRequest {
     pub question: String,
+    /// 研究主体代码。可省略/留空——服务端会从问题文本走公司解析链识别主体；
+    /// 识别失败时诚实报错，不猜。
+    #[serde(default)]
     pub ticker: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name_zh: Option<String>,
@@ -67,6 +70,10 @@ pub struct AskRequest {
     pub net_cash: Option<Decimal>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub draft_answer: Option<String>,
+    /// 已有会话 id——续问同一研究会话（同 ticker 追问）时带上，落库归位同一行、
+    /// 历史只用于代词/实体承接，不作为本轮数字核对依据。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 impl AskRequest {
@@ -170,6 +177,30 @@ impl AnswerSource {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct EarningsCalendarView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quarter: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub year: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eps_estimate: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revenue_estimate: Option<Decimal>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FilingView {
+    pub form: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filed_date: Option<String>,
+    pub source_url: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AskResponse {
     pub ticker: String,
     pub route: RouteView,
@@ -181,6 +212,14 @@ pub struct AskResponse {
     pub answer_source: AnswerSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fact_guard: Option<GuardView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub earnings: Option<EarningsCalendarView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filings: Vec<FilingView>,
+    /// 本轮落库归属的会话 id——落库失败且是新会话时为 `None`；Web 拿到后带回下一轮
+    /// `AskRequest.session_id` 即可续接同一研究会话。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// 类型化研究 SSE 事件。`type` 字段与 Axum `event:` 名对齐。
@@ -192,6 +231,7 @@ pub enum ResearchStreamEvent {
     Delta(ResearchStreamDelta),
     Guard(ResearchStreamGuard),
     Final(ResearchStreamFinal),
+    Compare(Box<ResearchStreamCompare>),
     Error(ResearchStreamError),
 }
 
@@ -205,6 +245,7 @@ impl ResearchStreamEvent {
             Self::Delta(_) => "delta",
             Self::Guard(_) => "guard",
             Self::Final(_) => "final",
+            Self::Compare(_) => "compare",
             Self::Error(_) => "error",
         }
     }
@@ -218,6 +259,8 @@ pub struct ResearchStreamMeta {
     pub data_completeness: u8,
     pub connected_sources: Vec<String>,
     pub valuation: ValuationView,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub earnings: Option<EarningsCalendarView>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -253,6 +296,14 @@ pub struct ResearchStreamGuard {
 pub struct ResearchStreamFinal {
     pub response: AskResponse,
     pub persisted: bool,
+}
+
+/// 对话内双主体对比完成事件——两腿独立取数/独立护栏的结果一次性到达
+/// （对比无逐字流，模型作答是单次调用）。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchStreamCompare {
+    pub response: CompareResponse,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -443,6 +494,62 @@ pub struct MutationResponse {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WatchRule {
+    pub id: i64,
+    pub ticker: String,
+    pub kind: String,
+    pub threshold: Decimal,
+    pub metric: Option<String>,
+    pub label: Option<String>,
+    pub active: bool,
+    pub created_at: String,
+    pub last_triggered_at: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WatchRulesListResponse {
+    pub rules: Vec<WatchRule>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WatchRuleCreateRequest {
+    pub ticker: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metric: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WatchRuleDeleteRequest {
+    pub id: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DeskTicker {
+    pub ticker: String,
+    pub company_name: Option<String>,
+    pub price: Option<Decimal>,
+    pub change_percent: Option<Decimal>,
+    pub rules: Vec<WatchRule>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DeskResponse {
+    pub tickers: Vec<DeskTicker>,
+    pub recent_triggers: Vec<Notification>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PortfolioPosition {
     pub ticker: String,
     pub company_name: String,
@@ -584,6 +691,106 @@ pub struct ListQuery {
     pub ticker: Option<String>,
 }
 
+/// 公司档案摘要（列表视图）——对标 honeclaw 的 Markdown 长期记忆，但每条数字可溯源、
+/// 过护栏，不是自由文本堆砌。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompanyProfileSummary {
+    pub ticker: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub company_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub research_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<String>,
+    pub turn_count: i32,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompanyProfileDetail {
+    pub ticker: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub company_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thesis: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub research_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<String>,
+    #[serde(default)]
+    pub bull: Vec<String>,
+    #[serde(default)]
+    pub bear: Vec<String>,
+    #[serde(default)]
+    pub monitors: Vec<String>,
+    #[serde(default)]
+    pub falsifiers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuation_method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuation_bear: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuation_base: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuation_bull: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuation_current_price: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_md: Option<String>,
+    pub turn_count: i32,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// 部分更新请求——省略字段表示"本次不改"，与 `CompanyProfileUpsert`（echo-db）同一语义。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompanyProfileUpsertRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub company_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thesis: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub research_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bull: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bear: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitors: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub falsifiers: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuation_method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuation_bear: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuation_base: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuation_bull: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuation_current_price: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_md: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompanyProfilesListResponse {
+    pub profiles: Vec<CompanyProfileSummary>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompanyProfileResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<CompanyProfileDetail>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ResearchSessionSummary {
@@ -633,6 +840,78 @@ pub struct ResearchSessionDetail {
 #[serde(deny_unknown_fields)]
 pub struct ResearchSessionResponse {
     pub session: Option<ResearchSessionDetail>,
+}
+
+/// 双主体对比研究入口——两个 ticker 各自独立取数，绝无"问苹果答腾讯"的合并事实面。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompareRequest {
+    pub question: String,
+    pub primary_ticker: String,
+    pub peer_ticker: String,
+}
+
+/// 对比研究里单腿的结构化事实——与单公司 `AskResponse` 同源字段，独立不共享。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompareLegView {
+    pub ticker: String,
+    pub data_completeness: u8,
+    pub connected_sources: Vec<String>,
+    pub valuation: ValuationView,
+    /// 该腿自己的护栏结果——只用本腿的 `FactsRegistry` 核对整段作答，两腿互不合并、
+    /// 互不借用对方的事实登记表（"分别验证"，见 IMPROVEMENT_PLAN §4 P3-1）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fact_guard: Option<GuardView>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompareResponse {
+    pub route: RouteView,
+    pub primary: CompareLegView,
+    pub peer: CompareLegView,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
+    pub answer_source: AnswerSource,
+}
+
+/// 深度报告的生成方式——模型生成，或模型不可用/输出过短时的本地确定性兜底。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportMode {
+    Model,
+    Local,
+}
+
+impl ReportMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Model => "report_model",
+            Self::Local => "report_local",
+        }
+    }
+}
+
+/// 深度报告入口响应——复用 `AskRequest` 作为请求体（同一套事实覆盖字段与 `session_id`
+/// 续接语义），报告只引用 `FactsRegistry` 内已核数字（同一份护栏，见 `fact_guard`）。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReportGenerateResponse {
+    pub ticker: String,
+    pub route: RouteView,
+    pub mode: ReportMode,
+    pub markdown: String,
+    pub valuation: ValuationView,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fact_guard: Option<GuardView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub earnings: Option<EarningsCalendarView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filings: Vec<FilingView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[cfg(test)]
@@ -706,6 +985,7 @@ mod tests {
                 data_suspect: false,
                 cannot_value_reason: None,
             },
+            earnings: None,
         });
         let json = serde_json::to_value(&meta).expect("serialize");
         assert_eq!(json["type"], "meta");

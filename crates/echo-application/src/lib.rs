@@ -6,7 +6,9 @@
 //! 决策面板与作答上下文都以它为唯一事实主体——跨公司的历史/记忆一律只作代词承接，
 //! 不得携带别家的财务数字（"问苹果答腾讯"的架构级封堵）。
 
-use echo_domain::{Company, Financials, MarketSnapshot, PeerAnchor, Valuation, display_valuation};
+use echo_domain::{
+    Company, Filing, Financials, MarketSnapshot, PeerAnchor, Valuation, display_valuation,
+};
 use rust_decimal::Decimal;
 
 pub mod answer_prompt;
@@ -14,7 +16,9 @@ pub mod auth;
 pub mod company_resolve;
 pub mod from_db;
 pub mod model_gateway;
+pub mod report;
 pub mod research;
+pub mod watch_rules;
 
 pub use answer_prompt::{AnswerContext, build_system_prompt, build_user_prompt};
 pub use auth::{AuthError, AuthService, Session, hash_password, verify_password};
@@ -27,10 +31,12 @@ pub use model_gateway::{
     AnswerKind, ModelAnswer, ModelAnswerOptions, ModelStreamEvent, ModelStreamStart,
     OwnedAuditContext, ProviderConfig, model_answer, model_answer_stream, parse_json_object,
 };
+pub use report::{ReportOutcome, ReportService};
 pub use research::{
-    CompareResearchFacts, LoadedFundamentals, PeerComparable, PersistResearchSession,
-    ResearchFacts, ResearchOutcome, ResearchPorts, ResearchService,
+    CompareResearchFacts, LoadedFundamentals, PersistResearchSession, PriorTurn, ResearchFacts,
+    ResearchOutcome, ResearchPorts, ResearchService,
 };
+pub use watch_rules::{WatchRuleError, WatchRuleService};
 
 /// 一轮研究请求——公司是必到字段（由公司解析闭环在边界处兑现），history 只用于代词承接。
 #[derive(Clone, Debug)]
@@ -64,6 +70,7 @@ pub fn build_panel(
     market: &MarketSnapshot,
     financials: &Financials,
     peer: Option<&PeerAnchor>,
+    filings: &[Filing],
 ) -> DecisionPanel {
     let valuation = display_valuation(&company.company, market, financials, peer);
 
@@ -76,6 +83,12 @@ pub fn build_panel(
     }
     if valuation.is_valued() {
         connected.push("估值区间");
+    }
+    if peer.is_some() {
+        connected.push("同业对比");
+    }
+    if !filings.is_empty() {
+        connected.push("最新公告");
     }
     let completeness = ((connected.len() as f64 / 5.0) * 100.0).round() as u8;
 

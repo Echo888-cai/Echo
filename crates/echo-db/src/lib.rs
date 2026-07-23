@@ -16,12 +16,14 @@ mod migrations;
 mod repositories;
 pub use migrations::{Migration, migrate, migration_checksum, migrations};
 pub use repositories::{
-    AuthRepository, AuthSessionRow, CompanySearchRow, EarningsCandidateRow, NewNotification,
-    NewUser, NotificationRow, NotificationsRepository, OperationsRepository, PortfolioPositionRow,
-    PortfolioRepository, PortfolioSnapshotResult, PortfolioUpsert, PreferencesPatch,
-    PreferencesRepository, ReminderProfileRow, ResearchSessionRepository, ResearchSessionRow,
-    ResearchSessionSummaryRow, SaveResearchSession, UserPreferencesRow, UserRow, WatchEntryRow,
-    WatchRuleRow, WatchlistRepository, normalize_ticker,
+    AuthRepository, AuthSessionRow, CompanyProfileRepository, CompanyProfileRow,
+    CompanyProfileSummaryRow, CompanyProfileUpsert, CompanySearchRow, EarningsCandidateRow,
+    NewNotification, NewUser, NewWatchRule, NotificationRow, NotificationsRepository,
+    OperationsRepository, PortfolioPositionRow, PortfolioRepository, PortfolioSnapshotResult,
+    PortfolioUpsert, PreferencesPatch, PreferencesRepository, RateLimitRepository,
+    ReminderProfileRow, ResearchSessionRepository, ResearchSessionRow, ResearchSessionSummaryRow,
+    SaveResearchSession, UserPreferencesRow, UserRow, WatchEntryRow, WatchRuleDetailRow,
+    WatchRuleRow, WatchRulesRepository, WatchlistRepository, normalize_ticker,
 };
 
 // 连接池类型对上层再导出，让 echo-api 等消费方不必直接钉 sqlx 版本（工作区单一事实源在此收口）。
@@ -55,6 +57,12 @@ pub async fn connect(database_url: &str, max_connections: u32) -> Result<PgPool>
         .connect(database_url)
         .await?;
     Ok(pool)
+}
+
+/// 就绪探针用：确认连接池能真正打到数据库，而非只是"配置存在"。
+pub async fn ping(pool: &PgPool) -> Result<()> {
+    sqlx::query("SELECT 1").execute(pool).await?;
+    Ok(())
 }
 
 /// 在一个带租户上下文的事务里执行私有数据操作：`SET LOCAL app.user_id = $tenant`，
@@ -177,6 +185,7 @@ impl<'a> SchedulerStateRepository<'a> {
     }
 
     /// upsert 一条运行记录（作业跑完/失败都记，last_run_at=now）。job_id 冲突即更新——恢复安全。
+    /// 同时释放 `try_claim` 持有的租约：跑完（无论成败）就该立刻让位给下一跳，不必等租约到期。
     pub async fn record_run(&self, job_id: &str, status: &str, detail: Option<&str>) -> Result<()> {
         sqlx::query(
             "INSERT INTO scheduler_state (job_id, last_run_at, last_status, last_detail) \
@@ -184,7 +193,9 @@ impl<'a> SchedulerStateRepository<'a> {
              ON CONFLICT (job_id) DO UPDATE SET \
                last_run_at = excluded.last_run_at, \
                last_status = excluded.last_status, \
-               last_detail = excluded.last_detail",
+               last_detail = excluded.last_detail, \
+               locked_until = NULL, \
+               locked_by = NULL",
         )
         .bind(job_id)
         .bind(status)
@@ -192,6 +203,29 @@ impl<'a> SchedulerStateRepository<'a> {
         .execute(self.pool)
         .await?;
         Ok(())
+    }
+
+    /// 原子抢占一个作业的执行权（worker-lease，IMPROVEMENT_PLAN §4 P4-1）：只有租约为空或已
+    /// 过期时才能抢到，`UPDATE ... WHERE` 的行级锁天然保证多实例并发调用只有一个成功——
+    /// 不需要显式 `SELECT ... FOR UPDATE`，单行 upsert 场景下二者等价。抢占失败即另一实例
+    /// 正在跑或刚跑完，本实例这一跳跳过该作业。
+    pub async fn try_claim(
+        &self,
+        job_id: &str,
+        worker_id: &str,
+        lease_seconds: i64,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE scheduler_state \
+             SET locked_until = now() + ($2 * interval '1 second'), locked_by = $3 \
+             WHERE job_id = $1 AND (locked_until IS NULL OR locked_until < now())",
+        )
+        .bind(job_id)
+        .bind(lease_seconds)
+        .bind(worker_id)
+        .execute(self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
     }
 }
 
@@ -357,6 +391,314 @@ impl<'a> MarketRepository<'a> {
     }
 }
 
+/// 财报日历仓储——唯一读写入口（对齐 `earnings_calendar` 表；不分租户，公共参考数据）。
+pub struct CalendarRepository<'a> {
+    pool: &'a PgPool,
+}
+
+#[derive(Clone, Debug, FromRow)]
+pub struct CalendarRow {
+    pub ticker: String,
+    pub next_date: Option<String>,
+    pub quarter: Option<i32>,
+    pub year: Option<i32>,
+    pub eps_estimate: Option<Decimal>,
+    pub revenue_estimate: Option<Decimal>,
+    pub source: Option<String>,
+    pub knowledge_time: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CalendarUpsert {
+    pub ticker: String,
+    pub next_date: Option<String>,
+    pub quarter: Option<i32>,
+    pub year: Option<i32>,
+    pub eps_estimate: Option<Decimal>,
+    pub revenue_estimate: Option<Decimal>,
+    pub source: String,
+}
+
+impl<'a> CalendarRepository<'a> {
+    #[must_use]
+    pub fn new(pool: &'a PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// 取当前登记行。缺表项即断口——返回 `None`，绝不用陈旧值冒充。
+    pub async fn latest(&self, ticker: &str) -> Result<Option<CalendarRow>> {
+        let row = sqlx::query_as::<_, CalendarRow>(
+            "SELECT ticker, next_date, quarter, year, eps_estimate, revenue_estimate, source, \
+             knowledge_time FROM earnings_calendar WHERE ticker = $1",
+        )
+        .bind(ticker)
+        .fetch_optional(self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// 用最新供应商数据整行覆盖（`provider_status` 置 ok，`knowledge_time` 推进）。
+    pub async fn upsert(&self, value: &CalendarUpsert) -> Result<()> {
+        let ticker = value.ticker.trim().to_ascii_uppercase();
+        sqlx::query(
+            "INSERT INTO earnings_calendar \
+             (ticker, next_date, quarter, year, eps_estimate, revenue_estimate, source, provider_status, knowledge_time) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'ok', now()) \
+             ON CONFLICT (ticker) DO UPDATE SET \
+               next_date = EXCLUDED.next_date, \
+               quarter = EXCLUDED.quarter, \
+               year = EXCLUDED.year, \
+               eps_estimate = EXCLUDED.eps_estimate, \
+               revenue_estimate = EXCLUDED.revenue_estimate, \
+               source = EXCLUDED.source, \
+               provider_status = 'ok', \
+               knowledge_time = now()",
+        )
+        .bind(&ticker)
+        .bind(&value.next_date)
+        .bind(value.quarter)
+        .bind(value.year)
+        .bind(value.eps_estimate)
+        .bind(value.revenue_estimate)
+        .bind(&value.source)
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
+/// 历史估值分位仓储——`historical_valuation`（状态行）+ `historical_valuation_points`
+/// （月度 PE 点）唯一读写入口。不分租户，公共参考数据。
+pub struct HistoricalValuationRepository<'a> {
+    pool: &'a PgPool,
+}
+
+#[derive(Clone, Debug, FromRow)]
+pub struct HistoricalValuationPointRow {
+    pub period_end_date: String,
+    pub pe_value: Option<Decimal>,
+}
+
+#[derive(Clone, Debug)]
+pub struct HistoricalValuationWrite {
+    pub ticker: String,
+    pub points: Vec<(String, Decimal)>,
+}
+
+impl<'a> HistoricalValuationRepository<'a> {
+    #[must_use]
+    pub fn new(pool: &'a PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// 状态行的 `knowledge_time`；缺行即 `None`（从未取过数）。
+    pub async fn knowledge_time(
+        &self,
+        ticker: &str,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+        let row: Option<(chrono::DateTime<chrono::Utc>,)> = sqlx::query_as(
+            "SELECT knowledge_time FROM historical_valuation WHERE ticker = $1 AND provider_status = 'ok'",
+        )
+        .bind(ticker)
+        .fetch_optional(self.pool)
+        .await?;
+        Ok(row.map(|(t,)| t))
+    }
+
+    /// 月度 PE 点，按期末日期升序。缺点位即空表——绝不用陈旧/插值点冒充。
+    pub async fn points(&self, ticker: &str) -> Result<Vec<HistoricalValuationPointRow>> {
+        let rows = sqlx::query_as::<_, HistoricalValuationPointRow>(
+            "SELECT period_end_date, pe_value FROM historical_valuation_points \
+             WHERE ticker = $1 ORDER BY period_end_date ASC",
+        )
+        .bind(ticker)
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// 整批覆盖点位并把状态行推进为 `ok`。先清空该 ticker 全部旧点位再写入——不然换算口径
+    /// （比如从年度切到月度）后，旧点位会跟新点位混在一张分布表里，把分位算脏。
+    pub async fn write(&self, value: &HistoricalValuationWrite) -> Result<()> {
+        let ticker = value.ticker.trim().to_ascii_uppercase();
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM historical_valuation_points WHERE ticker = $1")
+            .bind(&ticker)
+            .execute(&mut *tx)
+            .await?;
+        for (period_end_date, pe_value) in &value.points {
+            sqlx::query(
+                "INSERT INTO historical_valuation_points (ticker, period_end_date, pe_value) \
+                 VALUES ($1, $2, $3) \
+                 ON CONFLICT (ticker, period_end_date) DO UPDATE SET pe_value = EXCLUDED.pe_value",
+            )
+            .bind(&ticker)
+            .bind(period_end_date)
+            .bind(pe_value)
+            .execute(&mut *tx)
+            .await?;
+        }
+        sqlx::query(
+            "INSERT INTO historical_valuation (ticker, provider_status, valid_time, knowledge_time) \
+             VALUES ($1, 'ok', now(), now()) \
+             ON CONFLICT (ticker) DO UPDATE SET \
+               provider_status = 'ok', valid_time = now(), knowledge_time = now()",
+        )
+        .bind(&ticker)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+}
+
+/// 同业锚点仓储——`comp_peers`（唯一读写入口；不分租户，公共参考数据；`ticker` 外键指向
+/// `companies`，写入前调用方须已 `CompanyRepository::ensure` 建档）。
+pub struct PeersRepository<'a> {
+    pool: &'a PgPool,
+}
+
+#[derive(Clone, Debug, FromRow)]
+pub struct PeersRow {
+    pub ticker: String,
+    pub peers_json: Option<serde_json::Value>,
+    pub anchor_json: Option<serde_json::Value>,
+    pub knowledge_time: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PeersUpsert {
+    pub ticker: String,
+    pub peers_json: serde_json::Value,
+    pub anchor_json: serde_json::Value,
+    pub partial: bool,
+}
+
+impl<'a> PeersRepository<'a> {
+    #[must_use]
+    pub fn new(pool: &'a PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// 取当前登记行。缺表项即断口——返回 `None`，绝不用陈旧值冒充。
+    pub async fn latest(&self, ticker: &str) -> Result<Option<PeersRow>> {
+        let row = sqlx::query_as::<_, PeersRow>(
+            "SELECT ticker, peers_json, anchor_json, knowledge_time \
+             FROM comp_peers WHERE ticker = $1 AND provider_status = 'ok'",
+        )
+        .bind(ticker)
+        .fetch_optional(self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// 用最新供应商数据整行覆盖（`provider_status` 置 ok，`knowledge_time` 推进）。
+    pub async fn upsert(&self, value: &PeersUpsert) -> Result<()> {
+        let ticker = value.ticker.trim().to_ascii_uppercase();
+        sqlx::query(
+            "INSERT INTO comp_peers \
+             (ticker, peers_json, anchor_json, provider_status, partial, valid_time, knowledge_time) \
+             VALUES ($1, $2, $3, 'ok', $4, now(), now()) \
+             ON CONFLICT (ticker) DO UPDATE SET \
+               peers_json = EXCLUDED.peers_json, \
+               anchor_json = EXCLUDED.anchor_json, \
+               provider_status = 'ok', \
+               partial = EXCLUDED.partial, \
+               valid_time = now(), \
+               knowledge_time = now()",
+        )
+        .bind(&ticker)
+        .bind(&value.peers_json)
+        .bind(&value.anchor_json)
+        .bind(value.partial)
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
+/// 公司公告/披露仓储——`company_filings`（唯一读写入口；不分租户，公共参考数据；`ticker`
+/// 外键指向 `companies`，写入前调用方须已 `CompanyRepository::ensure` 建档）。
+pub struct FilingsRepository<'a> {
+    pool: &'a PgPool,
+}
+
+#[derive(Clone, Debug, FromRow)]
+pub struct FilingRow {
+    pub form: String,
+    pub filed_date: Option<chrono::NaiveDate>,
+    pub filing_url: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewFiling {
+    pub form: String,
+    pub filed_date: Option<chrono::NaiveDate>,
+    pub accepted_date: Option<chrono::DateTime<chrono::Utc>>,
+    pub report_url: Option<String>,
+    pub filing_url: String,
+}
+
+impl<'a> FilingsRepository<'a> {
+    #[must_use]
+    pub fn new(pool: &'a PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// 该 ticker 最近一次同步时间；缺行即 `None`（从未取过数）。
+    pub async fn last_synced(&self, ticker: &str) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+        let row: Option<(chrono::DateTime<chrono::Utc>,)> = sqlx::query_as(
+            "SELECT MAX(knowledge_time) FROM company_filings WHERE ticker = $1 \
+             HAVING MAX(knowledge_time) IS NOT NULL",
+        )
+        .bind(ticker)
+        .fetch_optional(self.pool)
+        .await?;
+        Ok(row.map(|(t,)| t))
+    }
+
+    /// 按公告日期倒序取最近若干条。缺表项即空表——绝不用陈旧/臆造行冒充。
+    pub async fn recent(&self, ticker: &str, limit: i64) -> Result<Vec<FilingRow>> {
+        let rows = sqlx::query_as::<_, FilingRow>(
+            "SELECT form, filed_date, filing_url FROM company_filings \
+             WHERE ticker = $1 ORDER BY filed_date DESC NULLS LAST, id DESC LIMIT $2",
+        )
+        .bind(ticker)
+        .bind(limit)
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// 批量插入新公告；已存在（同 ticker + filing_url）静默跳过——filings 是不可变历史记录，
+    /// 不存在"覆盖更新"语义。`knowledge_time` 用当前时刻标记本轮同步。
+    pub async fn insert_batch(&self, ticker: &str, filings: &[NewFiling]) -> Result<()> {
+        if filings.is_empty() {
+            return Ok(());
+        }
+        let ticker = ticker.trim().to_ascii_uppercase();
+        let mut tx = self.pool.begin().await?;
+        for filing in filings {
+            sqlx::query(
+                "INSERT INTO company_filings \
+                 (ticker, form, filed_date, accepted_date, report_url, filing_url, source, valid_time, knowledge_time) \
+                 VALUES ($1, $2, $3, $4, $5, $6, 'finnhub', now(), now()) \
+                 ON CONFLICT (ticker, filing_url) DO NOTHING",
+            )
+            .bind(&ticker)
+            .bind(&filing.form)
+            .bind(filing.filed_date)
+            .bind(filing.accepted_date)
+            .bind(&filing.report_url)
+            .bind(&filing.filing_url)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::truncate_error_detail;
@@ -429,6 +771,70 @@ mod tests {
         );
 
         // 清理探针，不留污染。
+        sqlx::query("DELETE FROM scheduler_state WHERE job_id = $1")
+            .bind(probe_id)
+            .execute(&pool)
+            .await
+            .expect("cleanup probe");
+    }
+
+    /// 活库集成：worker-lease 原子抢占（IMPROVEMENT_PLAN §4 P4-1）。证明"第二个实例在租约有效期内
+    /// 抢不到、`record_run` 会释放锁、锁过期后能重新抢到"三件事——这正是多 worker 部署下防止
+    /// 同一 job 被重复执行所依赖的不变量。默认 `#[ignore]`，手动跑：`cargo test -p echo-db -- --ignored`。
+    #[tokio::test]
+    #[ignore = "需要活库 DATABASE_URL"]
+    async fn live_scheduler_lease_claim_round_trip() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            return;
+        };
+        let pool = super::connect(&url, 2).await.expect("connect");
+        if std::env::var("ECHO_SKIP_TEST_MIGRATE").ok().as_deref() != Some("1") {
+            super::migrate(&pool).await.expect("migrate");
+        }
+        let repo = super::SchedulerStateRepository::new(&pool);
+        let probe_id = "echo-verify-lease-probe";
+        repo.register_job(probe_id).await.expect("register");
+
+        // 实例 A 抢到租约。
+        let claimed_a = repo
+            .try_claim(probe_id, "worker-a", 60)
+            .await
+            .expect("claim a");
+        assert!(claimed_a, "首次抢占应成功");
+
+        // 实例 B 在租约有效期内抢同一 job——必须失败，不能两个实例同时跑同一作业。
+        let claimed_b = repo
+            .try_claim(probe_id, "worker-b", 60)
+            .await
+            .expect("claim b");
+        assert!(!claimed_b, "租约未过期时第二个实例不应抢到");
+
+        // A 跑完调 record_run——应同时释放锁，B 立刻能抢到，不必等 60s 租约到期。
+        repo.record_run(probe_id, "ok", Some("lease probe"))
+            .await
+            .expect("record_run releases lease");
+        let claimed_b_after_release = repo
+            .try_claim(probe_id, "worker-b", 60)
+            .await
+            .expect("claim b after release");
+        assert!(claimed_b_after_release, "record_run 后锁应已释放，B 能抢到");
+        repo.record_run(probe_id, "ok", Some("release b"))
+            .await
+            .expect("release b's claim before expiry scenario");
+
+        // 租约过期（用负秒数模拟已过期）后，即便没调 record_run，别的实例也能重新抢到——
+        // 覆盖"持锁进程崩溃"场景，不会永久卡死这个 job。
+        let claimed_c = repo
+            .try_claim(probe_id, "worker-c", -1)
+            .await
+            .expect("claim c expires immediately");
+        assert!(claimed_c, "锁已释放，C 应能抢到（即便租约设为已过期）");
+        let claimed_d = repo
+            .try_claim(probe_id, "worker-d", 60)
+            .await
+            .expect("claim d");
+        assert!(claimed_d, "过期租约应可被下一个实例重新抢占");
+
         sqlx::query("DELETE FROM scheduler_state WHERE job_id = $1")
             .bind(probe_id)
             .execute(&pool)

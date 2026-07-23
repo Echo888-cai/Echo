@@ -10,9 +10,9 @@
 //! 研究质量的病灶所在。单公司硬取值：面板与护栏只吃本请求这一家公司的财务事实，
 //! 跨公司污染（"问苹果答腾讯"）在类型层面就发生不了。
 
-use axum::extract::{Extension, Path, Query, Request, State};
-use axum::http::header::{COOKIE, SET_COOKIE};
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::extract::{DefaultBodyLimit, Extension, Path, Query, Request, State};
+use axum::http::header::{COOKIE, ORIGIN, SET_COOKIE};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -26,40 +26,53 @@ use echo_application::model_gateway::{
 };
 use echo_application::{
     AuthError, AuthService, CompanyResolvePorts, CompanyResolveService, DbCompanyHit,
-    ExternalSymbolHit, LoadedFundamentals, PeerComparable, PersistResearchSession, ResearchPorts,
-    ResearchService, ResolvedCompany, market_snapshot_from_rows, resolved_company_from_rows,
+    ExternalSymbolHit, LoadedFundamentals, PersistResearchSession, PriorTurn, ReportService,
+    ResearchPorts, ResearchService, ResolvedCompany, WatchRuleError, WatchRuleService,
+    market_snapshot_from_rows, resolved_company_from_rows,
 };
 use echo_config::ApiConfig;
 use echo_contracts::{
     AskRequest, AskResponse, AuthInviteRequest, AuthInviteResponse, AuthLoginRequest,
     AuthLogoutResponse, AuthMeResponse, AuthRegisterRequest, AuthUserResponse,
-    ChangedCountResponse, CompanyResolveItem, CompanyResolveQuery, CompanyResolveResponse,
-    CompanySearchItem, CompanySearchQuery, CompanySearchResponse, CompanyVerifyQuery,
-    CompanyVerifyResponse, CompanyVerifySuggestion, ErrorResponse, HealthResponse, ListQuery,
-    MutationResponse, Notification, NotificationReadRequest, NotificationsListResponse,
+    ChangedCountResponse, CompanyProfileDetail, CompanyProfileResponse, CompanyProfileSummary,
+    CompanyProfileUpsertRequest, CompanyProfilesListResponse, CompanyResolveItem,
+    CompanyResolveQuery, CompanyResolveResponse, CompanySearchItem, CompanySearchQuery,
+    CompanySearchResponse, CompanyVerifyQuery, CompanyVerifyResponse, CompanyVerifySuggestion,
+    CompareRequest, CompareResponse, DeskResponse, DeskTicker, ErrorResponse, HealthResponse,
+    ListQuery, MutationResponse, Notification, NotificationReadRequest, NotificationsListResponse,
     PortfolioListResponse, PortfolioPosition, PortfolioUpsertRequest, PreferencesResponse,
-    PreferencesUpdateRequest, PublicUser, ResearchSessionDetail, ResearchSessionResponse,
-    ResearchSessionSummary, ResearchSessionsResponse, ResearchStreamEvent, TickerQuery,
-    UnreadResponse, UserPreferences, UserRole, WatchEntry, WatchListResponse, WatchMutationRequest,
+    PreferencesUpdateRequest, PublicUser, ReportGenerateResponse, ResearchSessionDetail,
+    ResearchSessionResponse, ResearchSessionSummary, ResearchSessionsResponse, ResearchStreamEvent,
+    TickerQuery, UnreadResponse, UserPreferences, UserRole, WatchEntry, WatchListResponse,
+    WatchMutationRequest, WatchRule, WatchRuleCreateRequest, WatchRuleDeleteRequest,
+    WatchRulesListResponse,
 };
 use echo_data::{
-    FmpSearchService, FundamentalsRow, FundamentalsService, PeersService, QuoteService, pct_change,
-    pct_of,
+    CalendarService, FilingsService, FmpSearchService, FundamentalsRow, FundamentalsService,
+    HistoricalValuationService, PeerService, QuoteService, pct_change, pct_of,
 };
 use echo_db::{
-    CompanyRepository, MarketRepository, NotificationsRepository, Pool, PortfolioRepository,
-    PortfolioUpsert, PreferencesPatch, PreferencesRepository, ResearchSessionRepository,
-    SaveResearchSession, UserPreferencesRow, WatchlistRepository,
+    CompanyProfileRepository, CompanyProfileUpsert, CompanyRepository, MarketRepository,
+    NotificationsRepository, Pool, PortfolioRepository, PortfolioUpsert, PreferencesPatch,
+    PreferencesRepository, RateLimitRepository, ResearchSessionRepository, SaveResearchSession,
+    UserPreferencesRow, WatchlistRepository,
 };
-use echo_domain::{Financials, MarketSnapshot};
+use echo_domain::{
+    EarningsCalendar, Filing, Financials, HistoricalValuation, MarketSnapshot, MultipleType,
+    PeerAnchor, company_identity_key, has_compare_cue, match_company_mentions,
+};
 use futures_util::Stream;
 use std::convert::Infallible;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
+use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::{error, info, warn};
 
 const COOKIE_NAME: &str = "echo_session";
 const SESSION_MAX_AGE_SECONDS: i64 = 30 * 86_400;
+/// 请求体上限：研究请求体是结构化数字 + 一段问题/草稿文本，512KiB 留足余量，拦掉异常大包。
+const MAX_JSON_BODY_BYTES: usize = 512 * 1024;
+const ASK_RATE_LIMIT_WINDOW_SECONDS: i64 = 60;
 
 /// 共享状态：可选的数据库连接池。未配 `DATABASE_URL` 时为 `None`——`/api/ask` 只吃请求体里带的
 /// 数字（纯核路径，可离库端到端验证）；配了库则在缺行情时从 `echo-db` 兜底最新快照。
@@ -69,12 +82,17 @@ pub struct AppState {
     pool: Option<Pool>,
     quotes: Option<QuoteService>,
     fundamentals: Option<FundamentalsService>,
+    calendar: Option<CalendarService>,
+    historical_valuation: Option<HistoricalValuationService>,
+    peers: Option<PeerService>,
+    filings: Option<FilingsService>,
     fmp_search: Option<FmpSearchService>,
-    peers: Option<PeersService>,
     auth_disabled: bool,
     auth_disabled_user_id: String,
     secure_cookie: bool,
     model_provider: Option<ProviderConfig>,
+    allowed_origins: Vec<String>,
+    ask_rate_limit_per_minute: u32,
 }
 
 impl AppState {
@@ -84,12 +102,17 @@ impl AppState {
             pool: None,
             quotes: None,
             fundamentals: None,
-            fmp_search: None,
+            calendar: None,
+            historical_valuation: None,
             peers: None,
+            filings: None,
+            fmp_search: None,
             auth_disabled: true,
             auth_disabled_user_id: "local".into(),
             secure_cookie: false,
             model_provider: None,
+            allowed_origins: vec!["http://localhost:5191".into()],
+            ask_rate_limit_per_minute: 20,
         }
     }
 }
@@ -148,12 +171,94 @@ fn map_db_error(error: echo_db::DbError) -> ApiError {
     ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "数据库操作失败")
 }
 
+fn map_watch_rule_error(error: WatchRuleError) -> ApiError {
+    match error {
+        WatchRuleError::Db(error) => map_db_error(error),
+        other => ApiError::new(StatusCode::BAD_REQUEST, other.to_string()),
+    }
+}
+
 fn require_pool(state: &AppState) -> Result<&Pool, ApiError> {
     state.pool.as_ref().ok_or_else(ApiError::database_required)
 }
 
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse::ok())
+}
+
+/// 就绪探针：配了 `DATABASE_URL` 就必须能连上（`SELECT 1`），否则 503——流量不该被路由到
+/// 一个数据库掉线的副本。未配库属有意的纯核部署，视为就绪（与 `AppState::without_database`
+/// 的设计一致，不是降级）。
+async fn ready(State(state): State<AppState>) -> Response {
+    let Some(pool) = state.pool.as_ref() else {
+        return Json(HealthResponse::ok()).into_response();
+    };
+    match echo_db::ping(pool).await {
+        Ok(()) => Json(HealthResponse::ok()).into_response(),
+        Err(error) => {
+            error!(error = %error, "readiness 探针失败：数据库不可达");
+            ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "数据库不可达").into_response()
+        }
+    }
+}
+
+/// Origin 校验（CSRF 防护）：状态变更请求带 `Origin` 头时必须在白名单内；非浏览器客户端
+/// 通常不带该头，放行——拦的是"浏览器从别的站点悄悄提交这个会话的 Cookie"这类跨站请求。
+async fn enforce_origin(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    if !matches!(
+        *request.method(),
+        Method::GET | Method::HEAD | Method::OPTIONS
+    ) {
+        if let Some(origin) = request
+            .headers()
+            .get(ORIGIN)
+            .and_then(|value| value.to_str().ok())
+        {
+            if !state
+                .allowed_origins
+                .iter()
+                .any(|allowed| allowed == origin)
+            {
+                warn!(origin, "Origin 校验拒绝跨站请求");
+                return ApiError::new(StatusCode::FORBIDDEN, "非法请求来源").into_response();
+            }
+        }
+    }
+    next.run(request).await
+}
+
+/// 研究端点限流：按用户 + 60 秒滑动窗口共享 `rate_limit_buckets`，挡掉对昂贵模型调用的
+/// 高频重放。仅在配库时生效；限流查询自身出错按放行处理（限流故障不该拖垮研究主链）。
+async fn rate_limit_ask(
+    State(state): State<AppState>,
+    Extension(user): Extension<PublicUser>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if let Some(pool) = state.pool.as_ref() {
+        let key = format!("ask:{}", user.id);
+        match RateLimitRepository::new(pool)
+            .try_consume(
+                &key,
+                state.ask_rate_limit_per_minute as i32,
+                ASK_RATE_LIMIT_WINDOW_SECONDS,
+            )
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                return ApiError::new(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "研究请求过于频繁，请稍后再试",
+                )
+                .into_response();
+            }
+            Err(error) => {
+                error!(error = %error, "限流检查失败，本次放行");
+            }
+        }
+    }
+    next.run(request).await
 }
 
 fn request_token(headers: &HeaderMap) -> Option<&str> {
@@ -545,6 +650,141 @@ async fn watch_untrack(
     Ok(Json(MutationResponse { changed }))
 }
 
+fn watch_rule_view(row: echo_db::WatchRuleDetailRow) -> WatchRule {
+    WatchRule {
+        id: row.id,
+        ticker: row.ticker,
+        kind: row.kind,
+        threshold: row.threshold,
+        metric: row.metric,
+        label: row.label,
+        active: row.active,
+        created_at: row.created_at.to_rfc3339(),
+        last_triggered_at: row.last_triggered_at.map(|value| value.to_rfc3339()),
+    }
+}
+
+async fn watch_rules_list(
+    State(state): State<AppState>,
+    Extension(user): Extension<PublicUser>,
+) -> Result<Json<WatchRulesListResponse>, ApiError> {
+    let rules = WatchRuleService::new(require_pool(&state)?)
+        .list(&user.id)
+        .await
+        .map_err(map_watch_rule_error)?
+        .into_iter()
+        .map(watch_rule_view)
+        .collect();
+    Ok(Json(WatchRulesListResponse { rules }))
+}
+
+async fn watch_rules_create(
+    State(state): State<AppState>,
+    Extension(user): Extension<PublicUser>,
+    Json(input): Json<WatchRuleCreateRequest>,
+) -> Result<Json<WatchRule>, ApiError> {
+    let row = WatchRuleService::new(require_pool(&state)?)
+        .create(
+            &user.id,
+            &input.ticker,
+            &input.kind,
+            input.threshold,
+            input.metric.as_deref(),
+            input.label.as_deref(),
+        )
+        .await
+        .map_err(map_watch_rule_error)?;
+    Ok(Json(watch_rule_view(row)))
+}
+
+async fn watch_rules_delete(
+    State(state): State<AppState>,
+    Extension(user): Extension<PublicUser>,
+    Query(input): Query<WatchRuleDeleteRequest>,
+) -> Result<Json<MutationResponse>, ApiError> {
+    let changed = WatchRuleService::new(require_pool(&state)?)
+        .delete(&user.id, input.id)
+        .await
+        .map_err(map_watch_rule_error)?;
+    Ok(Json(MutationResponse { changed }))
+}
+
+/// 自选台面聚合：已跟踪 ticker（关注列表 + 持仓 + 有规则但未在前两者出现的 ticker）
+/// 各自的最新行情、挂载的监控规则，以及近期触发通知——全部只读聚合已有仓储，不新增写路径。
+async fn watch_desk(
+    State(state): State<AppState>,
+    Extension(user): Extension<PublicUser>,
+) -> Result<Json<DeskResponse>, ApiError> {
+    let pool = require_pool(&state)?;
+    let watchlist = WatchlistRepository::new(pool)
+        .list(&user.id)
+        .await
+        .map_err(map_db_error)?;
+    let positions = PortfolioRepository::new(pool)
+        .list(&user.id)
+        .await
+        .map_err(map_db_error)?;
+    let rules = WatchRuleService::new(pool)
+        .list(&user.id)
+        .await
+        .map_err(map_watch_rule_error)?;
+
+    let mut names: std::collections::BTreeMap<String, Option<String>> =
+        std::collections::BTreeMap::new();
+    for entry in watchlist.into_iter().filter(|entry| entry.mode == "add") {
+        names.insert(entry.ticker, entry.company_name);
+    }
+    for position in &positions {
+        names
+            .entry(position.ticker.clone())
+            .or_insert_with(|| position.company_name.clone());
+    }
+    let mut rules_by_ticker: std::collections::BTreeMap<String, Vec<WatchRule>> =
+        std::collections::BTreeMap::new();
+    for rule in rules {
+        names.entry(rule.ticker.clone()).or_insert(None);
+        rules_by_ticker
+            .entry(rule.ticker.clone())
+            .or_default()
+            .push(watch_rule_view(rule));
+    }
+
+    let market = MarketRepository::new(pool);
+    let mut tickers = Vec::with_capacity(names.len());
+    for (ticker, company_name) in names {
+        let snapshot = market
+            .latest_snapshot(&ticker)
+            .await
+            .map_err(map_db_error)?;
+        tickers.push(DeskTicker {
+            ticker: ticker.clone(),
+            company_name,
+            price: snapshot.as_ref().and_then(|row| row.price),
+            change_percent: snapshot.as_ref().and_then(|row| row.change_percent),
+            rules: rules_by_ticker.remove(&ticker).unwrap_or_default(),
+        });
+    }
+
+    let recent_triggers = NotificationsRepository::new(pool)
+        .list(&user.id, 10)
+        .await
+        .map_err(map_db_error)?
+        .into_iter()
+        .filter(|row| {
+            matches!(
+                row.kind.as_str(),
+                "falsify_alert" | "position_alert" | "earnings_review"
+            )
+        })
+        .map(notification_view)
+        .collect();
+
+    Ok(Json(DeskResponse {
+        tickers,
+        recent_triggers,
+    }))
+}
+
 fn portfolio_position(row: echo_db::PortfolioPositionRow) -> PortfolioPosition {
     PortfolioPosition {
         company_name: row.company_name.unwrap_or_else(|| row.ticker.clone()),
@@ -610,6 +850,112 @@ async fn portfolio_delete(
 ) -> Result<Json<MutationResponse>, ApiError> {
     let changed = PortfolioRepository::new(require_pool(&state)?)
         .delete(&user.id, &query.ticker)
+        .await
+        .map_err(map_db_error)?;
+    Ok(Json(MutationResponse { changed }))
+}
+
+fn company_profile_summary(row: echo_db::CompanyProfileSummaryRow) -> CompanyProfileSummary {
+    CompanyProfileSummary {
+        ticker: row.ticker,
+        company_name: row.company_name,
+        research_status: row.research_status,
+        confidence: row.confidence,
+        turn_count: row.turn_count,
+        updated_at: row.updated_at.to_rfc3339(),
+    }
+}
+
+fn company_profile_detail(row: echo_db::CompanyProfileRow) -> CompanyProfileDetail {
+    CompanyProfileDetail {
+        ticker: row.ticker,
+        company_name: row.company_name,
+        thesis: row.thesis,
+        research_status: row.research_status,
+        confidence: row.confidence,
+        bull: row.bull.unwrap_or_default(),
+        bear: row.bear.unwrap_or_default(),
+        monitors: row.monitors.unwrap_or_default(),
+        falsifiers: row.falsifiers.unwrap_or_default(),
+        valuation_method: row.valuation_method,
+        valuation_bear: row.valuation_bear,
+        valuation_base: row.valuation_base,
+        valuation_bull: row.valuation_bull,
+        valuation_current_price: row.valuation_current_price,
+        profile_md: row.profile_md,
+        turn_count: row.turn_count,
+        created_at: row.created_at.to_rfc3339(),
+        updated_at: row.updated_at.to_rfc3339(),
+    }
+}
+
+async fn profiles_list(
+    State(state): State<AppState>,
+    Extension(user): Extension<PublicUser>,
+    Query(query): Query<ListQuery>,
+) -> Result<Json<CompanyProfilesListResponse>, ApiError> {
+    let profiles = CompanyProfileRepository::new(require_pool(&state)?)
+        .list(&user.id, query.limit.unwrap_or(50))
+        .await
+        .map_err(map_db_error)?
+        .into_iter()
+        .map(company_profile_summary)
+        .collect();
+    Ok(Json(CompanyProfilesListResponse { profiles }))
+}
+
+async fn profile_get(
+    State(state): State<AppState>,
+    Extension(user): Extension<PublicUser>,
+    Path(ticker): Path<String>,
+) -> Result<Json<CompanyProfileResponse>, ApiError> {
+    let profile = CompanyProfileRepository::new(require_pool(&state)?)
+        .get(&user.id, &ticker)
+        .await
+        .map_err(map_db_error)?
+        .map(company_profile_detail);
+    Ok(Json(CompanyProfileResponse { profile }))
+}
+
+async fn profile_upsert(
+    State(state): State<AppState>,
+    Extension(user): Extension<PublicUser>,
+    Path(ticker): Path<String>,
+    Json(input): Json<CompanyProfileUpsertRequest>,
+) -> Result<Json<CompanyProfileDetail>, ApiError> {
+    let row = CompanyProfileRepository::new(require_pool(&state)?)
+        .upsert(
+            &user.id,
+            &ticker,
+            &CompanyProfileUpsert {
+                company_name: input.company_name,
+                thesis: input.thesis,
+                research_status: input.research_status,
+                confidence: input.confidence,
+                bull: input.bull,
+                bear: input.bear,
+                monitors: input.monitors,
+                falsifiers: input.falsifiers,
+                valuation_method: input.valuation_method,
+                valuation_bear: input.valuation_bear,
+                valuation_base: input.valuation_base,
+                valuation_bull: input.valuation_bull,
+                valuation_current_price: input.valuation_current_price,
+                profile_md: input.profile_md,
+            },
+        )
+        .await
+        .map_err(map_db_error)?;
+    Ok(Json(company_profile_detail(row)))
+}
+
+async fn profile_delete(
+    State(state): State<AppState>,
+    Extension(user): Extension<PublicUser>,
+    Path(ticker): Path<String>,
+) -> Result<Json<MutationResponse>, ApiError> {
+    let changed = CompanyProfileRepository::new(require_pool(&state)?)
+        .delete(&user.id, &ticker)
         .await
         .map_err(map_db_error)?;
     Ok(Json(MutationResponse { changed }))
@@ -693,6 +1039,19 @@ async fn preferences_update(
     }))
 }
 
+fn notification_view(row: echo_db::NotificationRow) -> Notification {
+    Notification {
+        id: row.id,
+        kind: row.kind,
+        title: row.title,
+        body: row.body.unwrap_or_default(),
+        ticker: row.ticker,
+        payload: row.payload,
+        created_at: row.created_at.to_rfc3339(),
+        read_at: row.read_at.map(|date| date.to_rfc3339()),
+    }
+}
+
 async fn notifications_list(
     State(state): State<AppState>,
     Extension(user): Extension<PublicUser>,
@@ -703,16 +1062,7 @@ async fn notifications_list(
         .await
         .map_err(map_db_error)?
         .into_iter()
-        .map(|row| Notification {
-            id: row.id,
-            kind: row.kind,
-            title: row.title,
-            body: row.body.unwrap_or_default(),
-            ticker: row.ticker,
-            payload: row.payload,
-            created_at: row.created_at.to_rfc3339(),
-            read_at: row.read_at.map(|date| date.to_rfc3339()),
-        })
+        .map(notification_view)
         .collect();
     Ok(Json(NotificationsListResponse { notifications }))
 }
@@ -920,26 +1270,65 @@ impl ResearchPorts for ApiResearchPorts {
         })
     }
 
-    /// 同业候选 PE（TTM）：Finnhub 取候选 ticker，逐个复用 FMP fundamentals 取 `pe_ttm`。
-    /// 缺 peers/fundamentals 服务、上游失败、或候选无正 PE 一律返回空，不阻断主研究链。
-    async fn load_peers(&self, ticker: &str) -> Vec<PeerComparable> {
-        let (Some(peers), Some(fundamentals)) =
-            (self.state.peers.as_ref(), self.state.fundamentals.as_ref())
-        else {
+    async fn load_earnings_calendar(&self, ticker: &str) -> Option<EarningsCalendar> {
+        let service = self.state.calendar.as_ref()?;
+        let row = service.load(ticker).await?;
+        row.next_date.is_some().then_some(EarningsCalendar {
+            provider_ok: true,
+            next_date: row.next_date,
+            quarter: row.quarter,
+            year: row.year,
+            eps_estimate: row.eps_estimate,
+            revenue_estimate: row.revenue_estimate,
+        })
+    }
+
+    async fn load_historical_valuation(&self, ticker: &str) -> Option<HistoricalValuation> {
+        let service = self.state.historical_valuation.as_ref()?;
+        let summary = service.load(ticker).await?;
+        Some(HistoricalValuation {
+            percentile: summary.percentile,
+            min: summary.min,
+            max: summary.max,
+            median: summary.median,
+        })
+    }
+
+    async fn load_peer_anchor(
+        &self,
+        ticker: &str,
+        multiple_type: MultipleType,
+    ) -> Option<PeerAnchor> {
+        let service = self.state.peers.as_ref()?;
+        let summary = service.load(ticker).await?;
+        let band = match multiple_type {
+            MultipleType::Pe => summary.pe,
+            MultipleType::EvSales => summary.ev_sales,
+        }?;
+        Some(PeerAnchor {
+            multiple_type,
+            p25: band.p25,
+            median: band.median,
+            p75: band.p75,
+            n: band.n,
+            tickers: band.tickers,
+        })
+    }
+
+    async fn load_recent_filings(&self, ticker: &str) -> Vec<Filing> {
+        let Some(service) = self.state.filings.as_ref() else {
             return Vec::new();
         };
-        let candidates = peers.fetch_peer_tickers(ticker).await;
-        let mut comparables = Vec::with_capacity(candidates.len());
-        for candidate in candidates {
-            let result = fundamentals.fetch(&candidate).await;
-            if let Some(pe_ttm) = result.latest().and_then(|row| row.pe_ttm) {
-                comparables.push(PeerComparable {
-                    ticker: candidate,
-                    pe_ttm,
-                });
-            }
-        }
-        comparables
+        service
+            .recent(ticker)
+            .await
+            .into_iter()
+            .map(|filing| Filing {
+                form: filing.form,
+                filed_date: filing.filed_date,
+                source_url: filing.source_url,
+            })
+            .collect()
     }
 
     async fn complete_answer(&self, system: &str, user: &str, user_id: &str) -> Option<String> {
@@ -982,11 +1371,12 @@ impl ResearchPorts for ApiResearchPorts {
         &self,
         user_id: &str,
         session: PersistResearchSession,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let Some(pool) = &self.state.pool else {
-            return Ok(());
+            return Ok(session.id.unwrap_or_else(|| "s_offline".to_string()));
         };
         let save = SaveResearchSession {
+            id: session.id,
             ticker: session.ticker,
             company_name: session.company_name,
             question: session.question,
@@ -995,22 +1385,60 @@ impl ResearchPorts for ApiResearchPorts {
             full_research: session.full_research,
             data_sources: session.data_sources,
             turn_count: session.turn_count,
+            thread: session.thread,
             ..Default::default()
         };
         ResearchSessionRepository::new(pool)
             .save(user_id, &save)
             .await
-            .map(|_| ())
             .map_err(|error| error.to_string())
     }
+
+    async fn load_prior_turns(&self, user_id: &str, session_id: &str) -> Vec<PriorTurn> {
+        let Some(pool) = &self.state.pool else {
+            return Vec::new();
+        };
+        let Ok(Some(row)) = ResearchSessionRepository::new(pool)
+            .get(user_id, session_id)
+            .await
+        else {
+            return Vec::new();
+        };
+        row.thread_json
+            .and_then(|value| serde_json::from_value::<Vec<PriorTurn>>(value).ok())
+            .unwrap_or_default()
+    }
+}
+
+/// 主体识别失败的统一诚实报错——绝不带着空 ticker 往下走（那会产出无事实的臆造面）。
+const UNRESOLVED_SUBJECT_MESSAGE: &str =
+    "未能从问题中识别出研究对象——请补充公司名称或代码（如 苹果 / AAPL / 0700.HK）。";
+
+/// 对话内自动对比：问题带对比语气、且点名了与主体不同的第二家公司时，返回对比腿候选。
+/// 纯规则识别；候选仍要走 `prepare_research_request` 验证/建档后才真正成腿。
+fn detect_compare_peer(primary_ticker: &str, question: &str) -> Option<String> {
+    if !has_compare_cue(question) {
+        return None;
+    }
+    let primary_key = company_identity_key(primary_ticker);
+    match_company_mentions(question)
+        .into_iter()
+        .map(|mention| mention.ticker)
+        .find(|ticker| company_identity_key(ticker) != primary_key)
 }
 
 async fn ask(
     State(state): State<AppState>,
     Extension(current_user): Extension<PublicUser>,
     Json(req): Json<AskRequest>,
-) -> Json<AskResponse> {
+) -> Result<Json<AskResponse>, ApiError> {
     let req = prepare_research_request(&state, req).await;
+    if req.ticker.trim().is_empty() {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            UNRESOLVED_SUBJECT_MESSAGE,
+        ));
+    }
     let ports = ApiResearchPorts {
         state: state.clone(),
     };
@@ -1018,19 +1446,118 @@ async fn ask(
     if !outcome.persisted && state.pool.is_some() {
         warn!(ticker = req.ticker, "研究会话落库失败，保留本轮响应");
     }
+    Ok(Json(outcome.response))
+}
+
+/// 双主体对比研究：`POST /api/compare` —— 两个 ticker 各自走同一条单公司解析/建档管线
+/// （`prepare_research_request`），再交给 `ResearchService::compare` 隔离取数、分别护栏。
+/// 不落库（对比会话的落库形态待产品判断，见 IMPROVEMENT_PLAN §4 P3-1）。
+async fn compare(
+    State(state): State<AppState>,
+    Extension(current_user): Extension<PublicUser>,
+    Json(req): Json<CompareRequest>,
+) -> Json<CompareResponse> {
+    let primary = prepare_research_request(
+        &state,
+        AskRequest::minimal(req.question.clone(), req.primary_ticker),
+    )
+    .await;
+    let peer = prepare_research_request(
+        &state,
+        AskRequest::minimal(req.question.clone(), req.peer_ticker),
+    )
+    .await;
+    let ports = ApiResearchPorts {
+        state: state.clone(),
+    };
+    let outcome = ResearchService::compare(
+        &ports,
+        &current_user.id,
+        req.question,
+        primary.ticker,
+        peer.ticker,
+    )
+    .await;
     Json(outcome.response)
+}
+
+/// 深度报告：`POST /api/report/generate` —— 与 `/api/ask` 共用同一条取数/建档管线
+/// （`prepare_research_request`），交给 `ReportService::generate` 走报告专属提示词/固定结构，
+/// 模型不可用或输出过短时退化为本地确定性报告；落库归位同一研究会话（`session_id` 续接）。
+async fn report_generate(
+    State(state): State<AppState>,
+    Extension(current_user): Extension<PublicUser>,
+    Json(req): Json<AskRequest>,
+) -> Result<Json<ReportGenerateResponse>, ApiError> {
+    let req = prepare_research_request(&state, req).await;
+    if req.ticker.trim().is_empty() {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            UNRESOLVED_SUBJECT_MESSAGE,
+        ));
+    }
+    let ports = ApiResearchPorts {
+        state: state.clone(),
+    };
+    let outcome = ReportService::generate(&ports, &current_user.id, req.clone()).await;
+    if !outcome.persisted && state.pool.is_some() {
+        warn!(ticker = req.ticker, "深度报告会话落库失败，保留本轮响应");
+    }
+    Ok(Json(outcome.response))
 }
 
 /// 流式作答：`POST /api/ask/stream` —— 类型化 SSE（meta/stage/delta/guard/final/error）；
 /// 仅在干净完成后跑护栏并落库，由 `final.persisted` 报告落库结果。
+/// 单事件 SSE 流——主体识别失败等一次性终态用。
+fn one_shot_stream(
+    event: echo_contracts::ResearchStreamEvent,
+) -> tokio::sync::mpsc::Receiver<echo_contracts::ResearchStreamEvent> {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(async move {
+        let _ = tx.send(event).await;
+    });
+    rx
+}
+
 async fn ask_stream(
     State(state): State<AppState>,
     Extension(current_user): Extension<PublicUser>,
     Json(req): Json<AskRequest>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let req = prepare_research_request(&state, req).await;
-    let ports = ApiResearchPorts { state };
-    let rx = ResearchService::ask_stream(ports, current_user.id, req);
+    let ports = ApiResearchPorts {
+        state: state.clone(),
+    };
+    let rx = if req.ticker.trim().is_empty() {
+        // 主体识别失败：诚实报错，绝不带空 ticker 起研究。
+        one_shot_stream(echo_contracts::ResearchStreamEvent::Error(
+            echo_contracts::ResearchStreamError {
+                message: UNRESOLVED_SUBJECT_MESSAGE.into(),
+            },
+        ))
+    } else if let Some(peer_candidate) = detect_compare_peer(&req.ticker, &req.question) {
+        // 对话内自动对比：对比腿走同一条验证/建档管线；验证失败或与主体同司则回落单主体。
+        let peer = prepare_research_request(
+            &state,
+            AskRequest::minimal(req.question.clone(), peer_candidate),
+        )
+        .await;
+        if !peer.ticker.trim().is_empty()
+            && company_identity_key(&peer.ticker) != company_identity_key(&req.ticker)
+        {
+            ResearchService::compare_stream(
+                ports,
+                current_user.id,
+                req.question.clone(),
+                req.ticker.clone(),
+                peer.ticker,
+            )
+        } else {
+            ResearchService::ask_stream(ports, current_user.id, req)
+        }
+    } else {
+        ResearchService::ask_stream(ports, current_user.id, req)
+    };
     let stream = ReceiverStream::new(rx).map(|event: ResearchStreamEvent| {
         let name = event.event_name();
         let data = serde_json::to_string(&event).unwrap_or_else(|_| {
@@ -1047,9 +1574,21 @@ async fn ask_stream(
 }
 
 pub fn router(state: AppState) -> Router {
+    let ask_rate_limited = middleware::from_fn_with_state(state.clone(), rate_limit_ask);
     let protected = Router::new()
-        .route("/api/ask", post(ask))
-        .route("/api/ask/stream", post(ask_stream))
+        .route("/api/ask", post(ask).route_layer(ask_rate_limited.clone()))
+        .route(
+            "/api/ask/stream",
+            post(ask_stream).route_layer(ask_rate_limited.clone()),
+        )
+        .route(
+            "/api/compare",
+            post(compare).route_layer(ask_rate_limited.clone()),
+        )
+        .route(
+            "/api/report/generate",
+            post(report_generate).route_layer(ask_rate_limited),
+        )
         .route("/api/auth/invite", post(auth_invite))
         .route("/api/companies/search", get(companies_search))
         .route("/api/companies/resolve", get(companies_resolve))
@@ -1057,6 +1596,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/watch/list", get(watch_list))
         .route("/api/watch/track", post(watch_track))
         .route("/api/watch/untrack", post(watch_untrack))
+        .route(
+            "/api/watch/rules",
+            get(watch_rules_list)
+                .post(watch_rules_create)
+                .delete(watch_rules_delete),
+        )
+        .route("/api/watch/desk", get(watch_desk))
         .route(
             "/api/portfolio",
             get(portfolio_list)
@@ -1078,15 +1624,35 @@ pub fn router(state: AppState) -> Router {
             "/api/research/sessions/:id",
             get(research_session_get).delete(research_session_delete),
         )
+        .route("/api/profiles", get(profiles_list))
+        .route(
+            "/api/profiles/:ticker",
+            get(profile_get).put(profile_upsert).delete(profile_delete),
+        )
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
     Router::new()
         .route("/health", get(health))
         .route("/healthz", get(health))
+        .route("/ready", get(ready))
         .route("/api/auth/login", post(auth_login))
         .route("/api/auth/register", post(auth_register))
         .route("/api/auth/logout", post(auth_logout))
         .route("/api/auth/me", get(auth_me))
         .merge(protected)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            enforce_origin,
+        ))
+        .layer(DefaultBodyLimit::max(MAX_JSON_BODY_BYTES))
+        // 每请求生成一个 tracing span（method+path+status+延迟），是 OTLP 追踪导出的唯一数据
+        // 来源——没有这层，echo-observability 配了 OTLP 端点也无 span 可导，是新增导出通路
+        // 后必须同 PR 接上的调用方（frozen-table 教训）。显式指定 INFO 级：`DefaultMakeSpan`
+        // 缺省是 DEBUG，生产环境默认 `RUST_LOG=info` 会把 span 在到达 OTLP 层之前就过滤掉，
+        // 本地曾用真实 OTLP 收集端复现过这个"配了端点但一条 span 都导不出"的坑。
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(tracing::Level::INFO)),
+        )
         .with_state(state)
 }
 
@@ -1113,24 +1679,68 @@ pub async fn run() {
         QuoteService::new(pool, config.data_sources.clone()).expect("build quote service")
     });
     let fundamentals = FundamentalsService::new(config.data_sources.clone()).ok();
+    let calendar = pool
+        .clone()
+        .and_then(|pool| CalendarService::new(pool, config.data_sources.clone()).ok());
+    let historical_valuation = pool
+        .clone()
+        .and_then(|pool| HistoricalValuationService::new(pool, config.data_sources.clone()).ok());
+    let peers = pool
+        .clone()
+        .and_then(|pool| PeerService::new(pool, config.data_sources.clone()).ok());
+    let filings = pool
+        .clone()
+        .and_then(|pool| FilingsService::new(pool, config.data_sources.clone()).ok());
     let fmp_search = FmpSearchService::new(config.data_sources.clone()).ok();
-    let peers = PeersService::new(config.data_sources.clone()).ok();
     let app = router(AppState {
         pool,
         quotes,
         fundamentals,
-        fmp_search,
+        calendar,
+        historical_valuation,
         peers,
+        filings,
+        fmp_search,
         auth_disabled: config.auth_disabled,
         auth_disabled_user_id: config.auth_disabled_user_id,
         secure_cookie: config.secure_cookie,
         model_provider: config.model_provider,
+        allowed_origins: config.allowed_origins,
+        ask_rate_limit_per_minute: config.ask_rate_limit_per_minute,
     });
     let listener = tokio::net::TcpListener::bind(listen_addr)
         .await
         .expect("bind echo-api");
     info!(address = %listen_addr, "echo-api listening");
-    axum::serve(listener, app).await.expect("serve echo-api");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .expect("serve echo-api");
+    info!("echo-api 收到停机信号，已排空进行中的请求并退出");
+    echo_observability::shutdown();
+}
+
+/// SIGTERM（容器编排下发）与 Ctrl+C 均触发优雅停机：`axum::serve` 收到信号后停止接受新连接，
+/// 等待存量请求处理完再返回，避免容器滚动更新时中断用户正在进行的研究请求。
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("install ctrl+c handler");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
 }
 
 #[cfg(test)]
@@ -1234,6 +1844,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn readiness_is_ok_without_database() {
+        let response = router(AppState::without_database())
+            .oneshot(
+                Request::builder()
+                    .uri("/ready")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("ready");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn mismatched_origin_is_rejected_on_mutating_requests() {
+        let request = AskRequest::minimal("苹果估值？", "AAPL");
+        let response = router(AppState::without_database())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/ask")
+                    .header("content-type", "application/json")
+                    .header("origin", "https://evil.example")
+                    .body(Body::from(serde_json::to_vec(&request).expect("json")))
+                    .expect("request"),
+            )
+            .await
+            .expect("ask");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn matching_origin_is_allowed_through() {
+        let request = AskRequest::minimal("苹果估值？", "AAPL");
+        let response = router(AppState::without_database())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/ask")
+                    .header("content-type", "application/json")
+                    .header("origin", "http://localhost:5191")
+                    .body(Body::from(serde_json::to_vec(&request).expect("json")))
+                    .expect("request"),
+            )
+            .await
+            .expect("ask");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     #[ignore = "需要隔离 DATABASE_URL；验证 Rust 认证、RLS 会话和保护路由"]
     async fn live_register_session_logout_round_trip() {
         let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
@@ -1254,12 +1914,17 @@ mod tests {
             pool: Some(pool),
             quotes: None,
             fundamentals: None,
-            fmp_search: None,
+            calendar: None,
+            historical_valuation: None,
             peers: None,
+            filings: None,
+            fmp_search: None,
             auth_disabled: false,
             auth_disabled_user_id: "local".into(),
             secure_cookie: false,
             model_provider: None,
+            allowed_origins: vec!["http://localhost:5191".into()],
+            ask_rate_limit_per_minute: 20,
         });
 
         let register = AuthRegisterRequest {

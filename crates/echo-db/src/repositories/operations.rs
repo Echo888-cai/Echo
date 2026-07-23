@@ -104,6 +104,22 @@ impl<'a> OperationsRepository<'a> {
         Ok(())
     }
 
+    /// 过去 `hours` 小时内触发过的有效监控条件计数——供简报统计"本轮新增触线"用，
+    /// 不返回明细（明细走通知列表，避免同一份触发在简报与通知面板各说一套）。
+    pub async fn recently_triggered_rule_count(&self, user_id: &str, hours: i64) -> Result<i64> {
+        let mut tx = with_tenant(self.pool, user_id).await?;
+        let count = sqlx::query_scalar(
+            "SELECT count(*) FROM watch_rules WHERE user_id = $1 AND active = true \
+             AND last_triggered_at >= now() - make_interval(hours => $2::int)",
+        )
+        .bind(user_id)
+        .bind(hours.clamp(1, 24 * 30) as i32)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(count)
+    }
+
     pub async fn latest_market(&self, ticker: &str) -> Result<Option<MarketRow>> {
         crate::MarketRepository::new(self.pool)
             .latest_snapshot(ticker)

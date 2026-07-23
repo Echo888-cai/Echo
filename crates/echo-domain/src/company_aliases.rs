@@ -551,6 +551,71 @@ pub fn match_us_alias(text: &str) -> Option<&'static CompanyAlias> {
         .find(|item| item.pattern.is_match(text).unwrap_or(false))
 }
 
+/// 问句里点名的一家公司——纯规则命中（别名或显式代码）；`position` 是它在归一化
+/// 文本里的字节位，用于按出现顺序排主体/对照。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompanyMention {
+    pub ticker: String,
+    pub position: usize,
+}
+
+/// 同一家公司跨上市地的归并键——双重上市（如 9988.HK / BABA）折叠为港股腿，
+/// 避免"阿里巴巴"同时命中两张别名表被误判成两家公司。
+#[must_use]
+pub fn company_identity_key(ticker: &str) -> String {
+    let key = ticker.trim().to_ascii_uppercase();
+    dual_listing_by_ticker(&key).map_or(key, |link| link.hk.to_string())
+}
+
+/// 问句里点名的全部公司（跨港/美别名表 + 显式代码），按出现位置排序、按公司归并键
+/// 去重。纯规则识别，结果仍需供应商验证后才能研究；命中两家及以上即多主体候选。
+#[must_use]
+pub fn match_company_mentions(text: &str) -> Vec<CompanyMention> {
+    let raw = crate::company_identity::normalize_question_text(text);
+    let mut hits: Vec<CompanyMention> = Vec::new();
+    for alias in HK_COMPANY_ALIASES.iter().chain(US_COMPANY_ALIASES.iter()) {
+        if let Ok(Some(found)) = alias.pattern.find(&raw) {
+            hits.push(CompanyMention {
+                ticker: alias.ticker.to_string(),
+                position: found.start(),
+            });
+        }
+    }
+    // 显式代码（1316.HK / $RKLB 之类）——别名表没覆盖的公司也能进多主体识别。
+    // "vs/PK" 是对比连接词，不许被裸词元抽取误当美股代码。
+    if let Some(hk) = crate::company_identity::extract_hk_ticker(&raw) {
+        let digits = hk.trim_end_matches(".HK").trim_start_matches('0');
+        let position = raw.find(digits).unwrap_or(raw.len());
+        hits.push(CompanyMention {
+            ticker: hk,
+            position,
+        });
+    }
+    if let Some(us) = crate::company_identity::extract_us_ticker_token(&raw, &["VS", "PK"]) {
+        let position = raw.to_ascii_uppercase().find(&us).unwrap_or(raw.len());
+        hits.push(CompanyMention {
+            ticker: us,
+            position,
+        });
+    }
+    hits.sort_by_key(|hit| hit.position);
+    let mut seen = std::collections::HashSet::new();
+    hits.retain(|hit| seen.insert(company_identity_key(&hit.ticker)));
+    hits
+}
+
+/// 问句是否带对比语气——多主体自动对比的第二道门：只点名两家公司不必然是对比
+/// （"用微软的打法分析苹果"仍是单主体研究）。
+#[must_use]
+pub fn has_compare_cue(text: &str) -> bool {
+    static CUE: LazyLock<Regex> = LazyLock::new(|| {
+        re(
+            r"对比|比较|相比|比起|对标|谁更|谁(比较)?(强|贵|便宜|高|低|好|优)|谁的.{0,6}(好|强|高|低|贵|便宜)|哪个|哪家|哪只|孰|还是|\bvs\.?\b|\bpk\b|versus|更(好|强|贵|便宜|值得|优)|[和与跟].{1,12}比",
+        )
+    });
+    CUE.is_match(text).unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -597,5 +662,40 @@ mod tests {
                 .iter()
                 .all(|l| l.kind == HkUsLinkKind::DualPrimary)
         );
+    }
+
+    #[test]
+    fn company_mentions_find_two_distinct_companies_in_order() {
+        let mentions = match_company_mentions("苹果和微软谁更值得买");
+        let tickers: Vec<&str> = mentions.iter().map(|m| m.ticker.as_str()).collect();
+        assert_eq!(tickers, vec!["AAPL", "MSFT"]);
+
+        let mentions = match_company_mentions("腾讯 vs 网易，游戏业务谁强");
+        let tickers: Vec<&str> = mentions.iter().map(|m| m.ticker.as_str()).collect();
+        // "vs" 是连接词，绝不许被当成美股代码；网易命中一次不重复。
+        assert_eq!(tickers, vec!["0700.HK", "9999.HK"]);
+    }
+
+    #[test]
+    fn dual_listing_mention_is_one_company_not_two() {
+        // "阿里巴巴" 同时命中港/美两张别名表——必须按公司归并键折叠成一家。
+        let mentions = match_company_mentions("阿里巴巴现在便宜吗");
+        assert_eq!(mentions.len(), 1);
+        assert_eq!(
+            company_identity_key(&mentions[0].ticker),
+            company_identity_key("BABA")
+        );
+    }
+
+    #[test]
+    fn compare_cue_gates_multi_subject_questions() {
+        assert!(has_compare_cue("苹果和微软谁更值得买"));
+        assert!(has_compare_cue("苹果和微软谁贵"));
+        assert!(has_compare_cue("腾讯和阿里谁便宜"));
+        assert!(has_compare_cue("腾讯 vs 网易"));
+        assert!(has_compare_cue("英伟达对比 AMD 的估值"));
+        assert!(has_compare_cue("美团和京东比毛利率"));
+        assert!(!has_compare_cue("英伟达的护城河在哪"));
+        assert!(!has_compare_cue("用微软的打法分析苹果"));
     }
 }
