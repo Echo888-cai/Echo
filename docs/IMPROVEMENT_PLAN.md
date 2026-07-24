@@ -113,7 +113,8 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
 
 ### P2 · 证据优先数据平面（超越 honeclaw 的核心）
 1. `evidence-port` ✅**已接线并 live 验证**（rust-accepted）：`echo-data::EvidenceService`（**双供应商**：
-   `EXA_API_KEY` 优先走 Exa `/search`，否则回落 Tavily `/search`；实时无缓存、无新增迁移）→
+   `EXA_API_KEY` 优先走 Exa `/search`，否则回落 Tavily `/search`；有库走既有
+   `web_evidence` 24h 缓存，无库实时）→
    `ResearchPorts::load_web_evidence`（意图门控：现状/护城河/竞争/风险/证伪/深研这 6 类定性意图才
    拉；估值/财务质量等数字驱动意图不拉，避免二手噪音与延迟）→ `answer_prompt` 证据块（每条编号+
    标题+来源域名+日期+片段+URL；首行硬性纪律：定性论断须标注来源，证据里的数字**不得**当作已核
@@ -122,7 +123,7 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
    consumer 加入 `echo-config`（商用模式拒绝，免费/研究档非商用授权）。供应商失败/未配/额度耗尽一律
    返回空列表诚实降级。2026-07-24 live 浏览器端到端验证：真 Exa 对 AAPL 护城河问题返 5 条新鲜来源
    （含 36氪/21财经/新浪等中文源），答案引用 `[1]`~`[5]` 并把 AI 硬件/供应链风险落到对应来源，Web
-   来源卡渲染，护栏 15 核 11 过 0 硬；估值意图 0 源门控正确。**下一步增强**（未做）：证据落库缓存
+   来源卡渲染，护栏 15 核 11 过 0 硬；估值意图 0 源门控正确。**已补增强**：证据落库缓存
    （当前每次合格提问实时打一次）、港股中文源专用适配器（Exa 中文提问已能出中文源，但仍应有港股
    一手管道同线的专用源）、把证据也接进对比研究两腿。
 2. `filings-and-calendar`：财报日历（Finnhub）✅已接（`echo-data::CalendarService` +

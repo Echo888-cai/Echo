@@ -1,22 +1,29 @@
 //! 网页证据检索——定性研究的二手来源入口。**双供应商可切换**：配了 `EXA_API_KEY` 走 Exa
 //! （语义检索），否则回落 `TAVILY_API_KEY`；端口与主链路无关，换供应商只动本文件。
 //!
-//! 实时无缓存（与 `search.rs` 的 FMP 搜索同形态，不落库、不新增迁移）：每次合格的定性提问
-//! 打一次供应商。**只做定性支撑**——返回的正文片段供模型引用并标注来源，绝不进
+//! 有数据库时优先读 `web_evidence` 24h 缓存，未命中才请求供应商并回写；无数据库时保持
+//! 纯实时路径。**只做定性支撑**——返回的正文片段供模型引用并标注来源，绝不进
 //! `FactsRegistry`、绝不当作已核财务数字来源（护栏仍只认一手财报）。
 //!
 //! 授权口径：免费/研究档不算商用授权，故 `commercial_mode` 下直接拒绝（返回空），与
 //! filings/calendar 等免费源同一处理。任何网络/解析失败一律返回空列表，让研究链路诚实降级
 //! 到"本轮无网页证据、置信度下降"，绝不把错误抛给主链路。
 
+use crate::normalize_ticker;
+use chrono::{DateTime, NaiveDate, Utc};
 use echo_config::DataSourceConfig;
+use echo_db::{NewWebEvidence, Pool, WebEvidenceRepository, WebEvidenceRow};
+use rust_decimal::Decimal;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::time::Duration;
 
 /// 单条片段最长保留字符数——控制注入提示词的体量，超长截断加省略号。
 const SNIPPET_MAX_CHARS: usize = 500;
 /// 单次检索返回的证据条数上限。
 const MAX_RESULTS: u8 = 5;
+/// 相同 ticker/provider/query 的缓存有效期。定性证据需要时效性，不能无限复用旧网页。
+const CACHE_TTL: chrono::Duration = chrono::Duration::hours(24);
 const EXA_SEARCH_URL: &str = "https://api.exa.ai/search";
 const TAVILY_SEARCH_URL: &str = "https://api.tavily.com/search";
 
@@ -38,6 +45,15 @@ pub enum EvidenceProvider {
     Tavily,
 }
 
+impl EvidenceProvider {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Exa => "exa",
+            Self::Tavily => "tavily",
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum EvidenceError {
     #[error("未配置证据供应商 key（EXA_API_KEY 或 TAVILY_API_KEY）")]
@@ -54,6 +70,7 @@ pub struct EvidenceService {
     provider: Option<EvidenceProvider>,
     api_key: Option<String>,
     commercial_mode: bool,
+    pool: Option<Pool>,
 }
 
 impl EvidenceService {
@@ -68,7 +85,16 @@ impl EvidenceService {
             provider,
             api_key,
             commercial_mode: config.commercial_mode,
+            pool: None,
         })
+    }
+
+    /// 生产组合根使用：在实时供应商前接 PostgreSQL 缓存。构造仍不访问数据库，库故障只会在
+    /// 单次检索时降级为实时请求，不影响服务启动。
+    pub fn new_cached(pool: Pool, config: DataSourceConfig) -> Result<Self, EvidenceError> {
+        let mut service = Self::new(config)?;
+        service.pool = Some(pool);
+        Ok(service)
     }
 
     /// 配了任一供应商 key 且非商用模式才算可用；供调用方在纯核/未配场景下跳过。
@@ -100,12 +126,96 @@ impl EvidenceService {
         let (Some(provider), Some(api_key)) = (self.provider, self.api_key.as_deref()) else {
             return Err(EvidenceError::MissingApiKey);
         };
-        let query = build_query(ticker, name, question);
+        let ticker = normalize_ticker(ticker);
+        let query = build_query(&ticker, name, question);
+        if let Some(cached) = self
+            .read_cache(&ticker, &query, provider, Some(Utc::now() - CACHE_TTL))
+            .await
+        {
+            return Ok(cached);
+        }
         let hits = match provider {
-            EvidenceProvider::Exa => self.fetch_exa(api_key, &query).await?,
-            EvidenceProvider::Tavily => self.fetch_tavily(api_key, &query).await?,
+            EvidenceProvider::Exa => self.fetch_exa(api_key, &query).await,
+            EvidenceProvider::Tavily => self.fetch_tavily(api_key, &query).await,
         };
-        Ok(hits.into_iter().filter_map(normalize_hit).collect())
+        let hits = match hits {
+            Ok(hits) => hits,
+            Err(error) => {
+                // 回源失败时允许用同检索式的陈旧缓存兜底，并保留原 `published_date`，调用方仍能
+                // 判断来源时间；没有缓存才把供应商错误交给诚实降级路径。
+                if let Some(stale) = self.read_cache(&ticker, &query, provider, None).await {
+                    return Ok(stale);
+                }
+                return Err(error);
+            }
+        };
+        let evidence: Vec<Evidence> = hits.into_iter().filter_map(normalize_hit).collect();
+        if evidence.is_empty() {
+            if let Some(stale) = self.read_cache(&ticker, &query, provider, None).await {
+                return Ok(stale);
+            }
+        }
+        self.write_cache(&ticker, &query, provider, &evidence).await;
+        Ok(evidence)
+    }
+
+    async fn read_cache(
+        &self,
+        ticker: &str,
+        query: &str,
+        provider: EvidenceProvider,
+        fresh_after: Option<DateTime<Utc>>,
+    ) -> Option<Vec<Evidence>> {
+        let pool = self.pool.as_ref()?;
+        match WebEvidenceRepository::new(pool)
+            .cached(
+                ticker,
+                query,
+                provider.as_str(),
+                fresh_after,
+                i64::from(MAX_RESULTS),
+            )
+            .await
+        {
+            Ok(rows) if !rows.is_empty() => Some(rows.into_iter().map(cached_evidence).collect()),
+            Ok(_) => None,
+            Err(error) => {
+                tracing::warn!(ticker, error = %error, "读取网页证据缓存失败，回落实时供应商");
+                None
+            }
+        }
+    }
+
+    async fn write_cache(
+        &self,
+        ticker: &str,
+        query: &str,
+        provider: EvidenceProvider,
+        evidence: &[Evidence],
+    ) {
+        let (Some(pool), false) = (self.pool.as_ref(), evidence.is_empty()) else {
+            return;
+        };
+        let rows = evidence
+            .iter()
+            .enumerate()
+            .map(|(index, item)| NewWebEvidence {
+                id: cache_row_id(ticker, provider, query, &item.url),
+                ticker: ticker.to_string(),
+                query: query.to_string(),
+                provider: provider.as_str().to_string(),
+                title: item.title.clone(),
+                url: item.url.clone(),
+                source_domain: item.source_domain.clone(),
+                snippet: item.snippet.clone(),
+                published_at: item.published_date.as_deref().and_then(parse_published_at),
+                relevance_score: Decimal::from(i64::from(MAX_RESULTS) - index as i64),
+            })
+            .collect::<Vec<_>>();
+        if let Err(error) = WebEvidenceRepository::new(pool).replace(&rows).await {
+            // 常见原因是公司尚未建档触发 FK；缓存失败不能吃掉本轮已经拿到的实时证据。
+            tracing::warn!(ticker, error = %error, "写入网页证据缓存失败，本轮继续使用实时结果");
+        }
     }
 
     /// Exa `/search`：`x-api-key` 头鉴权，合并 contents 一次取回正文（`text.maxCharacters`）。
@@ -274,6 +384,36 @@ fn truncate_chars(s: &str, max: usize) -> String {
     out
 }
 
+fn cached_evidence(row: WebEvidenceRow) -> Evidence {
+    Evidence {
+        title: row.title.unwrap_or_default(),
+        url: row.url,
+        snippet: row.snippet.unwrap_or_default(),
+        published_date: row
+            .valid_time
+            .map(|date| date.format("%Y-%m-%d").to_string()),
+        source_domain: row.source_type,
+    }
+}
+
+fn parse_published_at(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|date| date.with_timezone(&Utc))
+        .ok()
+        .or_else(|| {
+            NaiveDate::parse_from_str(value, "%Y-%m-%d")
+                .ok()?
+                .and_hms_opt(0, 0, 0)
+                .map(|date| date.and_utc())
+        })
+}
+
+fn cache_row_id(ticker: &str, provider: EvidenceProvider, query: &str, url: &str) -> String {
+    let digest =
+        Sha256::digest(format!("{ticker}\n{}\n{query}\n{url}", provider.as_str()).as_bytes());
+    format!("web:{}", hex::encode(digest))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +483,47 @@ mod tests {
         .expect("evidence");
         assert_eq!(ev.snippet.chars().count(), SNIPPET_MAX_CHARS + 1); // 500 + 省略号
         assert!(ev.snippet.ends_with('…'));
+    }
+
+    #[test]
+    fn cache_identity_is_deterministic_and_provider_isolated() {
+        let exa = cache_row_id(
+            "AAPL",
+            EvidenceProvider::Exa,
+            "苹果 AAPL 护城河",
+            "https://example.com/a",
+        );
+        assert_eq!(
+            exa,
+            cache_row_id(
+                "AAPL",
+                EvidenceProvider::Exa,
+                "苹果 AAPL 护城河",
+                "https://example.com/a"
+            )
+        );
+        assert_ne!(
+            exa,
+            cache_row_id(
+                "AAPL",
+                EvidenceProvider::Tavily,
+                "苹果 AAPL 护城河",
+                "https://example.com/a"
+            )
+        );
+        assert_eq!(exa.len(), 68); // "web:" + SHA-256 hex
+    }
+
+    #[test]
+    fn published_dates_round_trip_to_cache_timestamp() {
+        assert_eq!(
+            parse_published_at("2026-07-01")
+                .expect("date")
+                .format("%Y-%m-%d")
+                .to_string(),
+            "2026-07-01"
+        );
+        assert!(parse_published_at("not-a-date").is_none());
     }
 
     #[test]

@@ -845,6 +845,108 @@ impl<'a> HkFinancialsRepository<'a> {
     }
 }
 
+/// 网页证据缓存行。`web_evidence` 是公共参考数据，不带租户 RLS；缓存键由
+/// `(ticker, provider, query)` 隔离，避免不同供应商/问题互相复用结果。
+#[derive(Clone, Debug, FromRow)]
+pub struct WebEvidenceRow {
+    pub title: Option<String>,
+    pub url: String,
+    pub snippet: Option<String>,
+    pub source_type: Option<String>,
+    pub valid_time: Option<chrono::DateTime<chrono::Utc>>,
+    pub knowledge_time: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewWebEvidence {
+    pub id: String,
+    pub ticker: String,
+    pub query: String,
+    pub provider: String,
+    pub title: String,
+    pub url: String,
+    pub source_domain: Option<String>,
+    pub snippet: String,
+    pub published_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub relevance_score: Decimal,
+}
+
+pub struct WebEvidenceRepository<'a> {
+    pool: &'a PgPool,
+}
+
+impl<'a> WebEvidenceRepository<'a> {
+    #[must_use]
+    pub fn new(pool: &'a PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// 读取某个供应商+检索式的缓存。`fresh_after=None` 用于将来的陈旧缓存降级；正常路径传
+    /// TTL 截点。按供应商相关性排序并限制条数，避免旧查询残留无限灌入提示词。
+    pub async fn cached(
+        &self,
+        ticker: &str,
+        query: &str,
+        provider: &str,
+        fresh_after: Option<chrono::DateTime<chrono::Utc>>,
+        limit: i64,
+    ) -> Result<Vec<WebEvidenceRow>> {
+        let rows = sqlx::query_as::<_, WebEvidenceRow>(
+            "SELECT title, url, snippet, source_type, valid_time, knowledge_time \
+             FROM web_evidence \
+             WHERE ticker = $1 AND query = $2 AND source = $3 \
+               AND ($4::timestamptz IS NULL OR knowledge_time >= $4) \
+             ORDER BY relevance_score DESC NULLS LAST, knowledge_time DESC, id \
+             LIMIT $5",
+        )
+        .bind(ticker)
+        .bind(query)
+        .bind(provider)
+        .bind(fresh_after)
+        .bind(limit)
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// 用本次供应商响应替换同缓存键的旧结果。删除+插入在同一事务内，读者不会看到半批数据；
+    /// 空响应不调用本方法，因此供应商临时失败不会冲掉最后一批可用缓存。
+    pub async fn replace(&self, rows: &[NewWebEvidence]) -> Result<()> {
+        let Some(first) = rows.first() else {
+            return Ok(());
+        };
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM web_evidence WHERE ticker = $1 AND query = $2 AND source = $3")
+            .bind(&first.ticker)
+            .bind(&first.query)
+            .bind(&first.provider)
+            .execute(&mut *tx)
+            .await?;
+        for row in rows {
+            sqlx::query(
+                "INSERT INTO web_evidence \
+                 (id, ticker, intent, query, title, url, source, source_type, snippet, valid_time, \
+                  knowledge_time, relevance_score, created_at, updated_at) \
+                 VALUES ($1,$2,'qualitative',$3,$4,$5,$6,$7,$8,$9,now(),$10,now(),now())",
+            )
+            .bind(&row.id)
+            .bind(&row.ticker)
+            .bind(&row.query)
+            .bind(&row.title)
+            .bind(&row.url)
+            .bind(&row.provider)
+            .bind(&row.source_domain)
+            .bind(&row.snippet)
+            .bind(row.published_at)
+            .bind(row.relevance_score)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::truncate_error_detail;
@@ -867,6 +969,67 @@ mod tests {
         let out = truncate_error_detail(&s);
         assert_eq!(out.chars().count(), 500);
         assert!(out.is_char_boundary(out.len())); // 未切裂
+    }
+
+    /// 活库集成：网页证据缓存按 ticker/provider/query 隔离，并能原子替换同一缓存键。
+    #[tokio::test]
+    #[ignore = "需要活库 DATABASE_URL"]
+    async fn live_web_evidence_cache_round_trip() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            return;
+        };
+        let pool = super::connect(&url, 2).await.expect("connect");
+        if std::env::var("ECHO_SKIP_TEST_MIGRATE").ok().as_deref() != Some("1") {
+            super::migrate(&pool).await.expect("migrate");
+        }
+        let ticker = "ECHO-CACHE-PROBE.HK";
+        let query = "cache probe moat";
+        sqlx::query(
+            "INSERT INTO companies (ticker, name_zh, exchange, currency) \
+             VALUES ($1, '证据缓存探针', 'HKEX', 'HKD') ON CONFLICT (ticker) DO NOTHING",
+        )
+        .bind(ticker)
+        .execute(&pool)
+        .await
+        .expect("insert probe company");
+
+        let repo = super::WebEvidenceRepository::new(&pool);
+        let rows = vec![super::NewWebEvidence {
+            id: "web:cache-probe".into(),
+            ticker: ticker.into(),
+            query: query.into(),
+            provider: "exa".into(),
+            title: "Probe".into(),
+            url: "https://example.com/probe".into(),
+            source_domain: Some("example.com".into()),
+            snippet: "cached body".into(),
+            published_at: None,
+            relevance_score: rust_decimal::Decimal::ONE,
+        }];
+        repo.replace(&rows).await.expect("replace");
+        let cached = repo
+            .cached(ticker, query, "exa", None, 5)
+            .await
+            .expect("cached");
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].title.as_deref(), Some("Probe"));
+        assert!(
+            repo.cached(ticker, query, "tavily", None, 5)
+                .await
+                .expect("provider isolated")
+                .is_empty()
+        );
+
+        sqlx::query("DELETE FROM web_evidence WHERE ticker = $1")
+            .bind(ticker)
+            .execute(&pool)
+            .await
+            .expect("cleanup evidence");
+        sqlx::query("DELETE FROM companies WHERE ticker = $1")
+            .bind(ticker)
+            .execute(&pool)
+            .await
+            .expect("cleanup company");
     }
 
     /// 活库集成：scheduler_state 往返（#9 可恢复门禁）。默认 `#[ignore]`，只在配了 DATABASE_URL 时

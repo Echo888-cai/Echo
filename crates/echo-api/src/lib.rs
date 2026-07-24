@@ -1760,8 +1760,11 @@ pub async fn run() {
     let filings = pool
         .clone()
         .and_then(|pool| FilingsService::new(pool, config.data_sources.clone()).ok());
-    // 网页证据实时无缓存，不依赖数据库（同 FMP 搜索），有配置即可注入。
-    let evidence = EvidenceService::new(config.data_sources.clone()).ok();
+    // 有库走 24h `web_evidence` 缓存；无库纯核路径仍可实时检索。缓存故障不会阻断回源。
+    let evidence = match pool.clone() {
+        Some(pool) => EvidenceService::new_cached(pool, config.data_sources.clone()).ok(),
+        None => EvidenceService::new(config.data_sources.clone()).ok(),
+    };
     let fmp_search = FmpSearchService::new(config.data_sources.clone()).ok();
     let app = router(AppState {
         pool,
