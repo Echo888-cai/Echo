@@ -6,6 +6,7 @@
 mod backup;
 mod calendar;
 mod email;
+mod evidence;
 mod filings;
 mod fmp;
 mod fundamentals;
@@ -20,6 +21,7 @@ mod search;
 pub use backup::{BackupStorageError, BackupStorageService};
 pub use calendar::{CalendarError, CalendarService};
 pub use email::{EmailError, EmailService, looks_like_email};
+pub use evidence::{Evidence as WebEvidence, EvidenceError, EvidenceService};
 pub use filings::{Filing, FilingsError, FilingsService};
 pub use fundamentals::{
     FundamentalsError, FundamentalsResult, FundamentalsRow, FundamentalsService, pct_change, pct_of,

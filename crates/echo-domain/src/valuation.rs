@@ -103,6 +103,19 @@ pub struct Filing {
     pub source_url: String,
 }
 
+/// 一条网页证据（Tavily 检索）——定性研究的二手来源，**只做定性支撑与引用，绝不进
+/// `FactsRegistry`、绝不当作已核财务数字来源**（护栏仍只认一手财报）。缺字段用 `None`。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Evidence {
+    pub title: String,
+    pub url: String,
+    /// 供应商返回的相关正文片段（已裁剪），供模型定性引用。
+    pub snippet: String,
+    pub published_date: Option<String>,
+    /// 来源域名（如 `reuters.com`），便于标注与可信度判断。
+    pub source_domain: Option<String>,
+}
+
 /// 内部人净买卖（Finnhub）——护栏只登金额与交易日。
 #[derive(Clone, Debug, Default)]
 pub struct InsiderActivity {

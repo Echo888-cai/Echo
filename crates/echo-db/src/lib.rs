@@ -699,6 +699,46 @@ impl<'a> FilingsRepository<'a> {
     }
 }
 
+/// 港股一手财报读模型（`hk_financials`，HKEX 业绩公告，公共参考数据无 RLS）。**只读**——
+/// ingest 侧（写入/刷新）是另一条尚未迁移的管道。返回的绝对值单位在历史数据里不可靠
+/// （`unit_label` 有错标行），故应用层只据此算**单位无关**的比率与 EPS，绝对营收/净利不外传。
+pub struct HkFinancialsRepository<'a> {
+    pool: &'a PgPool,
+}
+
+/// 港股财报最新一期的原始行——绝对值供应用层**仅用于同一行内算比率**（单位无关），不得跨行/
+/// 跨公司比较，也不得当作展示级绝对金额（历史单位不可靠）。
+#[derive(Clone, Debug, FromRow)]
+pub struct HkFinancialsRow {
+    pub currency: Option<String>,
+    pub period_label: Option<String>,
+    pub revenue: Option<Decimal>,
+    pub revenue_prior: Option<Decimal>,
+    pub gross_profit: Option<Decimal>,
+    pub net_income: Option<Decimal>,
+    pub eps: Option<Decimal>,
+}
+
+impl<'a> HkFinancialsRepository<'a> {
+    #[must_use]
+    pub fn new(pool: &'a PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// 该 ticker 最新一期业绩（按 knowledge_time 倒序）。缺行即 `None`——绝不臆造。
+    pub async fn latest(&self, ticker: &str) -> Result<Option<HkFinancialsRow>> {
+        let row = sqlx::query_as::<_, HkFinancialsRow>(
+            "SELECT currency, period_label, revenue, revenue_prior, gross_profit, net_income, eps \
+             FROM hk_financials WHERE ticker = $1 \
+             ORDER BY knowledge_time DESC, id DESC LIMIT 1",
+        )
+        .bind(ticker.trim().to_ascii_uppercase())
+        .fetch_optional(self.pool)
+        .await?;
+        Ok(row)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::truncate_error_detail;

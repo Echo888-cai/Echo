@@ -15,7 +15,7 @@
 use crate::valuation::{Financials, MarketSnapshot, Valuation};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 use fancy_regex::Regex;
@@ -1055,6 +1055,73 @@ pub fn verify_answer_numbers(text: &str, reg: &FactsRegistry) -> VerifyReport {
     }
 }
 
+// ─────────────────────── 定性引用护栏 ───────────────────────
+
+/// 定性论断的引用完整性核对结果。**这是引用完整性，不是语义核对**——只核"标了几号来源、
+/// 有没有引用不存在的来源号、有证据却零引用"，绝不声称验证了论断与来源内容一致（那需要
+/// 语义比对，成本与误报都高，不在护栏范围）。与数字护栏互补：数字护栏保证数字，引用护栏
+/// 让定性判断至少可追溯到某条真实来源、且不虚构来源号。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CitationReport {
+    /// 本轮提供给模型的证据条数。
+    pub evidence_count: usize,
+    /// 答案里出现且在范围内（1..=evidence_count）的来源号，去重升序。
+    pub cited: Vec<usize>,
+    /// 引用了超出证据条数的来源号（虚构引用）——真实的完整性失败，升 hard。
+    pub out_of_range: Vec<usize>,
+    /// 有证据（evidence_count>0）但答案一个来源号都没标——定性论断裸奔，soft 提示。
+    pub ungrounded: bool,
+}
+
+impl CitationReport {
+    #[must_use]
+    pub fn cited_count(&self) -> usize {
+        self.cited.len()
+    }
+    /// 引用了不存在的来源号——护栏级硬信号（模型虚构了来源）。
+    #[must_use]
+    pub fn has_hallucinated_citation(&self) -> bool {
+        !self.out_of_range.is_empty()
+    }
+}
+
+/// 抽取答案里形如 `[3]` 或 `来源[3]` 的引用号，按是否落在 `1..=evidence_count` 分成已引用与
+/// 越界两组。`evidence_count == 0`（本轮没给证据）时不产生任何 hard/soft——无证据不苛求引用。
+#[must_use]
+pub fn verify_answer_citations(text: &str, evidence_count: usize) -> CitationReport {
+    // 本轮无证据（数字驱动意图/供应商降级）：不承诺任何来源，故任何 `[N]` 都不算虚构、也不判
+    // 裸奔。直接返回空报告，避免把此时的编号误判成越界引用。
+    if evidence_count == 0 {
+        return CitationReport::default();
+    }
+    static RE_CITE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?:来源\s*)?\[(\d{1,2})\]").unwrap());
+    let mut cited = BTreeSet::new();
+    let mut out_of_range = BTreeSet::new();
+    for caps in RE_CITE.captures_iter(text).flatten() {
+        let Some(n) = caps.get(1).and_then(|m| m.as_str().parse::<usize>().ok()) else {
+            continue;
+        };
+        if n == 0 {
+            continue;
+        }
+        if n <= evidence_count {
+            cited.insert(n);
+        } else {
+            out_of_range.insert(n);
+        }
+    }
+    // 无证据时（evidence_count==0）越界组恒空：任何 [N] 都算不上"虚构来源号"，因为本轮压根
+    // 没承诺任何来源；此时也不判 ungrounded。
+    let ungrounded = evidence_count > 0 && cited.is_empty();
+    CitationReport {
+        evidence_count,
+        cited: cited.into_iter().collect(),
+        out_of_range: out_of_range.into_iter().collect(),
+        ungrounded,
+    }
+}
+
 /// SOFT_FLAG 提示文案（低调、不拦截）——soft/full 模式追加在正文末尾。
 #[must_use]
 pub fn build_soft_note(report: &VerifyReport) -> String {
@@ -1184,5 +1251,41 @@ mod tests {
         // 正文无数字，"来源"段里的日期不应被扫描。
         let r = verify_answer_numbers("腾讯基本面稳健。\n\n来源：yahoo（2026-07-17）", &reg);
         assert_eq!(r.checked.len(), 0);
+    }
+
+    #[test]
+    fn citations_in_range_are_collected_deduped() {
+        let r = verify_answer_citations("护城河见来源[1]，AI 风险见 [3] 与来源[3]。", 5);
+        assert_eq!(r.cited, vec![1, 3]);
+        assert_eq!(r.cited_count(), 2);
+        assert!(r.out_of_range.is_empty());
+        assert!(!r.ungrounded);
+        assert!(!r.has_hallucinated_citation());
+    }
+
+    #[test]
+    fn out_of_range_citation_is_hallucinated_hard_signal() {
+        // 只给了 2 条证据，却引用了 [5] → 虚构来源号。
+        let r = verify_answer_citations("如来源[1] 与 [5] 所述。", 2);
+        assert_eq!(r.cited, vec![1]);
+        assert_eq!(r.out_of_range, vec![5]);
+        assert!(r.has_hallucinated_citation());
+    }
+
+    #[test]
+    fn evidence_present_but_zero_citations_is_ungrounded() {
+        let r = verify_answer_citations("苹果护城河很稳，没有标注任何来源。", 4);
+        assert!(r.cited.is_empty());
+        assert!(r.ungrounded);
+        assert!(!r.has_hallucinated_citation());
+    }
+
+    #[test]
+    fn no_evidence_this_turn_never_flags() {
+        // 本轮无证据（数字驱动意图/供应商降级）：任何 [N] 都不算虚构，也不判裸奔。
+        let r = verify_answer_citations("PE 约 28 倍 [1]。", 0);
+        assert!(r.cited.is_empty());
+        assert!(r.out_of_range.is_empty());
+        assert!(!r.ungrounded);
     }
 }

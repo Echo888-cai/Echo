@@ -10,16 +10,17 @@ use crate::answer_prompt::{
 use crate::model_gateway::{ModelStreamEvent, ModelStreamStart};
 use crate::{DecisionPanel, ResolvedCompany, build_panel};
 use echo_contracts::{
-    AnswerSource, AskRequest, AskResponse, AssetStageView, CompareLegView, CompareResponse,
-    EarningsCalendarView, FilingView, GuardView, MethodBandView, ResearchStreamCompare,
-    ResearchStreamDelta, ResearchStreamError, ResearchStreamEvent, ResearchStreamFinal,
-    ResearchStreamGuard, ResearchStreamMeta, ResearchStreamStage, ResearchStreamStageName,
-    RouteView, ValuationView,
+    AnswerSource, AskRequest, AskResponse, AssetStageView, CitationGuardView, CompareLegView,
+    CompareResponse, EarningsCalendarView, EvidenceView, FilingView, GuardView, MethodBandView,
+    ResearchStreamCompare, ResearchStreamDelta, ResearchStreamError, ResearchStreamEvent,
+    ResearchStreamFinal, ResearchStreamGuard, ResearchStreamMeta, ResearchStreamStage,
+    ResearchStreamStageName, RouteView, ValuationView,
 };
 use echo_domain::{
-    AssetStage, Company, EarningsCalendar, Filing, Financials, HistoricalValuation, MarketSnapshot,
-    MultipleType, PeerAnchor, RegistrySources, ResearchRoute, build_facts_registry,
-    build_soft_note, classify_asset_stage, route_research_intent, verify_answer_numbers,
+    AssetStage, Company, EarningsCalendar, Evidence, Filing, Financials, HistoricalValuation,
+    MarketSnapshot, MultipleType, PeerAnchor, RegistrySources, ResearchRoute, build_facts_registry,
+    build_soft_note, classify_asset_stage, intent_wants_web_evidence, route_research_intent,
+    verify_answer_citations, verify_answer_numbers,
 };
 use serde::{Deserialize, Serialize};
 use std::future::Future;
@@ -39,6 +40,9 @@ pub struct ResearchFacts {
     pub earnings_calendar: Option<EarningsCalendar>,
     pub peer_anchor: Option<PeerAnchor>,
     pub filings: Vec<Filing>,
+    /// 网页证据（仅定性意图拉取，数字驱动意图与失败降级时为空）——只做定性支撑，
+    /// 绝不进 `FactsRegistry`（护栏只认一手财报）。
+    pub evidence: Vec<Evidence>,
 }
 
 /// 比较研究的双腿事实；两侧 registry 不得交叉污染。
@@ -118,6 +122,15 @@ pub trait ResearchPorts: Send + Sync {
 
     /// 最近公司公告/披露（美股专属）。缺数/未核到返回空列表——绝不占位。
     fn load_recent_filings(&self, ticker: &str) -> impl Future<Output = Vec<Filing>> + Send;
+
+    /// 网页证据（定性意图专属，美股/港股皆可）。`name` 传已核到的公司名以提升检索质量。
+    /// 未配供应商/商用拒绝/网络失败一律返回空列表——绝不占位，让链路诚实降级。
+    fn load_web_evidence(
+        &self,
+        ticker: &str,
+        name: Option<&str>,
+        question: &str,
+    ) -> impl Future<Output = Vec<Evidence>> + Send;
 
     /// 续问已有会话时读回此前几轮问答（仅供代词/实体承接）。会话不存在/不属于该用户/
     /// 未带 `session_id` 一律返回空——空历史不是错误，是"这是新会话"。
@@ -238,6 +251,22 @@ impl ResearchService {
         };
         let peer_anchor = ports.load_peer_anchor(&req.ticker, multiple_type).await;
         let filings = ports.load_recent_filings(&req.ticker).await;
+        // 网页证据只对定性、时效敏感的意图拉取（现状/护城河/竞争/风险/证伪/深研）——数字驱动
+        // 意图已有一手财报/同业/分位专属数据面，不引二手网页噪音与不必要延迟。深度决定检索
+        // 广度：deep 走多维并发检索（见 [`gather_evidence`]），其余单条。
+        let route = route_research_intent(&req.question);
+        let evidence = if intent_wants_web_evidence(route.intent) {
+            gather_evidence(
+                ports,
+                &req.ticker,
+                company.name_zh.as_deref(),
+                &req.question,
+                route.depth,
+            )
+            .await
+        } else {
+            Vec::new()
+        };
         ResearchFacts {
             company,
             market,
@@ -245,6 +274,7 @@ impl ResearchService {
             earnings_calendar,
             peer_anchor,
             filings,
+            evidence,
         }
     }
 
@@ -276,6 +306,8 @@ impl ResearchService {
                     market: &facts.market,
                     financials: &facts.financials,
                     filings: &facts.filings,
+                    evidence: &facts.evidence,
+                    depth: route.depth,
                     history: &prior_turns,
                 });
                 match ports.complete_answer(&system, &user_prompt, user_id).await {
@@ -288,6 +320,9 @@ impl ResearchService {
         let fact_guard = answer
             .as_deref()
             .map(|draft| guard_view(&req, &facts, &panel, draft));
+        let citation_guard = answer
+            .as_deref()
+            .and_then(|draft| citation_guard_view(&facts.evidence, draft));
 
         let mut response = build_ask_response(
             &panel,
@@ -295,8 +330,10 @@ impl ResearchService {
             answer,
             answer_source,
             fact_guard,
+            citation_guard,
             facts.earnings_calendar.as_ref(),
             &facts.filings,
+            &facts.evidence,
         );
         let (persisted, session_id) =
             persist_outcome(ports, user_id, &req, &facts, &response, &prior_turns).await;
@@ -472,7 +509,7 @@ async fn drive_stream<P: ResearchPorts>(
     );
     let prior_turns = load_prior_turns_for(ports, user_id, &req).await;
 
-    send(ResearchStreamEvent::Meta(ResearchStreamMeta {
+    send(ResearchStreamEvent::Meta(Box::new(ResearchStreamMeta {
         ticker: panel.ticker.clone(),
         route: route_view(&route),
         data_completeness: panel.data_completeness,
@@ -483,7 +520,7 @@ async fn drive_stream<P: ResearchPorts>(
             .collect(),
         valuation: valuation_view(&panel),
         earnings: earnings_view(facts.earnings_calendar.as_ref()),
-    }))
+    })))
     .await?;
 
     let (answer, answer_source) = if let Some(draft) = req.draft_answer.clone() {
@@ -509,6 +546,8 @@ async fn drive_stream<P: ResearchPorts>(
             market: &facts.market,
             financials: &facts.financials,
             filings: &facts.filings,
+            evidence: &facts.evidence,
+            depth: route.depth,
             history: &prior_turns,
         });
         match ports
@@ -549,8 +588,12 @@ async fn drive_stream<P: ResearchPorts>(
     let fact_guard = answer
         .as_deref()
         .map(|draft| guard_view(&req, &facts, &panel, draft));
+    let citation_guard = answer
+        .as_deref()
+        .and_then(|draft| citation_guard_view(&facts.evidence, draft));
     send(ResearchStreamEvent::Guard(ResearchStreamGuard {
         fact_guard: fact_guard.clone(),
+        citation_guard: citation_guard.clone(),
     }))
     .await?;
 
@@ -560,8 +603,10 @@ async fn drive_stream<P: ResearchPorts>(
         answer,
         answer_source,
         fact_guard,
+        citation_guard,
         facts.earnings_calendar.as_ref(),
         &facts.filings,
+        &facts.evidence,
     );
 
     send(ResearchStreamEvent::Stage(ResearchStreamStage {
@@ -571,10 +616,10 @@ async fn drive_stream<P: ResearchPorts>(
     let (persisted, session_id) =
         persist_outcome(ports, user_id, &req, &facts, &response, &prior_turns).await;
     response.session_id = session_id;
-    send(ResearchStreamEvent::Final(ResearchStreamFinal {
+    send(ResearchStreamEvent::Final(Box::new(ResearchStreamFinal {
         response,
         persisted,
-    }))
+    })))
     .await?;
     Ok(())
 }
@@ -589,6 +634,52 @@ pub(crate) async fn load_prior_turns_for<P: ResearchPorts>(
         Some(session_id) => ports.load_prior_turns(user_id, session_id).await,
         None => Vec::new(),
     }
+}
+
+/// deep 研究的额外检索维度——"多步检索"的那几步：护城河/竞争、风险/监管、最新动态/业绩。
+/// 在基础问题之外各拉一批，union 去重后喂给综合。非 deep 不用。
+const DEEP_EVIDENCE_ASPECTS: &[&str] = &[
+    "护城河 竞争壁垒 定价权",
+    "风险 监管 诉讼 做空 业绩不及预期",
+    "最新 业绩 战略 进展",
+];
+/// deep 合并去重后保留的证据条数上限——控制提示词体量与成本。
+const MAX_DEEP_EVIDENCE: usize = 10;
+
+/// 按深度决定证据检索广度：`Deep` 走基础问题 + 多维**并发**检索、按 URL 去重合并、截断到
+/// [`MAX_DEEP_EVIDENCE`]；其余深度只用基础问题一条。这是"deep 走多步检索→综合"里的"多步检索"，
+/// 综合仍由生成阶段一次完成（更厚的证据集喂给模型）。
+pub(crate) async fn gather_evidence<P: ResearchPorts>(
+    ports: &P,
+    ticker: &str,
+    name: Option<&str>,
+    question: &str,
+    depth: ResearchDepth,
+) -> Vec<Evidence> {
+    if depth != ResearchDepth::Deep {
+        return ports.load_web_evidence(ticker, name, question).await;
+    }
+    let mut queries: Vec<String> = vec![question.to_string()];
+    for aspect in DEEP_EVIDENCE_ASPECTS {
+        queries.push(format!("{question} {aspect}"));
+    }
+    let batches = futures_util::future::join_all(
+        queries
+            .iter()
+            .map(|q| ports.load_web_evidence(ticker, name, q)),
+    )
+    .await;
+    let mut seen = std::collections::HashSet::new();
+    let mut merged = Vec::new();
+    for batch in batches {
+        for ev in batch {
+            if seen.insert(ev.url.clone()) {
+                merged.push(ev);
+            }
+        }
+    }
+    merged.truncate(MAX_DEEP_EVIDENCE);
+    merged
 }
 
 pub(crate) fn guard_view(
@@ -623,14 +714,49 @@ pub(crate) fn guard_view(
     }
 }
 
+/// 定性引用护栏——本轮有网页证据时才产出。核引用完整性（标注了几号来源、有无虚构来源号、
+/// 有证据却零引用），与数字护栏互补。无证据（`evidence.is_empty()`）返回 `None`：不苛求引用。
+pub(crate) fn citation_guard_view(evidence: &[Evidence], draft: &str) -> Option<CitationGuardView> {
+    if evidence.is_empty() {
+        return None;
+    }
+    let report = verify_answer_citations(draft, evidence.len());
+    let note = if report.has_hallucinated_citation() {
+        format!(
+            "引用了不存在的来源号 {}，已标记",
+            report
+                .out_of_range
+                .iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join("、")
+        )
+    } else if report.ungrounded {
+        "定性论断未标注任何来源，置信度下降".to_string()
+    } else {
+        String::new()
+    };
+    Some(CitationGuardView {
+        evidence_count: report.evidence_count,
+        cited_count: report.cited_count(),
+        out_of_range: report.out_of_range.len(),
+        ungrounded: report.ungrounded,
+        has_hard_fail: report.has_hallucinated_citation(),
+        note,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 fn build_ask_response(
     panel: &DecisionPanel,
     route: &ResearchRoute,
     answer: Option<String>,
     answer_source: AnswerSource,
     fact_guard: Option<GuardView>,
+    citation_guard: Option<CitationGuardView>,
     earnings_calendar: Option<&EarningsCalendar>,
     filings: &[Filing],
+    evidence: &[Evidence],
 ) -> AskResponse {
     AskResponse {
         ticker: panel.ticker.clone(),
@@ -645,10 +771,26 @@ fn build_ask_response(
         answer,
         answer_source,
         fact_guard,
+        citation_guard,
         earnings: earnings_view(earnings_calendar),
         filings: filings_view(filings),
+        sources: sources_view(evidence),
         session_id: None,
     }
+}
+
+/// 证据领域类型 → 契约来源卡视图。
+pub(crate) fn sources_view(evidence: &[Evidence]) -> Vec<EvidenceView> {
+    evidence
+        .iter()
+        .map(|e| EvidenceView {
+            title: e.title.clone(),
+            url: e.url.clone(),
+            snippet: e.snippet.clone(),
+            published_date: e.published_date.clone(),
+            source_domain: e.source_domain.clone(),
+        })
+        .collect()
 }
 
 pub(crate) fn filings_view(filings: &[Filing]) -> Vec<FilingView> {
@@ -795,6 +937,9 @@ mod tests {
         saved: Mutex<Vec<PersistResearchSession>>,
         fail_save: bool,
         prior_turns: Vec<PriorTurn>,
+        evidence: Vec<Evidence>,
+        /// `load_web_evidence` 被调用次数——测多维检索广度（deep 多次、其余一次）。
+        evidence_calls: std::sync::atomic::AtomicUsize,
     }
 
     impl ResearchPorts for FakePorts {
@@ -841,6 +986,17 @@ mod tests {
 
         async fn load_recent_filings(&self, _ticker: &str) -> Vec<Filing> {
             Vec::new()
+        }
+
+        async fn load_web_evidence(
+            &self,
+            _ticker: &str,
+            _name: Option<&str>,
+            _question: &str,
+        ) -> Vec<Evidence> {
+            self.evidence_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.evidence.clone()
         }
 
         async fn load_prior_turns(&self, _user_id: &str, _session_id: &str) -> Vec<PriorTurn> {
@@ -1069,6 +1225,117 @@ mod tests {
         let peer_guard = outcome.response.peer.fact_guard.expect("peer guard");
         assert!(primary_guard.pass >= 1, "苹果自己的营收应命中自己的登记表");
         assert!(peer_guard.pass >= 1, "腾讯自己的营收应命中自己的登记表");
+    }
+
+    #[tokio::test]
+    async fn qualitative_intent_pulls_evidence_numeric_intent_does_not() {
+        let evidence = vec![Evidence {
+            title: "Apple widens services moat".into(),
+            url: "https://reuters.com/x".into(),
+            snippet: "生态锁定与服务收入占比继续提升。".into(),
+            published_date: Some("2026-07-01".into()),
+            source_domain: Some("reuters.com".into()),
+        }];
+        // 护城河（定性意图）→ 拉证据并进 response.sources。
+        let ports = FakePorts {
+            answer: Some("护城河主要在生态锁定。".into()),
+            evidence: evidence.clone(),
+            ..FakePorts::default()
+        };
+        let outcome =
+            ResearchService::ask(&ports, "u", AskRequest::minimal("它的护城河在哪", "AAPL")).await;
+        assert_eq!(outcome.facts.evidence.len(), 1);
+        assert_eq!(outcome.response.sources.len(), 1);
+        assert_eq!(
+            outcome.response.sources[0].source_domain.as_deref(),
+            Some("reuters.com")
+        );
+        // 有证据但答案没标来源 → 引用护栏在场且判裸奔（soft 提示，非 hard）。
+        let cg = outcome.response.citation_guard.expect("citation guard");
+        assert_eq!(cg.evidence_count, 1);
+        assert_eq!(cg.cited_count, 0);
+        assert!(cg.ungrounded);
+        assert!(!cg.has_hard_fail);
+
+        // 估值（数字驱动意图）→ 门控关闭，即便端口有证据也不拉、不进 sources、无引用护栏。
+        let ports = FakePorts {
+            answer: Some("PE 约 28 倍。".into()),
+            evidence,
+            ..FakePorts::default()
+        };
+        let outcome =
+            ResearchService::ask(&ports, "u", AskRequest::minimal("现在估值贵不贵", "AAPL")).await;
+        assert!(outcome.facts.evidence.is_empty());
+        assert!(outcome.response.sources.is_empty());
+        assert!(outcome.response.citation_guard.is_none());
+    }
+
+    #[tokio::test]
+    async fn deep_depth_runs_multi_query_evidence_and_dedups() {
+        use std::sync::atomic::Ordering;
+        let ev = vec![
+            Evidence {
+                url: "https://a.com/1".into(),
+                ..Default::default()
+            },
+            Evidence {
+                url: "https://b.com/2".into(),
+                ..Default::default()
+            },
+        ];
+        let ports = FakePorts {
+            evidence: ev,
+            ..FakePorts::default()
+        };
+        // deep：基础问题 + 3 个维度 = 4 次并发检索；各次返回相同两条 → 按 URL 去重后仍 2 条。
+        let merged = gather_evidence(
+            &ports,
+            "AAPL",
+            Some("苹果"),
+            "深度研究苹果",
+            ResearchDepth::Deep,
+        )
+        .await;
+        assert_eq!(merged.len(), 2, "跨查询按 URL 去重");
+        assert_eq!(
+            ports.evidence_calls.load(Ordering::SeqCst),
+            4,
+            "基础问题 + 3 个维度"
+        );
+
+        // standard：单条查询，不铺开。
+        let ports2 = FakePorts {
+            evidence: vec![Evidence {
+                url: "https://a.com/1".into(),
+                ..Default::default()
+            }],
+            ..FakePorts::default()
+        };
+        let _ = gather_evidence(&ports2, "AAPL", None, "苹果怎么样", ResearchDepth::Standard).await;
+        assert_eq!(ports2.evidence_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn citation_guard_flags_hallucinated_source_number() {
+        let evidence = vec![Evidence {
+            title: "Apple moat".into(),
+            url: "https://reuters.com/x".into(),
+            snippet: "生态锁定。".into(),
+            published_date: None,
+            source_domain: Some("reuters.com".into()),
+        }];
+        // 只有 1 条证据，答案却引用了 [3] → 虚构来源号，引用护栏应判 hard。
+        let ports = FakePorts {
+            answer: Some("护城河见来源[1]，风险见来源[3]。".into()),
+            evidence,
+            ..FakePorts::default()
+        };
+        let outcome =
+            ResearchService::ask(&ports, "u", AskRequest::minimal("护城河与风险", "AAPL")).await;
+        let cg = outcome.response.citation_guard.expect("citation guard");
+        assert_eq!(cg.cited_count, 1);
+        assert_eq!(cg.out_of_range, 1);
+        assert!(cg.has_hard_fail);
     }
 
     #[tokio::test]

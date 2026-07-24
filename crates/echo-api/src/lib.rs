@@ -48,18 +48,19 @@ use echo_contracts::{
     WatchRulesListResponse,
 };
 use echo_data::{
-    CalendarService, FilingsService, FmpSearchService, FundamentalsRow, FundamentalsService,
-    HistoricalValuationService, PeerService, QuoteService, pct_change, pct_of,
+    CalendarService, EvidenceService, FilingsService, FmpSearchService, FundamentalsRow,
+    FundamentalsService, HistoricalValuationService, Market, PeerService, QuoteService,
+    detect_market, normalize_ticker, pct_change, pct_of,
 };
 use echo_db::{
-    CompanyProfileRepository, CompanyProfileUpsert, CompanyRepository, MarketRepository,
-    NotificationsRepository, Pool, PortfolioRepository, PortfolioUpsert, PreferencesPatch,
-    PreferencesRepository, RateLimitRepository, ResearchSessionRepository, SaveResearchSession,
-    UserPreferencesRow, WatchlistRepository,
+    CompanyProfileRepository, CompanyProfileUpsert, CompanyRepository, HkFinancialsRepository,
+    HkFinancialsRow, MarketRepository, NotificationsRepository, Pool, PortfolioRepository,
+    PortfolioUpsert, PreferencesPatch, PreferencesRepository, RateLimitRepository,
+    ResearchSessionRepository, SaveResearchSession, UserPreferencesRow, WatchlistRepository,
 };
 use echo_domain::{
-    EarningsCalendar, Filing, Financials, HistoricalValuation, MarketSnapshot, MultipleType,
-    PeerAnchor, company_identity_key, has_compare_cue, match_company_mentions,
+    EarningsCalendar, Evidence, Filing, Financials, HistoricalValuation, MarketSnapshot,
+    MultipleType, PeerAnchor, company_identity_key, has_compare_cue, match_company_mentions,
 };
 use futures_util::Stream;
 use std::convert::Infallible;
@@ -86,6 +87,7 @@ pub struct AppState {
     historical_valuation: Option<HistoricalValuationService>,
     peers: Option<PeerService>,
     filings: Option<FilingsService>,
+    evidence: Option<EvidenceService>,
     fmp_search: Option<FmpSearchService>,
     auth_disabled: bool,
     auth_disabled_user_id: String,
@@ -106,6 +108,7 @@ impl AppState {
             historical_valuation: None,
             peers: None,
             filings: None,
+            evidence: None,
             fmp_search: None,
             auth_disabled: true,
             auth_disabled_user_id: "local".into(),
@@ -1217,6 +1220,26 @@ fn financials_from_fmp_row(row: &FundamentalsRow) -> Financials {
     }
 }
 
+/// 港股一手财报行 → `Financials`（**安全子集**）。历史数据绝对值单位不可靠（`unit_label` 有错标
+/// 行），故只取**单位无关**的量：同一行内算的毛利率/净利率/增速（比率抵消单位）、EPS（每股值）、
+/// 币种、期间。**绝对营收/净利/现金流保持 `None`（未核到）**——绝不把单位可疑的绝对值喂进估值或
+/// 展示，守"不混单位/不跨公司混数"红线。盈亏阶段由 `classify_asset_stage` 据这些比率判定，
+/// 港股财务质量据此点火；绝对值/EV-Sales 估值待 ingest 侧单位规范后另接。
+fn financials_from_hk_row(row: &HkFinancialsRow) -> Financials {
+    Financials {
+        provider_ok: true,
+        currency: row.currency.clone(),
+        net_margin: pct_of(row.net_income, row.revenue),
+        gross_margin: pct_of(row.gross_profit, row.revenue),
+        revenue_growth: pct_change(row.revenue, row.revenue_prior),
+        eps: row.eps,
+        // 港股业绩多为半年/季报口径，标未年化——禁止 price/eps 反推 PE（估值另走 pe_ttm，此处无）。
+        eps_annualized: Some(false),
+        period: row.period_label.clone(),
+        ..Default::default()
+    }
+}
+
 impl ResearchPorts for ApiResearchPorts {
     async fn load_company_market(&self, ticker: &str) -> Option<(ResolvedCompany, MarketSnapshot)> {
         let pool = self.state.pool.as_ref()?;
@@ -1249,6 +1272,21 @@ impl ResearchPorts for ApiResearchPorts {
     }
 
     async fn load_fundamentals(&self, ticker: &str) -> Option<LoadedFundamentals> {
+        // 港股走一手财报读模型（`hk_financials`，安全子集：比率 + EPS，绝对值单位不可靠不外传）；
+        // FMP 免费档只覆盖美股。缺库/缺行即 `None`——保持"未核到"，绝不占位。
+        let normalized = normalize_ticker(ticker);
+        if detect_market(&normalized) == Market::Hk {
+            let pool = self.state.pool.as_ref()?;
+            let row = HkFinancialsRepository::new(pool)
+                .latest(&normalized)
+                .await
+                .ok()??;
+            return Some(LoadedFundamentals {
+                financials: financials_from_hk_row(&row),
+                pe_ttm: None,
+                company_name: None,
+            });
+        }
         let service = self.state.fundamentals.as_ref()?;
         let result = service.fetch(ticker).await;
         if !result.provider_ok {
@@ -1327,6 +1365,29 @@ impl ResearchPorts for ApiResearchPorts {
                 form: filing.form,
                 filed_date: filing.filed_date,
                 source_url: filing.source_url,
+            })
+            .collect()
+    }
+
+    async fn load_web_evidence(
+        &self,
+        ticker: &str,
+        name: Option<&str>,
+        question: &str,
+    ) -> Vec<Evidence> {
+        let Some(service) = self.state.evidence.as_ref() else {
+            return Vec::new();
+        };
+        service
+            .search(ticker, name, question)
+            .await
+            .into_iter()
+            .map(|e| Evidence {
+                title: e.title,
+                url: e.url,
+                snippet: e.snippet,
+                published_date: e.published_date,
+                source_domain: e.source_domain,
             })
             .collect()
     }
@@ -1691,6 +1752,8 @@ pub async fn run() {
     let filings = pool
         .clone()
         .and_then(|pool| FilingsService::new(pool, config.data_sources.clone()).ok());
+    // 网页证据实时无缓存，不依赖数据库（同 FMP 搜索），有配置即可注入。
+    let evidence = EvidenceService::new(config.data_sources.clone()).ok();
     let fmp_search = FmpSearchService::new(config.data_sources.clone()).ok();
     let app = router(AppState {
         pool,
@@ -1700,6 +1763,7 @@ pub async fn run() {
         historical_valuation,
         peers,
         filings,
+        evidence,
         fmp_search,
         auth_disabled: config.auth_disabled,
         auth_disabled_user_id: config.auth_disabled_user_id,
@@ -1765,6 +1829,37 @@ mod tests {
         assert!(cookie.contains("HttpOnly"));
         assert!(cookie.contains("SameSite=Lax"));
         assert!(cookie.contains("Secure"));
+    }
+
+    #[test]
+    fn hk_financials_maps_ratios_and_eps_but_withholds_unit_broken_absolutes() {
+        use rust_decimal::Decimal;
+        // 腾讯真实一期：营收 751766000000 / 净利 229801000000（单位可疑但比率抵消单位）。
+        let row = HkFinancialsRow {
+            currency: Some("CNY".into()),
+            period_label: Some("2025 FY".into()),
+            revenue: Some(Decimal::from(751_766_000_000_i64)),
+            revenue_prior: Some(Decimal::from(660_257_000_000_i64)),
+            gross_profit: Some(Decimal::from(400_000_000_000_i64)),
+            net_income: Some(Decimal::from(229_801_000_000_i64)),
+            eps: Some(Decimal::new(24_749, 3)),
+        };
+        let fin = financials_from_hk_row(&row);
+        assert!(fin.provider_ok);
+        assert_eq!(fin.currency.as_deref(), Some("CNY"));
+        assert_eq!(fin.eps, Some(Decimal::new(24_749, 3)));
+        assert_eq!(fin.eps_annualized, Some(false));
+        // 净利率 ≈ 30.57%，单位无关、可信。
+        let nm = fin.net_margin.expect("net margin");
+        assert!(
+            nm > Decimal::from(30) && nm < Decimal::from(31),
+            "净利率约 30.6%"
+        );
+        assert!(fin.revenue_growth.is_some(), "增速可算（比率）");
+        // 绝对营收/净利/现金流单位不可靠 → 一律不外传，保持未核到。
+        assert!(fin.revenue.is_none(), "绝对营收不外传");
+        assert!(fin.net_income.is_none(), "绝对净利不外传");
+        assert!(fin.free_cash_flow.is_none());
     }
 
     #[test]
@@ -1918,6 +2013,7 @@ mod tests {
             historical_valuation: None,
             peers: None,
             filings: None,
+            evidence: None,
             fmp_search: None,
             auth_disabled: false,
             auth_disabled_user_id: "local".into(),

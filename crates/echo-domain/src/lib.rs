@@ -27,16 +27,17 @@ pub use company_identity::{
 };
 pub use derivations::{AnnualEps, FilingRow, derive_annual_eps, pct_change, pct_of};
 pub use fact_guard::{
-    FactsRegistry, Position, RegistrySources, Verdict, VerifyReport, build_facts_registry,
-    build_soft_note, merge_facts_registry, render_hard_fail_issues, verify_answer_numbers,
+    CitationReport, FactsRegistry, Position, RegistrySources, Verdict, VerifyReport,
+    build_facts_registry, build_soft_note, merge_facts_registry, render_hard_fail_issues,
+    verify_answer_citations, verify_answer_numbers,
 };
 pub use intent::{
-    ResearchDepth, ResearchIntent, ResearchRoute, classify_research_intent, plan_research_stages,
-    route_research_intent,
+    ResearchDepth, ResearchIntent, ResearchRoute, classify_research_intent,
+    intent_wants_web_evidence, plan_research_stages, route_research_intent,
 };
 pub use valuation::{
-    AssetStage, Company, EarningsCalendar, Filing, Financials, HistoricalValuation, HkBuyback,
-    InsiderActivity, MarketSnapshot, MethodBand, MultipleType, PeerAnchor, Valuation,
+    AssetStage, Company, EarningsCalendar, Evidence, Filing, Financials, HistoricalValuation,
+    HkBuyback, InsiderActivity, MarketSnapshot, MethodBand, MultipleType, PeerAnchor, Valuation,
     classify_asset_stage, compute_valuation, display_valuation,
 };
 pub use watch_rules::RuleKind;

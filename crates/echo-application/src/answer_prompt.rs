@@ -7,7 +7,7 @@
 
 use crate::DecisionPanel;
 use crate::research::PriorTurn;
-use echo_domain::{Filing, Financials, MarketSnapshot};
+use echo_domain::{Evidence, Filing, Financials, MarketSnapshot, ResearchDepth};
 use rust_decimal::Decimal;
 
 /// 作答上下文——本请求这一家公司的全部已核事实（单一主体，无跨公司泄漏面）。
@@ -18,8 +18,24 @@ pub struct AnswerContext<'a> {
     pub market: &'a MarketSnapshot,
     pub financials: &'a Financials,
     pub filings: &'a [Filing],
+    /// 网页证据（定性意图专属）——供模型定性引用并标注来源；二手信息，不得当作已核财务数字。
+    pub evidence: &'a [Evidence],
+    /// 研究深度——决定作答风格（brief 直接精简 / deep 分维度系统展开）。
+    pub depth: ResearchDepth,
     /// 同一研究会话此前几轮的问答——只帮模型承接代词/实体指代，不得当作本轮数字来源。
     pub history: &'a [PriorTurn],
+}
+
+/// 深度对应的作答风格指令——让 depth 真正改变产出形态，不只是路由标签。
+fn depth_directive(depth: ResearchDepth) -> &'static str {
+    match depth {
+        ResearchDepth::Brief => "\n作答风格：直接精简——一两句给出结论与关键理由，不逐条展开。\n",
+        ResearchDepth::Deep => {
+            "\n作答风格：系统展开——分维度（赚钱机制 / 护城河 / 财务质量 / 风险与证伪 / 近况）\
+             逐条给判断，充分利用上方网页证据并逐条标注来源编号，最后给一句总判断。\n"
+        }
+        ResearchDepth::Standard => "",
+    }
 }
 
 /// 固定的 system 红线——研究助手人设 + 不可逾越的护栏。与 composer 的 system 段同义：
@@ -94,7 +110,9 @@ pub fn build_user_prompt(ctx: &AnswerContext) -> String {
         }
     }
 
-    out.push_str(&format!("用户问题：{}\n\n", ctx.question));
+    out.push_str(&format!("用户问题：{}\n", ctx.question));
+    out.push_str(depth_directive(ctx.depth));
+    out.push('\n');
     out.push_str(&facts_block(ctx));
     out
 }
@@ -170,6 +188,36 @@ pub(crate) fn facts_block(ctx: &AnswerContext) -> String {
                 filing.form, filing.source_url
             ));
         }
+    }
+
+    if !ctx.evidence.is_empty() {
+        out.push_str(&evidence_block(ctx.evidence));
+    }
+    out
+}
+
+/// 网页证据段——每条编号，标题/来源/日期/片段/URL。首行硬性纪律：证据是二手信息，只做定性
+/// 支撑，做定性论断时须标注来源编号或 URL；证据里的数字**不得**当作已核财务数字（与一手财报
+/// 冲突时以财报为准，无一手财报时仍适用「本轮无实时财报」的数字禁令）。
+pub(crate) fn evidence_block(evidence: &[Evidence]) -> String {
+    let mut out = String::from(
+        "\n\n== 已核到的网页证据（二手来源，仅供定性支撑）==\n\
+         纪律：做定性论断时须标注来源编号或 URL；以下片段里的数字属二手信息，不得当作已核\n\
+         财务数字引用（财务数字仍只认上方一手财报块，无一手财报则仍禁给具体财务数字）。\n",
+    );
+    for (i, e) in evidence.iter().enumerate() {
+        let title = if e.title.is_empty() {
+            "(无标题)"
+        } else {
+            &e.title
+        };
+        let domain = e.source_domain.as_deref().unwrap_or("来源域名未核到");
+        let date = e.published_date.as_deref().unwrap_or("日期未核到");
+        out.push_str(&format!("[{}] {title}（{domain} · {date}）\n", i + 1));
+        if !e.snippet.is_empty() {
+            out.push_str(&format!("{}\n", e.snippet));
+        }
+        out.push_str(&format!("来源：{}\n", e.url));
     }
     out
 }
@@ -282,6 +330,8 @@ mod tests {
             market: &market,
             financials: &financials,
             filings: &[],
+            evidence: &[],
+            depth: ResearchDepth::Standard,
             history: &[],
         });
         assert!(prompt.contains("严禁给出任何具体财务数字"));
@@ -303,6 +353,8 @@ mod tests {
             market: &market,
             financials: &financials,
             filings: &[],
+            evidence: &[],
+            depth: ResearchDepth::Standard,
             history: &[],
         });
         assert!(prompt.contains("已核到的实时财报"));
@@ -322,6 +374,8 @@ mod tests {
             market: &market,
             financials: &financials,
             filings: &[],
+            evidence: &[],
+            depth: ResearchDepth::Standard,
             history: &[],
         });
         assert!(prompt.contains("现价：未核到"));
@@ -346,12 +400,92 @@ mod tests {
             market: &market,
             financials: &financials,
             filings: &filings,
+            evidence: &[],
+            depth: ResearchDepth::Standard,
             history: &[],
         });
         assert!(prompt.contains("已核到的最新公司公告"));
         assert!(prompt.contains("10-K"));
         assert!(prompt.contains("2026-05-01"));
         assert!(prompt.contains("https://www.sec.gov/example"));
+    }
+
+    #[test]
+    fn evidence_block_renders_sources_and_keeps_number_ban_when_no_live_fin() {
+        let (panel, financials) = panel_with(Some(dec!(190)), false);
+        let market = MarketSnapshot {
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let evidence = vec![Evidence {
+            title: "Apple services moat widens".into(),
+            url: "https://reuters.com/tech/apple".into(),
+            snippet: "服务收入占比继续提升，生态锁定增强。".into(),
+            published_date: Some("2026-07-01".into()),
+            source_domain: Some("reuters.com".into()),
+        }];
+        let prompt = build_user_prompt(&AnswerContext {
+            question: "护城河还稳吗？",
+            name_zh: Some("苹果"),
+            panel: &panel,
+            market: &market,
+            financials: &financials,
+            filings: &[],
+            evidence: &evidence,
+            depth: ResearchDepth::Standard,
+            history: &[],
+        });
+        assert!(prompt.contains("已核到的网页证据"));
+        assert!(prompt.contains("[1] Apple services moat widens（reuters.com · 2026-07-01）"));
+        assert!(prompt.contains("来源：https://reuters.com/tech/apple"));
+        assert!(prompt.contains("须标注来源编号或 URL"));
+        // 证据在场也绝不解除「无实时财报→禁具体财务数字」的封堵。
+        assert!(prompt.contains("严禁给出任何具体财务数字"));
+    }
+
+    #[test]
+    fn depth_directive_changes_answer_style() {
+        let (panel, financials) = panel_with(Some(dec!(190)), true);
+        let market = MarketSnapshot {
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let ctx = |depth| AnswerContext {
+            question: "护城河如何？",
+            name_zh: Some("苹果"),
+            panel: &panel,
+            market: &market,
+            financials: &financials,
+            filings: &[],
+            evidence: &[],
+            depth,
+            history: &[],
+        };
+        assert!(build_user_prompt(&ctx(ResearchDepth::Deep)).contains("系统展开"));
+        assert!(build_user_prompt(&ctx(ResearchDepth::Brief)).contains("直接精简"));
+        let standard = build_user_prompt(&ctx(ResearchDepth::Standard));
+        assert!(!standard.contains("系统展开") && !standard.contains("直接精简"));
+    }
+
+    #[test]
+    fn empty_evidence_omits_the_block() {
+        let (panel, financials) = panel_with(Some(dec!(190)), false);
+        let market = MarketSnapshot {
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let prompt = build_user_prompt(&AnswerContext {
+            question: "护城河？",
+            name_zh: Some("苹果"),
+            panel: &panel,
+            market: &market,
+            financials: &financials,
+            filings: &[],
+            evidence: &[],
+            depth: ResearchDepth::Standard,
+            history: &[],
+        });
+        assert!(!prompt.contains("已核到的网页证据"));
     }
 
     #[test]
@@ -368,6 +502,8 @@ mod tests {
             market: &market,
             financials: &financials,
             filings: &[],
+            evidence: &[],
+            depth: ResearchDepth::Standard,
             history: &[],
         });
         assert!(!prompt.contains("已核到的最新公司公告"));
@@ -391,6 +527,8 @@ mod tests {
             market: &market,
             financials: &financials,
             filings: &[],
+            evidence: &[],
+            depth: ResearchDepth::Standard,
             history: &history,
         });
         assert!(prompt.contains("不得引用其中任何数字作为本轮核对依据"));
@@ -417,6 +555,8 @@ mod tests {
             market: &market,
             financials: &financials,
             filings: &[],
+            evidence: &[],
+            depth: ResearchDepth::Standard,
             history: &history,
         });
         assert!(!prompt.contains(&long_answer));

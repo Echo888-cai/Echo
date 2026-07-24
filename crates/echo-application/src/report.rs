@@ -8,7 +8,8 @@ use crate::answer_prompt::{
 };
 use crate::research::{
     PersistResearchSession, PriorTurn, ResearchFacts, ResearchPorts, ResearchService,
-    earnings_view, filings_view, guard_view, load_prior_turns_for, route_view, valuation_view,
+    citation_guard_view, earnings_view, filings_view, guard_view, load_prior_turns_for, route_view,
+    valuation_view,
 };
 use crate::{DecisionPanel, build_panel};
 use echo_contracts::{AskRequest, ReportGenerateResponse, ReportMode};
@@ -57,6 +58,8 @@ impl ReportService {
             market: &facts.market,
             financials: &facts.financials,
             filings: &facts.filings,
+            evidence: &facts.evidence,
+            depth: route.depth,
             history: &prior_turns,
         };
 
@@ -71,6 +74,7 @@ impl ReportService {
         };
 
         let fact_guard = Some(guard_view(&req, &facts, &panel, &markdown));
+        let citation_guard = citation_guard_view(&facts.evidence, &markdown);
 
         let response = ReportGenerateResponse {
             ticker: panel.ticker.clone(),
@@ -79,6 +83,7 @@ impl ReportService {
             markdown: markdown.clone(),
             valuation: valuation_view(&panel),
             fact_guard,
+            citation_guard,
             earnings: earnings_view(facts.earnings_calendar.as_ref()),
             filings: filings_view(&facts.filings),
             session_id: None,
@@ -278,8 +283,8 @@ mod tests {
     use crate::model_gateway::ModelStreamStart;
     use crate::research::LoadedFundamentals;
     use echo_domain::{
-        Company, EarningsCalendar, Filing, Financials, HistoricalValuation, MarketSnapshot,
-        MultipleType, PeerAnchor,
+        Company, EarningsCalendar, Evidence, Filing, Financials, HistoricalValuation,
+        MarketSnapshot, MultipleType, PeerAnchor,
     };
     use rust_decimal_macros::dec;
     use std::sync::Mutex;
@@ -331,6 +336,15 @@ mod tests {
         }
 
         async fn load_recent_filings(&self, _ticker: &str) -> Vec<Filing> {
+            Vec::new()
+        }
+
+        async fn load_web_evidence(
+            &self,
+            _ticker: &str,
+            _name: Option<&str>,
+            _question: &str,
+        ) -> Vec<Evidence> {
             Vec::new()
         }
 

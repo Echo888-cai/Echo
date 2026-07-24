@@ -109,6 +109,23 @@ pub struct GuardView {
     pub soft_note: String,
 }
 
+/// 定性引用护栏视图——与数字护栏（`GuardView`）互补，核的是"定性论断有没有标注真实来源号"。
+/// 只在本轮有网页证据时出现（`evidence_count>0`）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CitationGuardView {
+    pub evidence_count: usize,
+    pub cited_count: usize,
+    /// 引用了不存在的来源号的个数（虚构引用，硬信号）。
+    pub out_of_range: usize,
+    /// 有证据却零引用（定性论断裸奔）。
+    pub ungrounded: bool,
+    /// 有虚构来源号——展示层据此标红。
+    pub has_hard_fail: bool,
+    /// 低调中文提示（无问题时为空串）。
+    pub note: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AssetStageView {
     Profitable,
@@ -199,6 +216,19 @@ pub struct FilingView {
     pub source_url: String,
 }
 
+/// 一条网页证据来源卡（Tavily 检索）——供 Web 渲染可点击来源。二手来源，仅定性支撑。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceView {
+    pub title: String,
+    pub url: String,
+    pub snippet: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_domain: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AskResponse {
@@ -212,10 +242,16 @@ pub struct AskResponse {
     pub answer_source: AnswerSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fact_guard: Option<GuardView>,
+    /// 定性引用护栏（仅本轮有网页证据时出现）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub citation_guard: Option<CitationGuardView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub earnings: Option<EarningsCalendarView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub filings: Vec<FilingView>,
+    /// 本轮拉到的网页证据来源卡（定性意图才有；数字驱动意图与失败降级时为空）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<EvidenceView>,
     /// 本轮落库归属的会话 id——落库失败且是新会话时为 `None`；Web 拿到后带回下一轮
     /// `AskRequest.session_id` 即可续接同一研究会话。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -226,11 +262,11 @@ pub struct AskResponse {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum ResearchStreamEvent {
-    Meta(ResearchStreamMeta),
+    Meta(Box<ResearchStreamMeta>),
     Stage(ResearchStreamStage),
     Delta(ResearchStreamDelta),
     Guard(ResearchStreamGuard),
-    Final(ResearchStreamFinal),
+    Final(Box<ResearchStreamFinal>),
     Compare(Box<ResearchStreamCompare>),
     Error(ResearchStreamError),
 }
@@ -289,6 +325,8 @@ pub struct ResearchStreamDelta {
 pub struct ResearchStreamGuard {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fact_guard: Option<GuardView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub citation_guard: Option<CitationGuardView>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -906,6 +944,9 @@ pub struct ReportGenerateResponse {
     pub valuation: ValuationView,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fact_guard: Option<GuardView>,
+    /// 定性引用护栏（仅本轮有网页证据时出现）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub citation_guard: Option<CitationGuardView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub earnings: Option<EarningsCalendarView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -956,7 +997,7 @@ mod tests {
 
     #[test]
     fn research_stream_event_tags_are_stable() {
-        let meta = ResearchStreamEvent::Meta(ResearchStreamMeta {
+        let meta = ResearchStreamEvent::Meta(Box::new(ResearchStreamMeta {
             ticker: "AAPL".into(),
             route: RouteView {
                 intent: "valuation".into(),
@@ -986,7 +1027,7 @@ mod tests {
                 cannot_value_reason: None,
             },
             earnings: None,
-        });
+        }));
         let json = serde_json::to_value(&meta).expect("serialize");
         assert_eq!(json["type"], "meta");
         assert_eq!(json["data"]["ticker"], "AAPL");

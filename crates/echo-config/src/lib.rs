@@ -17,6 +17,11 @@ const DEFAULT_ASK_RATE_LIMIT_PER_MINUTE: u32 = 20;
 pub struct DataSourceConfig {
     pub finnhub_api_key: Option<String>,
     pub fmp_api_key: Option<String>,
+    /// 网页证据供应商 key——consumer 是 `echo-data::EvidenceService`，双供应商：配了 `EXA_API_KEY`
+    /// 优先走 Exa（语义检索，有可用月度免费额度），否则回落 `TAVILY_API_KEY`。免费/研究档不算
+    /// 商用授权，故 `commercial_mode` 下证据端口自行拒绝（见该服务）。
+    pub exa_api_key: Option<String>,
+    pub tavily_api_key: Option<String>,
     pub commercial_mode: bool,
 }
 
@@ -28,6 +33,8 @@ impl DataSourceConfig {
         Self {
             finnhub_api_key: non_empty(lookup("FINNHUB_API_KEY")),
             fmp_api_key: non_empty(lookup("FMP_API_KEY")),
+            exa_api_key: non_empty(lookup("EXA_API_KEY")),
+            tavily_api_key: non_empty(lookup("TAVILY_API_KEY")),
             commercial_mode: flag(non_empty(lookup("ECHO_COMMERCIAL_MODE"))),
         }
     }

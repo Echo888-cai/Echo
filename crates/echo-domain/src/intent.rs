@@ -153,6 +153,23 @@ fn unique_intent_matches(text: &str) -> Vec<ResearchIntent> {
     out
 }
 
+/// 该意图是否值得拉网页证据。定性、时效敏感的意图（现状/护城河/竞争/风险/证伪/深研）
+/// 才触发——估值与财务质量是数字驱动、已有一手财报/同业/分位专属数据面，不拉二手网页避免
+/// 引入噪音与不必要延迟。与 [`plan_research_stages`] 里点亮 `evidence` 阶段的意图集合保持
+/// 同源语义（此处多含 `Falsify`：熊市/证伪论证同样需要当下证据），改一处须同步另一处。
+#[must_use]
+pub fn intent_wants_web_evidence(intent: ResearchIntent) -> bool {
+    matches!(
+        intent,
+        ResearchIntent::CompanyStatus
+            | ResearchIntent::Moat
+            | ResearchIntent::Competitors
+            | ResearchIntent::RiskEvent
+            | ResearchIntent::Falsify
+            | ResearchIntent::DeepResearch
+    )
+}
+
 /// 阶段计划——前端等待态指示器逐条点亮（stage 名是与前端的稳定契约）。
 #[must_use]
 pub fn plan_research_stages(intent: ResearchIntent, depth: ResearchDepth) -> Vec<&'static str> {
