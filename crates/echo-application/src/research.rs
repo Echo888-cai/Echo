@@ -186,8 +186,9 @@ pub struct CompareOutcome {
 pub struct ResearchService;
 
 impl ResearchService {
-    /// 组装本公司事实：请求体优先；缺价格时经端口读库 / 刷新行情。
-    pub async fn assemble_facts<P: ResearchPorts>(ports: &P, req: &AskRequest) -> ResearchFacts {
+    /// 组装结构化核心事实；网页证据单独在下一阶段加载，使流式路径能在真实 IO 开始前发出
+    /// `evidence` 进度，而不是所有取数结束后才假装切换阶段。
+    async fn assemble_core_facts<P: ResearchPorts>(ports: &P, req: &AskRequest) -> ResearchFacts {
         let mut company = ResolvedCompany {
             ticker: req.ticker.clone(),
             name_zh: req.name_zh.clone(),
@@ -264,22 +265,6 @@ impl ResearchService {
         };
         let peer_anchor = ports.load_peer_anchor(&req.ticker, multiple_type).await;
         let filings = ports.load_recent_filings(&req.ticker).await;
-        // 网页证据只对定性、时效敏感的意图拉取（现状/护城河/竞争/风险/证伪/深研）——数字驱动
-        // 意图已有一手财报/同业/分位专属数据面，不引二手网页噪音与不必要延迟。深度决定检索
-        // 广度：deep 走多维并发检索（见 [`gather_evidence`]），其余单条。
-        let route = route_research_intent(&req.question);
-        let evidence = if intent_wants_web_evidence(route.intent) {
-            gather_evidence(
-                ports,
-                &req.ticker,
-                company.name_zh.as_deref(),
-                &req.question,
-                route.depth,
-            )
-            .await
-        } else {
-            Vec::new()
-        };
         ResearchFacts {
             company,
             market,
@@ -287,8 +272,16 @@ impl ResearchService {
             earnings_calendar,
             peer_anchor,
             filings,
-            evidence,
+            evidence: Vec::new(),
         }
+    }
+
+    /// 完整事实组装：核心行情/财报完成后，按路由计划加载定性网页证据。
+    pub async fn assemble_facts<P: ResearchPorts>(ports: &P, req: &AskRequest) -> ResearchFacts {
+        let route = route_research_intent(&req.question);
+        let mut facts = Self::assemble_core_facts(ports, req).await;
+        facts.evidence = load_evidence_for_route(ports, req, &facts, &route).await;
+        facts
     }
 
     /// 非流式研究主用例。
@@ -459,6 +452,8 @@ impl ResearchService {
             let _ = tx
                 .send(ResearchStreamEvent::Stage(ResearchStreamStage {
                     name: ResearchStreamStageName::Assembling,
+                    index: 0,
+                    total: 0,
                 }))
                 .await;
             let outcome =
@@ -474,8 +469,8 @@ impl ResearchService {
         rx
     }
 
-    /// 类型化流式研究：事件顺序为 stage → meta → generating → delta* → verifying → guard →
-    /// persisting → final；模型失败则 error 且不落库。
+    /// 类型化流式研究：先按 `route.plan` 发精确 stage，随后 meta/delta/guard/final；
+    /// 模型失败则 error 且不落库。
     pub fn ask_stream<P>(
         ports: P,
         user_id: String,
@@ -508,13 +503,22 @@ async fn drive_stream<P: ResearchPorts>(
             .map_err(|_| "stream consumer dropped".to_string())
     };
 
-    send(ResearchStreamEvent::Stage(ResearchStreamStage {
-        name: ResearchStreamStageName::Assembling,
-    }))
-    .await?;
-
     let route = route_research_intent(&req.question);
-    let facts = ResearchService::assemble_facts(ports, &req).await;
+    for step in ["routing", "resolving", "market_financials"] {
+        send(ResearchStreamEvent::Stage(
+            plan_stream_stage(&route, step).expect("base route plan contains core stage"),
+        ))
+        .await?;
+    }
+
+    let mut facts = ResearchService::assemble_core_facts(ports, &req).await;
+    if let Some(stage) = plan_stream_stage(&route, "evidence") {
+        send(ResearchStreamEvent::Stage(stage)).await?;
+        facts.evidence = load_evidence_for_route(ports, &req, &facts, &route).await;
+    }
+    if let Some(stage) = plan_stream_stage(&route, "valuation") {
+        send(ResearchStreamEvent::Stage(stage)).await?;
+    }
     let panel = build_panel(
         &facts.company,
         &facts.market,
@@ -539,9 +543,9 @@ async fn drive_stream<P: ResearchPorts>(
     .await?;
 
     let (answer, answer_source) = if let Some(draft) = req.draft_answer.clone() {
-        send(ResearchStreamEvent::Stage(ResearchStreamStage {
-            name: ResearchStreamStageName::Generating,
-        }))
+        send(ResearchStreamEvent::Stage(
+            plan_stream_stage(&route, "generating").expect("route plan contains generating"),
+        ))
         .await?;
         send(ResearchStreamEvent::Delta(ResearchStreamDelta {
             text: draft.clone(),
@@ -549,9 +553,9 @@ async fn drive_stream<P: ResearchPorts>(
         .await?;
         (Some(draft), AnswerSource::Draft)
     } else {
-        send(ResearchStreamEvent::Stage(ResearchStreamStage {
-            name: ResearchStreamStageName::Generating,
-        }))
+        send(ResearchStreamEvent::Stage(
+            plan_stream_stage(&route, "generating").expect("route plan contains generating"),
+        ))
         .await?;
         let system = build_system_prompt();
         let user_prompt = build_user_prompt(&AnswerContext {
@@ -595,9 +599,9 @@ async fn drive_stream<P: ResearchPorts>(
         }
     };
 
-    send(ResearchStreamEvent::Stage(ResearchStreamStage {
-        name: ResearchStreamStageName::Verifying,
-    }))
+    send(ResearchStreamEvent::Stage(
+        plan_stream_stage(&route, "fact_check").expect("route plan contains fact_check"),
+    ))
     .await?;
 
     let fact_guard = answer
@@ -624,10 +628,6 @@ async fn drive_stream<P: ResearchPorts>(
         &facts.evidence,
     );
 
-    send(ResearchStreamEvent::Stage(ResearchStreamStage {
-        name: ResearchStreamStageName::Persisting,
-    }))
-    .await?;
     let (persisted, session_id) =
         persist_outcome(ports, user_id, &req, &facts, &response, &prior_turns).await;
     response.session_id = session_id;
@@ -637,6 +637,25 @@ async fn drive_stream<P: ResearchPorts>(
     })))
     .await?;
     Ok(())
+}
+
+fn plan_stream_stage(route: &ResearchRoute, step: &str) -> Option<ResearchStreamStage> {
+    let index = route.plan.iter().position(|candidate| *candidate == step)? + 1;
+    let name = match step {
+        "routing" => ResearchStreamStageName::Routing,
+        "resolving" => ResearchStreamStageName::Resolving,
+        "market_financials" => ResearchStreamStageName::MarketFinancials,
+        "evidence" => ResearchStreamStageName::Evidence,
+        "valuation" => ResearchStreamStageName::Valuation,
+        "generating" => ResearchStreamStageName::Generating,
+        "fact_check" => ResearchStreamStageName::FactCheck,
+        _ => return None,
+    };
+    Some(ResearchStreamStage {
+        name,
+        index,
+        total: route.plan.len(),
+    })
 }
 
 /// 有 `session_id` 才读历史；新会话没有可承接的上文，空列表就是正确答案。
@@ -660,6 +679,25 @@ const DEEP_EVIDENCE_ASPECTS: &[&str] = &[
 ];
 /// deep 合并去重后保留的证据条数上限——控制提示词体量与成本。
 const MAX_DEEP_EVIDENCE: usize = 10;
+
+async fn load_evidence_for_route<P: ResearchPorts>(
+    ports: &P,
+    req: &AskRequest,
+    facts: &ResearchFacts,
+    route: &ResearchRoute,
+) -> Vec<Evidence> {
+    if !intent_wants_web_evidence(route.intent) {
+        return Vec::new();
+    }
+    gather_evidence(
+        ports,
+        &req.ticker,
+        facts.company.name_zh.as_deref(),
+        &req.question,
+        route.depth,
+    )
+    .await
+}
 
 /// 按深度决定证据检索广度：`Deep` 走基础问题 + 多维**并发**检索、按 URL 去重合并、截断到
 /// [`MAX_DEEP_EVIDENCE`]；其余深度只用基础问题一条。这是"deep 走多步检索→综合"里的"多步检索"，
@@ -1499,8 +1537,35 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "stage", "meta", "stage", "delta", "delta", "stage", "guard", "stage", "final"
+                "stage", "stage", "stage", "stage", "stage", "meta", "stage", "delta", "delta",
+                "stage", "guard", "final"
             ]
+        );
+        let stages = events
+            .iter()
+            .filter_map(|event| match event {
+                ResearchStreamEvent::Stage(stage) => Some(stage),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            stages.iter().map(|stage| stage.name).collect::<Vec<_>>(),
+            vec![
+                ResearchStreamStageName::Routing,
+                ResearchStreamStageName::Resolving,
+                ResearchStreamStageName::MarketFinancials,
+                ResearchStreamStageName::Evidence,
+                ResearchStreamStageName::Valuation,
+                ResearchStreamStageName::Generating,
+                ResearchStreamStageName::FactCheck,
+            ]
+        );
+        assert!(
+            stages
+                .iter()
+                .enumerate()
+                .all(|(index, stage)| stage.index == index + 1 && stage.total == stages.len()),
+            "阶段序号必须与 route.plan 一一对齐"
         );
         let ResearchStreamEvent::Final(final_event) = events.last().expect("final") else {
             panic!("expected final");

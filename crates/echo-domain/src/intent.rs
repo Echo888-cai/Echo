@@ -172,18 +172,9 @@ pub fn intent_wants_web_evidence(intent: ResearchIntent) -> bool {
 
 /// 阶段计划——前端等待态指示器逐条点亮（stage 名是与前端的稳定契约）。
 #[must_use]
-pub fn plan_research_stages(intent: ResearchIntent, depth: ResearchDepth) -> Vec<&'static str> {
+pub fn plan_research_stages(intent: ResearchIntent, _depth: ResearchDepth) -> Vec<&'static str> {
     let mut stages = vec!["routing", "resolving", "market_financials"];
-    if depth != ResearchDepth::Brief
-        && matches!(
-            intent,
-            ResearchIntent::CompanyStatus
-                | ResearchIntent::Moat
-                | ResearchIntent::Competitors
-                | ResearchIntent::RiskEvent
-                | ResearchIntent::DeepResearch
-        )
-    {
+    if intent_wants_web_evidence(intent) {
         stages.push("evidence");
     }
     if matches!(
@@ -289,6 +280,10 @@ mod tests {
         assert_eq!(r.intent, ResearchIntent::Moat);
         assert_eq!(r.depth, ResearchDepth::Brief);
         assert!(r.confidence >= 0.9);
+        assert!(
+            r.plan.contains(&"evidence"),
+            "brief 只缩短作答，不应让计划与真实证据 IO 脱节"
+        );
     }
 
     #[test]

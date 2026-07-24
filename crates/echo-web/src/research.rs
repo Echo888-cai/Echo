@@ -3,8 +3,9 @@
 //! 暗底 #02070a + 青色 #82e7ee + 楷体衬线大标题 + 对话式研究布局。
 //! DOM 结构复用 .desk/.conversation/.message/.bubble/.answer-card 语义层次。
 //!
-//! 作答走类型化 SSE（`/api/ask/stream`）：meta（路由/估值骨架）→ stage（组装/生成/核对/落库）
-//! → delta（打字机增量）→ guard（数字护栏）→ final（落库结果）；`error` 或连接异常归一到失败态。
+//! 作答走类型化 SSE（`/api/ask/stream`）：stage 严格按 `route.plan` 的步骤名与序号推进，
+//! meta 提供路由/估值骨架，delta 是打字机增量，guard 是事实护栏，final 是落库结果；
+//! `error` 或连接异常归一到失败态。
 
 use crate::api;
 use echo_contracts::{
@@ -12,7 +13,7 @@ use echo_contracts::{
     CompanySearchItem, CompanySearchResponse, CompareLegView, CompareResponse, Decimal,
     EarningsCalendarView, EvidenceView, GuardView, MutationResponse, ReportGenerateResponse,
     ReportMode, ResearchSessionDetail, ResearchSessionResponse, ResearchSessionsResponse,
-    ResearchStreamEvent, ResearchStreamStageName, RouteView, ValuationView,
+    ResearchStreamEvent, ResearchStreamStage, ResearchStreamStageName, RouteView, ValuationView,
 };
 use leptos::*;
 
@@ -20,7 +21,7 @@ use leptos::*;
 #[derive(Clone)]
 enum TurnStatus {
     Streaming {
-        stage: Option<ResearchStreamStageName>,
+        stage: Option<ResearchStreamStage>,
         meta_route: Option<RouteView>,
         meta_valuation: Option<ValuationView>,
         meta_completeness: Option<u8>,
@@ -96,13 +97,25 @@ fn intent_label(s: &str) -> &str {
     }
 }
 
-fn stage_label(stage: Option<ResearchStreamStageName>) -> &'static str {
-    match stage {
-        None => "正在组装事实…",
+fn stage_label(stage: Option<&ResearchStreamStage>) -> String {
+    let label = match stage.map(|stage| stage.name) {
+        None => "正在规划研究路径…",
+        Some(ResearchStreamStageName::Routing) => "正在判断研究意图…",
+        Some(ResearchStreamStageName::Resolving) => "正在确认研究主体…",
+        Some(ResearchStreamStageName::MarketFinancials) => "正在核对行情与财报…",
+        Some(ResearchStreamStageName::Evidence) => "正在检索网页证据…",
+        Some(ResearchStreamStageName::Valuation) => "正在构建估值框架…",
+        Some(ResearchStreamStageName::Generating) => "正在综合证据并作答…",
+        Some(ResearchStreamStageName::FactCheck) => "正在核对事实与引用…",
         Some(ResearchStreamStageName::Assembling) => "正在组装事实…",
-        Some(ResearchStreamStageName::Generating) => "正在生成作答…",
         Some(ResearchStreamStageName::Verifying) => "正在核对数字护栏…",
         Some(ResearchStreamStageName::Persisting) => "正在落库…",
+    };
+    match stage {
+        Some(stage) if stage.index > 0 && stage.total > 0 => {
+            format!("第 {}/{} 步 · {label}", stage.index, stage.total)
+        }
+        _ => label.to_string(),
     }
 }
 
@@ -285,7 +298,7 @@ fn attach_stream(
                     *meta_sources = m.connected_sources;
                     *meta_earnings = m.earnings;
                 }
-                ResearchStreamEvent::Stage(s) => *stage = Some(s.name),
+                ResearchStreamEvent::Stage(s) => *stage = Some(s),
                 ResearchStreamEvent::Delta(d) => delta_text.push_str(&d.text),
                 ResearchStreamEvent::Guard(g) => *guard = g.fact_guard,
                 ResearchStreamEvent::Final(_)
@@ -672,7 +685,7 @@ fn EvidencePanel(
 /// 流式进行中的卡片：已到的 meta 骨架 + 阶段提示 + 打字机增量 + 取消按钮。
 #[component]
 fn StreamingCard(
-    stage: Option<ResearchStreamStageName>,
+    stage: Option<ResearchStreamStage>,
     meta_route: Option<RouteView>,
     meta_valuation: Option<ValuationView>,
     meta_completeness: Option<u8>,
@@ -683,6 +696,15 @@ fn StreamingCard(
     on_cancel: Callback<()>,
 ) -> impl IntoView {
     let html = (!delta_text.is_empty()).then(|| crate::markdown::render(&delta_text));
+    let progress_width = stage
+        .as_ref()
+        .filter(|stage| stage.index > 0 && stage.total > 0)
+        .map(|stage| {
+            let percent = stage.index.saturating_mul(100) / stage.total;
+            format!("width: {percent}%")
+        })
+        .unwrap_or_else(|| "width: 8%".to_string());
+    let current_stage_label = stage_label(stage.as_ref());
     view! {
         <div class="answer-card">
             {meta_route.clone().map(|route| view! {
@@ -698,8 +720,11 @@ fn StreamingCard(
             <div class="answer-text-section">
                 <p class="answer-source-label stage-label">
                     <span class="stage-dot"></span>
-                    {stage_label(stage)}
+                    {current_stage_label}
                 </p>
+                <div class="stage-progress" role="progressbar">
+                    <span class="stage-progress-fill" style=progress_width></span>
+                </div>
                 {match html {
                     Some(html) => view! { <div class="answer-text" inner_html=html></div> }.into_view(),
                     None => view! { <p class="working-text">"正在研究…"</p> }.into_view(),

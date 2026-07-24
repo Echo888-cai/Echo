@@ -302,6 +302,13 @@ pub struct ResearchStreamMeta {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResearchStreamStageName {
+    Routing,
+    Resolving,
+    MarketFinancials,
+    Evidence,
+    Valuation,
+    FactCheck,
+    /// 旧客户端兼容；新服务端改发与 `route.plan` 同名的精确阶段。
     Assembling,
     Generating,
     Verifying,
@@ -312,6 +319,12 @@ pub enum ResearchStreamStageName {
 #[serde(deny_unknown_fields)]
 pub struct ResearchStreamStage {
     pub name: ResearchStreamStageName,
+    /// 当前步骤在 `route.plan` 中的 1-based 序号。
+    #[serde(default)]
+    pub index: usize,
+    /// 本轮 `route.plan` 的步骤总数。
+    #[serde(default)]
+    pub total: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
