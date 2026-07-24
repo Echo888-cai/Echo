@@ -22,6 +22,7 @@ use echo_domain::{
     build_soft_note, classify_asset_stage, intent_wants_web_evidence, route_research_intent,
     verify_answer_citations, verify_answer_numbers,
 };
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use tokio::sync::mpsc;
@@ -240,6 +241,18 @@ impl ResearchService {
                     company.name_zh = loaded.company_name;
                 }
             }
+        }
+        // EV/Sales 需要股本。供应商未直接给股本时，可由同一行情快照的市值/股价反推；
+        // 两者同属报价币种，商相除后是股数，不引入汇率混用。
+        if financials.shares_outstanding.is_none() {
+            financials.shares_outstanding = match (market.market_cap, market.price) {
+                (Some(market_cap), Some(price))
+                    if market_cap > Decimal::ZERO && price > Decimal::ZERO =>
+                {
+                    Some(market_cap / price)
+                }
+                _ => None,
+            };
         }
         financials.historical_valuation = ports.load_historical_valuation(&req.ticker).await;
         let earnings_calendar = ports.load_earnings_calendar(&req.ticker).await;

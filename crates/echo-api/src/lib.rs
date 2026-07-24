@@ -1220,21 +1220,29 @@ fn financials_from_fmp_row(row: &FundamentalsRow) -> Financials {
     }
 }
 
-/// 港股一手财报行 → `Financials`（**安全子集**）。历史数据绝对值单位不可靠（`unit_label` 有错标
-/// 行），故只取**单位无关**的量：同一行内算的毛利率/净利率/增速（比率抵消单位）、EPS（每股值）、
-/// 币种、期间。**绝对营收/净利/现金流保持 `None`（未核到）**——绝不把单位可疑的绝对值喂进估值或
-/// 展示，守"不混单位/不跨公司混数"红线。盈亏阶段由 `classify_asset_stage` 据这些比率判定，
-/// 港股财务质量据此点火；绝对值/EV-Sales 估值待 ingest 侧单位规范后另接。
+/// 港股一手财报行 → `Financials`。历史行没有单位归一化证明时仍只取同一行内的比率与 EPS；
+/// 受控 ingest 写入的 `amounts_normalized=true` 行才允许绝对营收/利润/现金流进入研究事实。
+/// `source_unit_scale` 只用于追溯，库内金额已经是绝对值，读侧绝不二次乘倍率。
 fn financials_from_hk_row(row: &HkFinancialsRow) -> Financials {
+    let trusted = row.amounts_normalized;
     Financials {
         provider_ok: true,
         currency: row.currency.clone(),
+        revenue: trusted.then_some(row.revenue).flatten(),
+        gross_profit: trusted.then_some(row.gross_profit).flatten(),
+        operating_income: trusted.then_some(row.operating_income).flatten(),
+        net_income: trusted.then_some(row.net_income).flatten(),
+        operating_cash_flow: trusted.then_some(row.operating_cash_flow).flatten(),
+        cash_and_equivalents: trusted.then_some(row.cash_and_equivalents).flatten(),
+        net_cash: trusted.then_some(row.net_cash).flatten(),
+        free_cash_flow: trusted.then_some(row.free_cash_flow).flatten(),
         net_margin: pct_of(row.net_income, row.revenue),
         gross_margin: pct_of(row.gross_profit, row.revenue),
+        operating_margin: pct_of(row.operating_income, row.revenue),
         revenue_growth: pct_change(row.revenue, row.revenue_prior),
         eps: row.eps,
-        // 港股业绩多为半年/季报口径，标未年化——禁止 price/eps 反推 PE（估值另走 pe_ttm，此处无）。
-        eps_annualized: Some(false),
+        // 只有明确 FY 才把 EPS 当年化；半年/季度口径禁止 price/eps 反推 PE。
+        eps_annualized: Some(row.period_type.as_deref() == Some("FY")),
         period: row.period_label.clone(),
         ..Default::default()
     }
@@ -1832,23 +1840,35 @@ mod tests {
     }
 
     #[test]
-    fn hk_financials_maps_ratios_and_eps_but_withholds_unit_broken_absolutes() {
+    fn hk_financials_withholds_legacy_absolutes_but_keeps_ratios() {
         use rust_decimal::Decimal;
         // 腾讯真实一期：营收 751766000000 / 净利 229801000000（单位可疑但比率抵消单位）。
         let row = HkFinancialsRow {
             currency: Some("CNY".into()),
             period_label: Some("2025 FY".into()),
+            period_type: Some("FY".into()),
+            unit_label: Some("百萬元".into()),
+            source_unit_scale: None,
+            amounts_normalized: false,
             revenue: Some(Decimal::from(751_766_000_000_i64)),
             revenue_prior: Some(Decimal::from(660_257_000_000_i64)),
             gross_profit: Some(Decimal::from(400_000_000_000_i64)),
+            operating_income: None,
             net_income: Some(Decimal::from(229_801_000_000_i64)),
             eps: Some(Decimal::new(24_749, 3)),
+            operating_cash_flow: None,
+            cash_and_equivalents: None,
+            net_cash: None,
+            free_cash_flow: None,
+            source_title: Some("年度业绩".into()),
+            source_url: Some("https://www1.hkexnews.hk/a.pdf".into()),
+            parser_version: None,
         };
         let fin = financials_from_hk_row(&row);
         assert!(fin.provider_ok);
         assert_eq!(fin.currency.as_deref(), Some("CNY"));
         assert_eq!(fin.eps, Some(Decimal::new(24_749, 3)));
-        assert_eq!(fin.eps_annualized, Some(false));
+        assert_eq!(fin.eps_annualized, Some(true));
         // 净利率 ≈ 30.57%，单位无关、可信。
         let nm = fin.net_margin.expect("net margin");
         assert!(
@@ -1860,6 +1880,38 @@ mod tests {
         assert!(fin.revenue.is_none(), "绝对营收不外传");
         assert!(fin.net_income.is_none(), "绝对净利不外传");
         assert!(fin.free_cash_flow.is_none());
+    }
+
+    #[test]
+    fn hk_financials_exposes_absolutes_only_with_normalization_proof() {
+        use rust_decimal::Decimal;
+        let revenue = Decimal::from(10_000_000_000_i64);
+        let row = HkFinancialsRow {
+            currency: Some("HKD".into()),
+            period_label: Some("2025 FY".into()),
+            period_type: Some("FY".into()),
+            unit_label: Some("百萬元".into()),
+            source_unit_scale: Some(Decimal::from(1_000_000)),
+            amounts_normalized: true,
+            revenue: Some(revenue),
+            revenue_prior: Some(Decimal::from(8_000_000_000_i64)),
+            gross_profit: Some(Decimal::from(5_000_000_000_i64)),
+            operating_income: Some(Decimal::from(1_000_000_000_i64)),
+            net_income: Some(Decimal::from(-500_000_000_i64)),
+            eps: Some(Decimal::new(-50, 2)),
+            operating_cash_flow: Some(Decimal::from(700_000_000_i64)),
+            cash_and_equivalents: Some(Decimal::from(2_000_000_000_i64)),
+            net_cash: Some(Decimal::from(1_500_000_000_i64)),
+            free_cash_flow: Some(Decimal::from(600_000_000_i64)),
+            source_title: Some("年度业绩".into()),
+            source_url: Some("https://www1.hkexnews.hk/a.pdf".into()),
+            parser_version: Some("hkex-structured-v1".into()),
+        };
+        let fin = financials_from_hk_row(&row);
+        assert_eq!(fin.revenue, Some(revenue));
+        assert_eq!(fin.net_income, Some(Decimal::from(-500_000_000_i64)));
+        assert_eq!(fin.net_cash, Some(Decimal::from(1_500_000_000_i64)));
+        assert_eq!(fin.eps_annualized, Some(true));
     }
 
     #[test]

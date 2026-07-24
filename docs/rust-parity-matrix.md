@@ -65,8 +65,8 @@ The baseline contained 45 REST surfaces: `/healthz` plus 44 registered REST cont
 | Generate deep report | `POST /api/report/generate` | `ReportService` + `echo-api` adapter + `echo-web::research::ReportCard` | rust-accepted | application unit tests（本地兜底/模型路径/落库）+ 纯核路径真实 HTTP 端到端验证 + Web 端真实生成/下载实测（AAPL 完整七段报告） | keep | IMPROVEMENT_PLAN §4 P3-3 | 与 `/api/ask` 共用 `assemble_facts`/`build_panel`/护栏；报告专属提示词固定七段结构，模型不可用或输出短于 200 字退化为本地确定性报告，落库归位同一研究会话。Web 视图/导出已接（研究页 composer 按钮，客户端 Blob 下载 `.md`）。 |
 | Discover | `POST /api/discover` | — | product-decide | — | product-decide | Product / ADR | 是否保留“发现”工作流未裁决。 |
 | Events digest | 通知面板 + 邮件 | `NotificationsRepository`/`EmailService`（SMTP，未配置诚实降级） | done | live worker test `live_digest_and_rule_checks_run_against_real_data` | keep | P4-2 | Digest 内容改为真实持仓异动/规则计数/触发计数（不再是占位统计），经偏好/免打扰/去重咽喉后镜像发邮件；`GET /api/events/digest` 单独端点未做，站内通知走既有 `/api/notifications`。 |
-| Ingest HK financials | `POST /api/hk-financials/ingest` | — | pending | — | keep | Phase 2–3 | HKEX/filing ingestion 未迁移。 |
-| Read HK financials | `GET /api/hk-financials` | `echo-db::HkFinancialsRepository::latest` 接入 `load_fundamentals`（研究链路读路径） | skeleton | echo-api 单测（比率映射/绝对值 withhold）+ live 端到端（0700.HK 财务质量真数据点火） | keep | Phase 2–3 | 研究链路已读 `hk_financials`（**安全子集**：单位无关比率 + EPS，绝对值不外传）；独立 `GET /api/hk-financials` 端点仍未做；ingest 与单位规范另议。 |
+| Ingest HK financials | `POST /api/hk-financials/ingest` | `cargo xtask hk-ingest <json>` → `normalize_hk_financials` → `HkFinancialsRepository::upsert_normalized` | skeleton | 单位别名/单次换算/EPS 不换算/HKEX 来源/负营收/迁移注册单测 | keep | Phase 2–3 | 已完成安全的结构化运维 ingest 与单位证明；公共 HTTP 写入口刻意不开放，防登录用户污染公共表。HKEX 公告发现与 PDF 自动抽取仍待迁移。 |
+| Read HK financials | `GET /api/hk-financials` | `echo-db::HkFinancialsRepository::latest` 接入 `load_fundamentals`（研究链路读路径） | skeleton | echo-api 单测（历史行只取比率；归一化行开放绝对值）+ live 端到端（0700.HK 财务质量真数据点火） | keep | Phase 2–3 | `amounts_normalized` 是绝对值信任门；EV/Sales 同时校验报告/行情币种，缺 FX 不跨币种硬算。独立 GET 端点仍未做。 |
 | Unread notification count | `GET /api/notifications/unread` | `NotificationsRepository::unread` | rust-accepted | repository/API tests | keep | #43 | 已有用户过滤。 |
 | Mark notifications read | `POST /api/notifications/read` | `NotificationsRepository::mark_read` | rust-accepted | repository/API tests | keep | #43 | 支持单条/全部已读。 |
 | Send notification test | `POST /api/notifications/test` | — | pending | — | keep | Phase 3 | 测试通知契约未迁移。 |
@@ -204,8 +204,8 @@ These are P0 blockers from the handoff. Dockerfiles or Terraform resources alone
 | Status | Count |
 | --- | ---: |
 | rust-accepted | 36 |
-| skeleton | 26 |
-| pending | 34 |
+| skeleton | 27 |
+| pending | 33 |
 | replaced | 2 |
 | retire-candidate | 0 |
 | blocked | 8 |
@@ -226,3 +226,4 @@ Completion condition: this ledger may only contain `rust-accepted` or ADR-closed
 | 2026-07-24 | depth 真生效：`ResearchService::gather_evidence` 让 `deep` 意图走基础问题 + 3 维度（护城河/竞争、风险/监管、近况/业绩）**并发**检索、按 URL 去重合并、截断到 10 条；`AnswerContext.depth` + `depth_directive` 让 deep 分维度系统展开、brief 直接精简。live 验证：deep 问题 sources 从 5→10、答案覆盖 7 维度 3425 字、引用 8/10 0 虚构。此前 depth 只是路由标签、聊天作答无视之的装饰性问题已消除。 |
 | 2026-07-24 | 定性引用护栏：`echo-domain::verify_answer_citations`/`CitationReport` + `CitationGuardView` + `AskResponse.citation_guard`/`ResearchStreamGuard.citation_guard` + Web `CitationBadge`。核引用完整性（标注了几号来源/有无虚构来源号/有证据却零引用），与数字护栏互补，仅本轮有网页证据时出现。live 验证：AAPL 护城河问题 5 证据、模型引用 4 条 0 虚构，同轮数字护栏硬 1（抓到网页数字非一手财报）。`ResearchStreamEvent` 的 Meta/Final 变体因 AskResponse 增大触发 large_enum_variant，随手 Box（同 Compare）。 |
 | 2026-07-24 | P2-1：网页证据端口（`echo-data::EvidenceService`，**双供应商 Exa/Tavily**，实时无缓存）全链接线——`ResearchPorts::load_web_evidence`（意图门控：现状/护城河/竞争/风险/证伪/深研）+ `answer_prompt` 证据块（不解除无财报数字禁令）+ `AskResponse.sources` + Web `SourceCards`。`EXA_API_KEY`（优先）/`TAVILY_API_KEY`（回落）带 consumer 加入 `echo-config`。同日 live 浏览器端到端验证通过（真 Exa：AAPL 护城河 5 条新鲜来源、答案引用标注、Web 来源卡渲染、护栏 15 核 11 过 0 硬；估值意图 0 源门控正确）→ pending→rust-accepted；计数 pending 35→34、rust-accepted 35→36。 |
+| 2026-07-24 | 港股单位规范与安全写入：migration 0013 为 `hk_financials` 增加来源倍率、归一化证明和解析器版本；`cargo xtask hk-ingest <json>` 只接受 HKEX PDF、明确单位和合理数量级，金额只换算一次、EPS 不乘单位。历史未知行继续只开放比率，新归一化行才开放绝对值；EV/Sales 额外要求报告币种=行情币种，缺 FX 不把 CNY 财报硬除 HKD 企业价值。自动发现/PDF 抽取仍未迁移，故 ingest pending→skeleton；计数 pending 34→33、skeleton 26→27。 |

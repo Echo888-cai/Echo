@@ -712,11 +712,54 @@ pub struct HkFinancialsRepository<'a> {
 pub struct HkFinancialsRow {
     pub currency: Option<String>,
     pub period_label: Option<String>,
+    pub period_type: Option<String>,
+    pub unit_label: Option<String>,
+    pub source_unit_scale: Option<Decimal>,
+    pub amounts_normalized: bool,
     pub revenue: Option<Decimal>,
     pub revenue_prior: Option<Decimal>,
     pub gross_profit: Option<Decimal>,
+    pub operating_income: Option<Decimal>,
     pub net_income: Option<Decimal>,
     pub eps: Option<Decimal>,
+    pub operating_cash_flow: Option<Decimal>,
+    pub cash_and_equivalents: Option<Decimal>,
+    pub net_cash: Option<Decimal>,
+    pub free_cash_flow: Option<Decimal>,
+    pub source_title: Option<String>,
+    pub source_url: Option<String>,
+    pub parser_version: Option<String>,
+}
+
+/// 受控港股财报写入模型。调用方必须先完成 HKEX 来源校验与单位归一化；本仓储会把
+/// `amounts_normalized=true` 与来源倍率、解析器版本原子写入，读侧据此决定绝对值能否进估值。
+#[derive(Clone, Debug)]
+pub struct HkFinancialsUpsert {
+    pub ticker: String,
+    pub period_label: Option<String>,
+    pub period_end: Option<String>,
+    pub period_type: Option<String>,
+    pub currency: String,
+    pub unit_label: String,
+    pub source_unit_scale: Decimal,
+    pub revenue: Option<Decimal>,
+    pub revenue_prior: Option<Decimal>,
+    pub gross_profit: Option<Decimal>,
+    pub gross_profit_prior: Option<Decimal>,
+    pub operating_income: Option<Decimal>,
+    pub operating_income_prior: Option<Decimal>,
+    pub net_income: Option<Decimal>,
+    pub net_income_prior: Option<Decimal>,
+    pub net_income_attributable: Option<Decimal>,
+    pub eps: Option<Decimal>,
+    pub operating_cash_flow: Option<Decimal>,
+    pub cash_and_equivalents: Option<Decimal>,
+    pub net_cash: Option<Decimal>,
+    pub free_cash_flow: Option<Decimal>,
+    pub source_title: String,
+    pub source_url: String,
+    pub published_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub parser_version: String,
 }
 
 impl<'a> HkFinancialsRepository<'a> {
@@ -728,7 +771,10 @@ impl<'a> HkFinancialsRepository<'a> {
     /// 该 ticker 最新一期业绩（按 knowledge_time 倒序）。缺行即 `None`——绝不臆造。
     pub async fn latest(&self, ticker: &str) -> Result<Option<HkFinancialsRow>> {
         let row = sqlx::query_as::<_, HkFinancialsRow>(
-            "SELECT currency, period_label, revenue, revenue_prior, gross_profit, net_income, eps \
+            "SELECT currency, period_label, period_type, unit_label, source_unit_scale, \
+                    amounts_normalized, revenue, revenue_prior, gross_profit, operating_income, \
+                    net_income, eps, operating_cash_flow, cash_and_equivalents, net_cash, \
+                    free_cash_flow, source_title, source_url, parser_version \
              FROM hk_financials WHERE ticker = $1 \
              ORDER BY knowledge_time DESC, id DESC LIMIT 1",
         )
@@ -736,6 +782,66 @@ impl<'a> HkFinancialsRepository<'a> {
         .fetch_optional(self.pool)
         .await?;
         Ok(row)
+    }
+
+    /// 幂等写入一份已归一化的 HKEX 业绩公告。同一 `source_url` 重跑会覆盖旧解析结果，并刷新
+    /// `knowledge_time`；金额列已经是绝对值，严禁调用方再按 `unit_label` 二次乘倍率。
+    pub async fn upsert_normalized(&self, value: &HkFinancialsUpsert) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO hk_financials \
+             (ticker, period_label, valid_time, period_type, currency, unit_label, \
+              source_unit_scale, amounts_normalized, revenue, revenue_prior, gross_profit, \
+              gross_profit_prior, operating_income, operating_income_prior, net_income, \
+              net_income_prior, net_income_attributable, eps, operating_cash_flow, \
+              cash_and_equivalents, net_cash, free_cash_flow, source_title, source_url, \
+              published_at, parser_version, knowledge_time) \
+             VALUES \
+             ($1,$2,$3,$4,$5,$6,$7,true,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,now()) \
+             ON CONFLICT (source_url) DO UPDATE SET \
+              ticker=EXCLUDED.ticker, period_label=EXCLUDED.period_label, \
+              valid_time=EXCLUDED.valid_time, period_type=EXCLUDED.period_type, \
+              currency=EXCLUDED.currency, unit_label=EXCLUDED.unit_label, \
+              source_unit_scale=EXCLUDED.source_unit_scale, amounts_normalized=true, \
+              revenue=EXCLUDED.revenue, revenue_prior=EXCLUDED.revenue_prior, \
+              gross_profit=EXCLUDED.gross_profit, gross_profit_prior=EXCLUDED.gross_profit_prior, \
+              operating_income=EXCLUDED.operating_income, \
+              operating_income_prior=EXCLUDED.operating_income_prior, \
+              net_income=EXCLUDED.net_income, net_income_prior=EXCLUDED.net_income_prior, \
+              net_income_attributable=EXCLUDED.net_income_attributable, eps=EXCLUDED.eps, \
+              operating_cash_flow=EXCLUDED.operating_cash_flow, \
+              cash_and_equivalents=EXCLUDED.cash_and_equivalents, net_cash=EXCLUDED.net_cash, \
+              free_cash_flow=EXCLUDED.free_cash_flow, source_title=EXCLUDED.source_title, \
+              published_at=EXCLUDED.published_at, parser_version=EXCLUDED.parser_version, \
+              knowledge_time=now()",
+        )
+        .bind(&value.ticker)
+        .bind(&value.period_label)
+        .bind(&value.period_end)
+        .bind(&value.period_type)
+        .bind(&value.currency)
+        .bind(&value.unit_label)
+        .bind(value.source_unit_scale)
+        .bind(value.revenue)
+        .bind(value.revenue_prior)
+        .bind(value.gross_profit)
+        .bind(value.gross_profit_prior)
+        .bind(value.operating_income)
+        .bind(value.operating_income_prior)
+        .bind(value.net_income)
+        .bind(value.net_income_prior)
+        .bind(value.net_income_attributable)
+        .bind(value.eps)
+        .bind(value.operating_cash_flow)
+        .bind(value.cash_and_equivalents)
+        .bind(value.net_cash)
+        .bind(value.free_cash_flow)
+        .bind(&value.source_title)
+        .bind(&value.source_url)
+        .bind(value.published_at)
+        .bind(&value.parser_version)
+        .execute(self.pool)
+        .await?;
+        Ok(())
     }
 }
 

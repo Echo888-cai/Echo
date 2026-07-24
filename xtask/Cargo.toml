@@ -12,5 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 echo-application.workspace = true
+echo-data.workspace = true
 echo-db.workspace = true
+serde_json.workspace = true
 tokio.workspace = true

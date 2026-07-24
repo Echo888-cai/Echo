@@ -63,6 +63,10 @@ const MIGRATIONS: &[Migration] = &[
         name: "0012_scheduler_lease.sql",
         sql: include_str!("../../../migrations/0012_scheduler_lease.sql"),
     },
+    Migration {
+        name: "0013_hk_financial_units.sql",
+        sql: include_str!("../../../migrations/0013_hk_financial_units.sql"),
+    },
 ];
 
 #[must_use]
@@ -143,7 +147,7 @@ mod tests {
 
     #[test]
     fn migration_registry_is_sorted_and_unique() {
-        assert_eq!(MIGRATIONS.len(), 12);
+        assert_eq!(MIGRATIONS.len(), 13);
         for pair in MIGRATIONS.windows(2) {
             assert!(pair[0].name < pair[1].name, "迁移必须严格按文件名排序");
         }

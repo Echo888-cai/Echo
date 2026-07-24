@@ -305,6 +305,14 @@ fn compute_ev_sales(
     f: &Financials,
     peer: Option<&PeerAnchor>,
 ) -> Option<Valuation> {
+    // 企业价值在报价币种，收入/净现金在报告币种。没有 FX 换算时只允许同币种相除；
+    // 例如腾讯报告币种 CNY、股价/市值 HKD，直接相除会生成伪 EV/Sales。
+    if !matches!(
+        (market.currency.as_deref(), f.currency.as_deref()),
+        (Some(quote), Some(reporting)) if quote.eq_ignore_ascii_case(reporting)
+    ) {
+        return None;
+    }
     let rev = f.revenue.filter(|r| *r > Decimal::ZERO)?;
     let shares = f.shares_outstanding.filter(|s| *s > Decimal::ZERO)?;
     let p = market.price.filter(|p| *p > Decimal::ZERO)?;
@@ -714,6 +722,7 @@ mod tests {
             price: Some(dec!(50)),
             pe: Some(dec!(-78)),
             market_cap: Some(dec!(20_000_000_000)),
+            currency: Some("HKD".into()),
             ..Default::default()
         };
         let f = Financials {
@@ -723,6 +732,7 @@ mod tests {
             revenue: Some(dec!(4_000_000_000)),
             revenue_growth: Some(dec!(35.0)),
             shares_outstanding: Some(dec!(400_000_000)),
+            currency: Some("HKD".into()),
             ..Default::default()
         };
         let v = display_valuation(&company, &market, &f, None);
@@ -733,6 +743,28 @@ mod tests {
         );
         // 无论最终是否给带子，method 都不能是负负得正的 PE。
         assert!(!v.method.contains("PE") || v.stage_aware);
+    }
+
+    #[test]
+    fn ev_sales_refuses_cross_currency_amounts_without_fx() {
+        let market = MarketSnapshot {
+            price: Some(dec!(50)),
+            market_cap: Some(dec!(20_000_000_000)),
+            currency: Some("HKD".into()),
+            ..Default::default()
+        };
+        let f = Financials {
+            provider_ok: true,
+            eps: Some(dec!(-3)),
+            net_margin: Some(dec!(-12)),
+            revenue: Some(dec!(4_000_000_000)),
+            shares_outstanding: Some(dec!(400_000_000)),
+            currency: Some("CNY".into()),
+            ..Default::default()
+        };
+        let valuation = display_valuation(&Company::default(), &market, &f, None);
+        assert!(!valuation.is_valued());
+        assert!(!valuation.stage_aware);
     }
 
     #[test]

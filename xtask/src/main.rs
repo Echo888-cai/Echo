@@ -140,9 +140,41 @@ fn bootstrap_owner() -> TaskResult {
     })
 }
 
+fn ingest_hk_financials(path: &Path) -> TaskResult {
+    let database_url = env::var("DATABASE_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "hk-ingest 需要显式 DATABASE_URL".to_string())?;
+    let body = std::fs::read_to_string(path)
+        .map_err(|error| format!("读取 {} 失败: {error}", path.display()))?;
+    let raw: echo_data::RawHkFinancials = serde_json::from_str(&body)
+        .map_err(|error| format!("解析 {} 失败: {error}", path.display()))?;
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|error| format!("创建 tokio runtime 失败: {error}"))?;
+    runtime.block_on(async move {
+        let pool = echo_db::connect(&database_url, 1)
+            .await
+            .map_err(|error| error.to_string())?;
+        echo_db::migrate(&pool)
+            .await
+            .map_err(|error| error.to_string())?;
+        let normalized = echo_data::ingest_hk_financials(&pool, raw)
+            .await
+            .map_err(|error| error.to_string())?;
+        eprintln!(
+            "[hk-ingest] {} {} 已写入；来源倍率={}，解析器={}",
+            normalized.ticker,
+            normalized.period_label.as_deref().unwrap_or("期间未标"),
+            normalized.source_unit_scale.normalize(),
+            normalized.parser_version
+        );
+        Ok(())
+    })
+}
+
 fn usage() {
     eprintln!(
-        "用法: cargo xtask <命令>\n\n  check            Rust fmt + clippy + test + Leptos/WASM release build\n  web              构建开发版 Leptos/WASM\n  e2e              通过 WebDriver 验收真实浏览器核心流程\n  migrate          对显式 DATABASE_URL 执行 Rust 迁移\n  bootstrap-owner  用显式环境变量创建首个 owner（不覆盖已有 owner）\n  release          执行完整 Rust 检查并构建 release Web"
+        "用法: cargo xtask <命令>\n\n  check            Rust fmt + clippy + test + Leptos/WASM release build\n  web              构建开发版 Leptos/WASM\n  e2e              通过 WebDriver 验收真实浏览器核心流程\n  migrate          对显式 DATABASE_URL 执行 Rust 迁移\n  bootstrap-owner  用显式环境变量创建首个 owner（不覆盖已有 owner）\n  hk-ingest <json> 校验并写入一份结构化 HKEX 业绩公告\n  release          执行完整 Rust 检查并构建 release Web"
     );
 }
 
@@ -161,6 +193,10 @@ fn main() -> ExitCode {
         Some("e2e") => browser_e2e(&root),
         Some("migrate") => migrate_database(),
         Some("bootstrap-owner") => bootstrap_owner(),
+        Some("hk-ingest") => match env::args().nth(2) {
+            Some(path) => ingest_hk_financials(Path::new(&path)),
+            None => Err("hk-ingest 需要 JSON 文件路径".into()),
+        },
         _ => {
             usage();
             return ExitCode::FAILURE;
