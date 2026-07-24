@@ -66,7 +66,7 @@ The baseline contained 45 REST surfaces: `/healthz` plus 44 registered REST cont
 | Discover | `POST /api/discover` | — | product-decide | — | product-decide | Product / ADR | 是否保留“发现”工作流未裁决。 |
 | Events digest | 通知面板 + 邮件 | `NotificationsRepository`/`EmailService`（SMTP，未配置诚实降级） | done | live worker test `live_digest_and_rule_checks_run_against_real_data` | keep | P4-2 | Digest 内容改为真实持仓异动/规则计数/触发计数（不再是占位统计），经偏好/免打扰/去重咽喉后镜像发邮件；`GET /api/events/digest` 单独端点未做，站内通知走既有 `/api/notifications`。 |
 | Ingest HK financials | `POST /api/hk-financials/ingest` | — | pending | — | keep | Phase 2–3 | HKEX/filing ingestion 未迁移。 |
-| Read HK financials | `GET /api/hk-financials` | — | pending | — | keep | Phase 2–3 | `hk_financials` 读模型/API 未迁移。 |
+| Read HK financials | `GET /api/hk-financials` | `echo-db::HkFinancialsRepository::latest` 接入 `load_fundamentals`（研究链路读路径） | skeleton | echo-api 单测（比率映射/绝对值 withhold）+ live 端到端（0700.HK 财务质量真数据点火） | keep | Phase 2–3 | 研究链路已读 `hk_financials`（**安全子集**：单位无关比率 + EPS，绝对值不外传）；独立 `GET /api/hk-financials` 端点仍未做；ingest 与单位规范另议。 |
 | Unread notification count | `GET /api/notifications/unread` | `NotificationsRepository::unread` | rust-accepted | repository/API tests | keep | #43 | 已有用户过滤。 |
 | Mark notifications read | `POST /api/notifications/read` | `NotificationsRepository::mark_read` | rust-accepted | repository/API tests | keep | #43 | 支持单条/全部已读。 |
 | Send notification test | `POST /api/notifications/test` | — | pending | — | keep | Phase 3 | 测试通知契约未迁移。 |
@@ -136,7 +136,7 @@ All nine schedules are defined and dispatch through a shared `try_claim`/`record
 | FMP fundamentals | `fmpFundamentalsAdapter` | `echo-data::FundamentalsService` | rust-accepted | fixture + commercial/HK gates | keep | Phase 2 | US-only stable 三表；商用模式拒绝；`ResearchPorts::load_fundamentals` 已接线。 |
 | FMP company search | `fmpSearchAdapter` | `echo-data::FmpSearchService` | rust-accepted | normalize/filter + resolve ports | keep | Phase 2 | resolve/verify 已消费；研究链路建档 ensure 仍待接。 |
 | Company resolve/verify | `companyResolution` | `CompanyResolveService` + `/api/companies/{resolve,verify}` + ask ensure | rust-accepted | alias/identity + research-entry tests | keep | Phase 2 | `/api/ask` 验证后 `ensure`；仍无 LLM 兜底。 |
-| Tavily evidence search | `tavilySearchAdapter` | — | pending | — | keep | Phase 2 | `TAVILY_API_KEY` 已从 `echo-config` 移除（无 consumer、额度已耗尽）；P2 选定证据供应商时按届时选型与 consumer 同 PR 重新加入。 |
+| 网页证据检索（Exa/Tavily） | `tavilySearchAdapter` | `echo-data::EvidenceService`（**双供应商**：`EXA_API_KEY` 优先走 Exa `/search`，否则回落 Tavily `/search`）+ `ResearchPorts::load_web_evidence` + `answer_prompt` 证据块 + `AskResponse.sources` + Web `SourceCards` | rust-accepted | echo-data 单测（供应商优先级/query 拼接/域名解析/截断/Exa+Tavily 双响应形状/商用+缺 key 降级）+ application 单测（意图门控：护城河拉证据、估值不拉）+ answer_prompt 单测（证据块渲染且不解除无财报数字禁令）+ **live 浏览器端到端**（2026-07-24 真 Exa：AAPL 护城河问题→5 条真实新鲜来源含 36氪/21财经/新浪/tradingkey→答案引用 `[1]`~`[5]` 并把 AI 硬件/供应链风险落到对应来源→`AskResponse.sources` 5 条→Web `SourceCards` 渲染可点击来源卡→数字护栏 15 核 11 过 0 硬；反向：估值意图 0 源，门控正确关闭） | keep | P2-1 | 双供应商实时无缓存（无新增迁移）；仅对定性意图（现状/护城河/竞争/风险/证伪/深研）拉取；商用模式拒绝（免费/研究档非商用授权）；证据只做定性支撑，绝不进 `FactsRegistry`。Tavily 免费账户额度已耗尽(432)，故默认 Exa（有可用月度免费额度）。**增强（未做）**：证据落库缓存、港股中文源专用适配器、对比两腿接证据。 |
 | Finnhub earnings calendar | `finnhubCalendarAdapter` | `echo-data::CalendarService` | rust-accepted | live Finnhub + DB round-trip (AAPL) | keep | Phase 2 | 24h 陈旧窗口回源；商用模式拒绝；`ResearchPorts::load_earnings_calendar` 已接线到 web `EarningsBadge`。 |
 | Finnhub peers | `finnhubPeersAdapter` | `echo-data::PeerService`（FMP `stock-peers` + `ratios-ttm`/`key-metrics-ttm`）+ `echo-db::PeersRepository` | rust-accepted | echo-data 单测（分位/排除自身/JSON 往返）+ live FMP+DB 端到端（AAPL：PE 4 家 p25 23.6x/中位 26.2x、EV-Sales 5 家；RIVN：单点位诚实拒绝成分位，不足两点不成锚点） | keep | P2-3 remainder | 供应商换成 FMP（非 Finnhub）；美股专属（免费档三表限定，见 fundamentals.rs 同一授权口径）；单个可比失败不拖垮整批，`partial` 标记不完整；24h 缓存已验证命中。 |
 | HK ADR/calendar | `hkAdrCalendarAdapter` | — | pending | — | keep | Phase 2 | 港股/ADR 日期与映射链缺失。 |
@@ -203,9 +203,9 @@ These are P0 blockers from the handoff. Dockerfiles or Terraform resources alone
 
 | Status | Count |
 | --- | ---: |
-| rust-accepted | 35 |
+| rust-accepted | 36 |
 | skeleton | 26 |
-| pending | 35 |
+| pending | 34 |
 | replaced | 2 |
 | retire-candidate | 0 |
 | blocked | 8 |
@@ -222,3 +222,7 @@ Completion condition: this ledger may only contain `rust-accepted` or ADR-closed
 | 2026-07-21 | 扩展为 109 行完整底账（对齐交接书逐能力清点）；同步 #44 ResearchService 与 #45 CI live DB |
 | 2026-07-22 | 校正两处滞后行：`GET /api/companies/resolve`（P1-3 resolve-first 已接线，pending→rust-accepted）、`POST /api/ask`（P2/P3-4 取数+hard-fail+多轮隔离已完整落地，非 fake ports，skeleton→rust-accepted）。P5 启动前置核对。 |
 | 2026-07-22 | P5-1：优雅停机（echo-api/echo-worker SIGTERM）、pg_dump S3 镜像通道（手签 SigV4）、OTLP 追踪导出（echo-observability + echo-api TraceLayer + echo-worker `#[instrument]`）。Observability blocked→rust-accepted；S3 backup and restore 行更新为已接上传但仍 blocked（真实凭据待用户配置）。 |
+| 2026-07-24 | 港股财报读模型（安全子集）：`echo-db::HkFinancialsRepository::latest` 读 `hk_financials`（HKEX 一手业绩，库中已有 16 行/9 ticker 真数据），`echo-api::financials_from_hk_row` 只取**单位无关**量（同行内算的毛利率/净利率/增速 + EPS + 币种 + 期间），**绝对营收/净利/现金流一律 None**（历史 `unit_label` 有错标行，绝对值单位不可靠，不喂估值/展示，守不混单位红线）；`load_fundamentals` 按 `detect_market` 分流：HK 走读模型、美股走 FMP。港股财务质量首次点火（此前 provider_ok=false 一个比率都没有）。live 验证：0700.HK 净利率 30.38%/毛利率 56.92%（真数据，最新一期），模型主动声明"绝对值未核到"，估值诚实"无法估值"，护栏 2/2 pass。**未做**：ingest（HK 数据保鲜需 HKEX 源，另一条 blocked 管道）、绝对值单位规范、`GET /api/hk-financials` 独立端点。 |
+| 2026-07-24 | depth 真生效：`ResearchService::gather_evidence` 让 `deep` 意图走基础问题 + 3 维度（护城河/竞争、风险/监管、近况/业绩）**并发**检索、按 URL 去重合并、截断到 10 条；`AnswerContext.depth` + `depth_directive` 让 deep 分维度系统展开、brief 直接精简。live 验证：deep 问题 sources 从 5→10、答案覆盖 7 维度 3425 字、引用 8/10 0 虚构。此前 depth 只是路由标签、聊天作答无视之的装饰性问题已消除。 |
+| 2026-07-24 | 定性引用护栏：`echo-domain::verify_answer_citations`/`CitationReport` + `CitationGuardView` + `AskResponse.citation_guard`/`ResearchStreamGuard.citation_guard` + Web `CitationBadge`。核引用完整性（标注了几号来源/有无虚构来源号/有证据却零引用），与数字护栏互补，仅本轮有网页证据时出现。live 验证：AAPL 护城河问题 5 证据、模型引用 4 条 0 虚构，同轮数字护栏硬 1（抓到网页数字非一手财报）。`ResearchStreamEvent` 的 Meta/Final 变体因 AskResponse 增大触发 large_enum_variant，随手 Box（同 Compare）。 |
+| 2026-07-24 | P2-1：网页证据端口（`echo-data::EvidenceService`，**双供应商 Exa/Tavily**，实时无缓存）全链接线——`ResearchPorts::load_web_evidence`（意图门控：现状/护城河/竞争/风险/证伪/深研）+ `answer_prompt` 证据块（不解除无财报数字禁令）+ `AskResponse.sources` + Web `SourceCards`。`EXA_API_KEY`（优先）/`TAVILY_API_KEY`（回落）带 consumer 加入 `echo-config`。同日 live 浏览器端到端验证通过（真 Exa：AAPL 护城河 5 条新鲜来源、答案引用标注、Web 来源卡渲染、护栏 15 核 11 过 0 硬；估值意图 0 源门控正确）→ pending→rust-accepted；计数 pending 35→34、rust-accepted 35→36。 |

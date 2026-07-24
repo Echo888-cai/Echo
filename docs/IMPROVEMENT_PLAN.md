@@ -42,7 +42,7 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
 
 | 差距 | Honeclaw 现状 | Echo 现状 | 落点 |
 | --- | --- | --- | --- |
-| 证据平面 | 有新闻/事件输入 | 日历/历史分位/同业/filings 已接；网页证据仍 pending | §4 P2 |
+| 证据平面 | 有新闻/事件输入 | ✅ 日历/历史分位/同业/filings + 网页证据（Exa/Tavily 双供应商）全链接线并 live 验证（含中文源） | §4 P2 |
 | 深度报告 | 有报告工作流 | `/api/report/generate` 未迁移 | §4 P3 |
 | 公司档案记忆 | Markdown 长期记忆 | `company_profiles` repository/API 已接（手动编辑）；Web 编辑页/自动沉淀仍 pending | §4 P3 |
 | 定时简报触达用户 | 盘前/财报简报直达 IM | worker digest 只写库，无用户触达面 | §4 P4 |
@@ -112,7 +112,19 @@ Honeclaw（B-M-Capital-Research/honeclaw，Rust 74% + SolidJS，742 star，v0.14
    （用户明确要求 UX 顶级），但禁止引入 JS 依赖，全部 Leptos + CSS。
 
 ### P2 · 证据优先数据平面（超越 honeclaw 的核心）
-1. `evidence-port`：网页证据端口 + 所选供应商适配器（等用户定 Tavily 续费或替代品；供应商失败诚实降级，不重诊断——已知结论勿重推）。
+1. `evidence-port` ✅**已接线并 live 验证**（rust-accepted）：`echo-data::EvidenceService`（**双供应商**：
+   `EXA_API_KEY` 优先走 Exa `/search`，否则回落 Tavily `/search`；实时无缓存、无新增迁移）→
+   `ResearchPorts::load_web_evidence`（意图门控：现状/护城河/竞争/风险/证伪/深研这 6 类定性意图才
+   拉；估值/财务质量等数字驱动意图不拉，避免二手噪音与延迟）→ `answer_prompt` 证据块（每条编号+
+   标题+来源域名+日期+片段+URL；首行硬性纪律：定性论断须标注来源，证据里的数字**不得**当作已核
+   财务数字——绝不解除「无实时财报→禁具体财务数字」封堵，证据也绝不进 `FactsRegistry`）→
+   `AskResponse.sources` → Web `SourceCards`（可点击来源卡）。`EXA_API_KEY`/`TAVILY_API_KEY` 带
+   consumer 加入 `echo-config`（商用模式拒绝，免费/研究档非商用授权）。供应商失败/未配/额度耗尽一律
+   返回空列表诚实降级。2026-07-24 live 浏览器端到端验证：真 Exa 对 AAPL 护城河问题返 5 条新鲜来源
+   （含 36氪/21财经/新浪等中文源），答案引用 `[1]`~`[5]` 并把 AI 硬件/供应链风险落到对应来源，Web
+   来源卡渲染，护栏 15 核 11 过 0 硬；估值意图 0 源门控正确。**下一步增强**（未做）：证据落库缓存
+   （当前每次合格提问实时打一次）、港股中文源专用适配器（Exa 中文提问已能出中文源，但仍应有港股
+   一手管道同线的专用源）、把证据也接进对比研究两腿。
 2. `filings-and-calendar`：财报日历（Finnhub）✅已接（`echo-data::CalendarService` +
    `echo-db::CalendarRepository`，24h 陈旧回源，`ResearchPorts::load_earnings_calendar`→Web
    `EarningsBadge`，见 rust-parity-matrix）+ 公告/filings 读模型 ✅已接（`echo-data::FilingsService`：
