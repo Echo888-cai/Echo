@@ -892,6 +892,7 @@ fn CompareLeg(leg: CompareLegView) -> impl IntoView {
             <ValuationBand v=leg.valuation.clone() />
             <CompletenessRow completeness=leg.data_completeness />
             <DataSources sources=leg.connected_sources.clone() />
+            <SourceCards sources=leg.sources.clone() />
             {leg.fact_guard.clone().map(|g| view! { <GuardBadge guard=g /> })}
         </div>
     }

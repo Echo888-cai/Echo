@@ -229,6 +229,7 @@ pub struct CompareLegContext<'a> {
     pub panel: &'a DecisionPanel,
     pub market: &'a MarketSnapshot,
     pub financials: &'a Financials,
+    pub evidence: &'a [Evidence],
 }
 
 /// 单腿事实块——与 `build_user_prompt` 里的"已核到的事实"段落同构，供对比 prompt 各标一份。
@@ -252,6 +253,22 @@ fn leg_facts_block(label: &str, ctx: &CompareLegContext) -> String {
     } else {
         out.push_str("本轮无实时财报：这一方严禁给出任何具体财务数字或估算值，只能定性判断。\n");
     }
+    if !ctx.evidence.is_empty() {
+        let prefix = if label == "公司A" { 'A' } else { 'B' };
+        out.push_str(&format!(
+            "\n--- {label} 独立网页证据（只支撑本公司定性判断，引用格式 [{prefix}1]）---\n"
+        ));
+        for (index, evidence) in ctx.evidence.iter().enumerate() {
+            out.push_str(&format!(
+                "[{prefix}{}] {} | {}\n{}\n来源：{}\n",
+                index + 1,
+                evidence.title,
+                evidence.published_date.as_deref().unwrap_or("日期未核到"),
+                evidence.snippet,
+                evidence.url
+            ));
+        }
+    }
     out
 }
 
@@ -267,7 +284,9 @@ pub fn build_compare_user_prompt(
     out.push_str(
         "铁律：以下两家公司的事实完全独立核实，绝不允许把一家的数字当成另一家的数字引用、\n\
          也不允许凭常识/记忆给出未在对应事实块里出现的数字。你在作答里提到任何具体数字时，\n\
-         必须明确说明这个数字属于哪家公司（用公司名或代码标注），不得含糊带过。\n\n",
+         必须明确说明这个数字属于哪家公司（用公司名或代码标注），不得含糊带过。\n\
+         网页证据同样不可串腿：公司A只引用 [A1]…，公司B只引用 [B1]…；每个定性结论都在句末\n\
+         标对应来源号，绝不把 A 来源拿来证明 B，反之亦然。\n\n",
     );
     out.push_str(&leg_facts_block("公司A", primary));
     out.push('\n');
@@ -605,12 +624,24 @@ mod tests {
                 panel: &apple_panel,
                 market: &apple_market,
                 financials: &apple_financials,
+                evidence: &[Evidence {
+                    title: "Apple source".into(),
+                    url: "https://example.com/apple".into(),
+                    snippet: "Apple evidence".into(),
+                    ..Default::default()
+                }],
             },
             &CompareLegContext {
                 name_zh: Some("腾讯"),
                 panel: &tencent_panel,
                 market: &tencent_market,
                 financials: &tencent_financials,
+                evidence: &[Evidence {
+                    title: "Tencent source".into(),
+                    url: "https://example.com/tencent".into(),
+                    snippet: "Tencent evidence".into(),
+                    ..Default::default()
+                }],
             },
         );
         assert!(prompt.contains("绝不允许把一家的数字当成另一家的数字"));
@@ -618,5 +649,8 @@ mod tests {
         assert!(prompt.contains("腾讯（0700.HK）"));
         assert!(prompt.contains("383000USD"));
         assert!(prompt.contains("160000HKD"));
+        assert!(prompt.contains("[A1] Apple source"));
+        assert!(prompt.contains("[B1] Tencent source"));
+        assert!(prompt.contains("绝不把 A 来源拿来证明 B"));
     }
 }

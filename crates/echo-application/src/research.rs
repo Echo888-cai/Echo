@@ -400,12 +400,14 @@ impl ResearchService {
                 panel: &primary_panel,
                 market: &primary_facts.market,
                 financials: &primary_facts.financials,
+                evidence: &primary_facts.evidence,
             },
             &CompareLegContext {
                 name_zh: peer_facts.company.name_zh.as_deref(),
                 panel: &peer_panel,
                 market: &peer_facts.market,
                 financials: &peer_facts.financials,
+                evidence: &peer_facts.evidence,
             },
         );
         let (answer, answer_source) =
@@ -424,8 +426,8 @@ impl ResearchService {
 
         let response = CompareResponse {
             route: route_view(&route),
-            primary: compare_leg_view(&primary_panel, primary_guard),
-            peer: compare_leg_view(&peer_panel, peer_guard),
+            primary: compare_leg_view(&primary_panel, primary_guard, &primary_facts.evidence),
+            peer: compare_leg_view(&peer_panel, peer_guard, &peer_facts.evidence),
             answer,
             answer_source,
         };
@@ -876,7 +878,11 @@ pub(crate) fn route_view(route: &ResearchRoute) -> RouteView {
     }
 }
 
-fn compare_leg_view(panel: &DecisionPanel, fact_guard: Option<GuardView>) -> CompareLegView {
+fn compare_leg_view(
+    panel: &DecisionPanel,
+    fact_guard: Option<GuardView>,
+    evidence: &[Evidence],
+) -> CompareLegView {
     CompareLegView {
         ticker: panel.ticker.clone(),
         data_completeness: panel.data_completeness,
@@ -886,6 +892,7 @@ fn compare_leg_view(panel: &DecisionPanel, fact_guard: Option<GuardView>) -> Com
             .map(|s| (*s).to_string())
             .collect(),
         valuation: valuation_view(panel),
+        sources: sources_view(evidence),
         fact_guard,
     }
 }
@@ -1214,16 +1221,22 @@ mod tests {
             fundamentals_by_ticker,
             answer: Some(
                 "苹果营收约383000美元。这段说明性文字用来把两家公司的数字隔开一段距离。\
-                 腾讯营收约160000港元。"
+                 腾讯营收约160000港元。两者护城河判断见 [A1] 与 [B1]。"
                     .into(),
             ),
+            evidence: vec![Evidence {
+                title: "独立公司来源".into(),
+                url: "https://example.com/source".into(),
+                snippet: "定性证据".into(),
+                ..Default::default()
+            }],
             ..FakePorts::default()
         };
 
         let outcome = ResearchService::compare(
             &ports,
             "user-1",
-            "谁的利润质量更好？".into(),
+            "谁的护城河更强？".into(),
             "AAPL".into(),
             "0700.HK".into(),
         )
@@ -1233,6 +1246,15 @@ mod tests {
         assert_eq!(outcome.facts.peer.company.ticker, "0700.HK");
         assert_eq!(outcome.response.primary.ticker, "AAPL");
         assert_eq!(outcome.response.peer.ticker, "0700.HK");
+        assert_eq!(outcome.response.primary.sources.len(), 1);
+        assert_eq!(outcome.response.peer.sources.len(), 1);
+        assert_eq!(
+            ports
+                .evidence_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "对比两腿应各自检索一次，不能只给主腿取证"
+        );
         // 两腿的营收数字都在各自事实块里真实存在，护栏各自应给 pass（不合并、不互相污染）。
         let primary_guard = outcome.response.primary.fact_guard.expect("primary guard");
         let peer_guard = outcome.response.peer.fact_guard.expect("peer guard");

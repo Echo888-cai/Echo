@@ -897,6 +897,9 @@ pub struct CompareLegView {
     pub data_completeness: u8,
     pub connected_sources: Vec<String>,
     pub valuation: ValuationView,
+    /// 本腿自己的网页证据；A/B 两腿分别返回，展示与 prompt 都不合并。
+    #[serde(default)]
+    pub sources: Vec<EvidenceView>,
     /// 该腿自己的护栏结果——只用本腿的 `FactsRegistry` 核对整段作答，两腿互不合并、
     /// 互不借用对方的事实登记表（"分别验证"，见 IMPROVEMENT_PLAN §4 P3-1）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
