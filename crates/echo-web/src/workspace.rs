@@ -1,0 +1,1389 @@
+use crate::{api, profiles::ProfilesSection, research::ResearchPage};
+use echo_contracts::{
+    AuthLoginRequest, AuthLogoutResponse, AuthRegisterRequest, AuthUserResponse,
+    ChangedCountResponse, Decimal, DeskResponse, MutationResponse, NotificationReadRequest,
+    NotificationsListResponse, PortfolioListResponse, PortfolioUpsertRequest, PreferencesResponse,
+    PreferencesUpdateRequest, PublicUser, UnreadResponse, UserRole, WatchListResponse,
+    WatchMutationRequest, WatchRuleCreateRequest,
+};
+use leptos::*;
+
+/// 资料库内的三个切面——同一批公司的自选监控、持仓与研究档案。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LibraryTab {
+    Watch,
+    Portfolio,
+    Profiles,
+}
+
+impl LibraryTab {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Watch => "自选与监控",
+            Self::Portfolio => "持仓",
+            Self::Profiles => "研究档案",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Page {
+    /// 研究页——可选携带会话 id，对应深链 `/research/:session_id`。
+    Research(Option<String>),
+    Library(LibraryTab),
+    Settings,
+}
+
+impl Page {
+    #[cfg(target_arch = "wasm32")]
+    fn path(&self) -> String {
+        match self {
+            Self::Research(None) => "/research".to_string(),
+            Self::Research(Some(id)) => format!("/research/{id}"),
+            Self::Library(LibraryTab::Watch) => "/library".to_string(),
+            Self::Library(LibraryTab::Portfolio) => "/library/portfolio".to_string(),
+            Self::Library(LibraryTab::Profiles) => "/library/profiles".to_string(),
+            Self::Settings => "/settings".to_string(),
+        }
+    }
+
+    const fn label(&self) -> &'static str {
+        match self {
+            Self::Research(_) => "研究",
+            Self::Library(_) => "资料库",
+            Self::Settings => "设置",
+        }
+    }
+
+    /// 导航栏高亮只看落在哪个 tab，不看研究页携带的具体会话 id / 资料库切面。
+    fn same_tab(&self, other: &Page) -> bool {
+        std::mem::discriminant(self) == std::mem::discriminant(other)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn page_from_path(path: &str) -> Page {
+    if let Some(rest) = path.strip_prefix("/research/") {
+        let id = rest.trim_matches('/');
+        return Page::Research((!id.is_empty()).then(|| id.to_string()));
+    }
+    match path {
+        // 旧的独立页面路径一并归位到资料库对应切面，深链/书签不失效。
+        "/library" | "/watch" => Page::Library(LibraryTab::Watch),
+        "/library/portfolio" | "/portfolio" => Page::Library(LibraryTab::Portfolio),
+        "/library/profiles" | "/profiles" => Page::Library(LibraryTab::Profiles),
+        "/settings" => Page::Settings,
+        _ => Page::Research(None),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn initial_page() -> Page {
+    page_from_path(&leptos::window().location().pathname().unwrap_or_default())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn initial_page() -> Page {
+    Page::Research(None)
+}
+
+fn navigate(set_page: WriteSignal<Page>, page: Page) {
+    #[cfg(target_arch = "wasm32")]
+    let path = page.path();
+    set_page.set(page);
+    #[cfg(target_arch = "wasm32")]
+    if let Ok(history) = leptos::window().history() {
+        let _ = history.push_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&path));
+    }
+}
+
+/// 资料库内部切面共用同一个页面实例：切换时只同步 URL，不再次挂载整页。
+/// 浏览器前进/后退仍由 popstate 负责恢复对应切面。
+fn push_library_path(tab: LibraryTab) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let path = Page::Library(tab).path();
+        if let Ok(history) = leptos::window().history() {
+            let _ = history.push_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&path));
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = tab;
+    }
+}
+
+/// 删除/移出等破坏性操作在浏览器里必须得到一次明确确认；原生编译仅用于类型检查。
+fn confirm_destructive(message: &str) -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        leptos::window()
+            .confirm_with_message(message)
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = message;
+        true
+    }
+}
+
+/// 监听浏览器前进/后退——`navigate` 只 `push_state` 不够，URL 变了页面得跟着变，
+/// 否则后退键在地址栏里动了但视图纹丝不动。
+#[cfg(target_arch = "wasm32")]
+fn install_popstate_listener(set_page: WriteSignal<Page>) {
+    let handle = leptos::window_event_listener(leptos::ev::popstate, move |_| {
+        let path = leptos::window().location().pathname().unwrap_or_default();
+        set_page.set(page_from_path(&path));
+    });
+    on_cleanup(move || handle.remove());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn install_popstate_listener(_set_page: WriteSignal<Page>) {}
+
+fn user_initials(name: &str) -> String {
+    let words: Vec<_> = name.split_whitespace().collect();
+    if words.len() > 1 {
+        return words
+            .iter()
+            .take(2)
+            .filter_map(|word| word.chars().next())
+            .flat_map(char::to_uppercase)
+            .collect();
+    }
+    name.chars().take(2).flat_map(char::to_uppercase).collect()
+}
+
+/// Echo 的主标识：用带层次的渐变描边重做图 2 的环形回声，所有产品入口共用。
+#[component]
+fn EchoMark(#[prop(optional)] compact: bool) -> impl IntoView {
+    view! {
+        <svg
+            class=if compact { "echo-mark-svg is-compact" } else { "echo-mark-svg" }
+            viewBox="0 0 52 52"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+        >
+            <defs>
+                <linearGradient id="echo-ring" x1="8" y1="5" x2="44" y2="48" gradientUnits="userSpaceOnUse">
+                    <stop stop-color="#173d39"/>
+                    <stop offset=".48" stop-color="#2f756c"/>
+                    <stop offset="1" stop-color="#86aaa3"/>
+                </linearGradient>
+                <linearGradient id="echo-wave" x1="16" y1="18" x2="37" y2="34" gradientUnits="userSpaceOnUse">
+                    <stop stop-color="#8eb6ae"/>
+                    <stop offset=".45" stop-color="#39796f"/>
+                    <stop offset="1" stop-color="#163b37"/>
+                </linearGradient>
+                <filter id="echo-soft-shadow" x="-30%" y="-30%" width="160%" height="160%">
+                    <feDropShadow dx="0" dy="1.5" stdDeviation="1.5" flood-color="#173d39" flood-opacity=".22"/>
+                </filter>
+            </defs>
+            <path
+                d="M39.3 12.2A20.3 20.3 0 1 0 40 39.1"
+                stroke="#dce9e5"
+                stroke-width="7"
+                stroke-linecap="round"
+                opacity=".72"
+            />
+            <path
+                d="M39.3 12.2A20.3 20.3 0 1 0 40 39.1"
+                stroke="url(#echo-ring)"
+                stroke-width="4"
+                stroke-linecap="round"
+                filter="url(#echo-soft-shadow)"
+            />
+            <path
+                d="M17.2 27.5c3.1-6.1 8.8-9.5 14.2-8.2 2.8.7 4.7 2.4 6.4 4.2"
+                stroke="url(#echo-wave)"
+                stroke-width="3.8"
+                stroke-linecap="round"
+            />
+            <path
+                d="M23.4 33.4c3.5 1.9 7.9 1.5 11.2-1.5"
+                stroke="url(#echo-wave)"
+                stroke-width="3.8"
+                stroke-linecap="round"
+            />
+            <circle cx="16.4" cy="27.7" r="2.2" fill="#5b9289"/>
+        </svg>
+    }
+}
+
+#[component]
+pub fn Workspace(user: PublicUser, on_auth_changed: Callback<()>) -> impl IntoView {
+    let (page, set_page) = create_signal(initial_page());
+    let (account_open, set_account_open) = create_signal(false);
+    let stage_ref = create_node_ref::<html::Section>();
+    install_popstate_listener(set_page);
+    #[cfg(target_arch = "wasm32")]
+    create_effect(move |_| {
+        let _ = page.get();
+        request_animation_frame(move || {
+            if let Some(stage) = stage_ref.get_untracked() {
+                stage.set_scroll_top(0);
+            }
+        });
+    });
+    let logout = create_action(|_: &()| async {
+        api::post::<_, AuthLogoutResponse>("/api/auth/logout", &serde_json::json!({})).await
+    });
+    create_effect(move |_| {
+        if matches!(logout.value().get(), Some(Ok(_))) {
+            on_auth_changed.call(());
+        }
+    });
+    let display_name = user
+        .display_name
+        .clone()
+        .unwrap_or_else(|| user.username.clone());
+    let avatar_letters = user_initials(&display_name);
+    let account_name = display_name.clone();
+    let account_role = match user.role {
+        UserRole::Owner => "FOUNDER ACCESS",
+        UserRole::Member => "RESEARCH ACCESS",
+    };
+    let on_research_navigate = Callback::new(move |session_id: Option<String>| {
+        navigate(set_page, Page::Research(session_id))
+    });
+
+    view! {
+        <div class="app-shell">
+            <aside class="workspace-rail" aria-label="Echo Research">
+                <button class="echo-brand brand-button" on:click=move |_| navigate(set_page, Page::Research(None))>
+                    <span class="echo-brand-mark"><EchoMark /></span>
+                    <span class="echo-brand-copy">
+                        <span class="echo-brand-name">"ECHO"</span>
+                        <span class="echo-brand-sub">"RESEARCH"</span>
+                    </span>
+                </button>
+                <div class="rail-account">
+                    <button
+                        class=move || if account_open.get() { "account-card is-open" } else { "account-card" }
+                        aria-label="账户菜单"
+                        aria-expanded=move || account_open.get()
+                        on:click=move |_| set_account_open.update(|value| *value = !*value)
+                    >
+                        <span class="user-avatar" aria-hidden="true">{avatar_letters.clone()}</span>
+                        <span class="account-copy">
+                            <strong>{account_name.clone()}</strong>
+                            <small>{account_role}</small>
+                        </span>
+                        <span class="account-chevron" aria-hidden="true">"⌄"</span>
+                    </button>
+                    {move || account_open.get().then(|| view! {
+                        <div class="account-menu">
+                            <button on:click=move |_| {
+                                set_account_open.set(false);
+                                navigate(set_page, Page::Settings);
+                            }>"账户与设置"</button>
+                            <button class="is-danger" on:click=move |_| logout.dispatch(())>"退出登录"</button>
+                        </div>
+                    })}
+                </div>
+            </aside>
+            <div class="workspace-main">
+                <header class="echo-topbar workspace-topbar">
+                    <nav class="workspace-nav" aria-label="主导航">
+                        {[Page::Research(None), Page::Library(LibraryTab::Watch), Page::Settings]
+                            .into_iter()
+                            .map(|item| {
+                                let item_for_class = item.clone();
+                                let item_for_click = item.clone();
+                                view! {
+                                    <button
+                                        class=move || if page.get().same_tab(&item_for_class) { "nav-item is-active" } else { "nav-item" }
+                                        on:click=move |_| navigate(set_page, item_for_click.clone())
+                                    >{item.label()}</button>
+                                }
+                            })
+                            .collect_view()}
+                    </nav>
+                    <div class="topbar-actions"><NotificationsPanel /></div>
+                </header>
+                <section node_ref=stage_ref class="workspace-stage">
+                    {move || match page.get() {
+                        Page::Research(session_id) => view! {
+                            <ResearchPage initial_session=session_id on_navigate=on_research_navigate />
+                        }.into_view(),
+                        Page::Library(tab) => view! {
+                            <LibraryPage
+                                tab=tab
+                                on_tab=Callback::new(push_library_path)
+                                on_research=Callback::new(move |_| navigate(set_page, Page::Research(None)))
+                            />
+                        }.into_view(),
+                        Page::Settings => view! { <SettingsPage /> }.into_view(),
+                    }}
+                </section>
+            </div>
+        </div>
+    }
+}
+
+#[derive(Clone)]
+struct AuthSubmission {
+    register: bool,
+    username: String,
+    password: String,
+    invite: String,
+    display_name: String,
+}
+
+#[component]
+pub fn LoginPage(on_authenticated: Callback<()>) -> impl IntoView {
+    let (register, set_register) = create_signal(false);
+    let (username, set_username) = create_signal(String::new());
+    let (password, set_password) = create_signal(String::new());
+    let (password_visible, set_password_visible) = create_signal(false);
+    let (invite, set_invite) = create_signal(String::new());
+    let (display_name, set_display_name) = create_signal(String::new());
+    let submit = create_action(|input: &AuthSubmission| {
+        let input = input.clone();
+        async move {
+            if input.register {
+                api::post::<_, AuthUserResponse>(
+                    "/api/auth/register",
+                    &AuthRegisterRequest {
+                        invite: input.invite,
+                        username: input.username,
+                        password: input.password,
+                        display_name: (!input.display_name.trim().is_empty())
+                            .then_some(input.display_name),
+                    },
+                )
+                .await
+            } else {
+                api::post::<_, AuthUserResponse>(
+                    "/api/auth/login",
+                    &AuthLoginRequest {
+                        username: input.username,
+                        password: input.password,
+                    },
+                )
+                .await
+            }
+        }
+    });
+    create_effect(move |_| {
+        if matches!(submit.value().get(), Some(Ok(_))) {
+            on_authenticated.call(());
+        }
+    });
+    let can_submit = create_memo(move |_| {
+        let username = username.get();
+        let password = password.get();
+        !username.trim().is_empty()
+            && !password.is_empty()
+            && (!register.get()
+                || (password.chars().count() >= 8 && !invite.get().trim().is_empty()))
+    });
+    let dispatch = Callback::new(move |_| {
+        if submit.pending().get_untracked() || !can_submit.get_untracked() {
+            return;
+        }
+        submit.dispatch(AuthSubmission {
+            register: register.get(),
+            username: username.get().trim().to_string(),
+            password: password.get(),
+            invite: invite.get().trim().to_string(),
+            display_name: display_name.get().trim().to_string(),
+        });
+    });
+
+    view! {
+        <main class="auth-page">
+            <div class="auth-ambient auth-ambient-one" aria-hidden="true"></div>
+            <div class="auth-ambient auth-ambient-two" aria-hidden="true"></div>
+            <section class="auth-story">
+                <div class="auth-brand-lockup">
+                    <span class="echo-brand-mark auth-mark"><EchoMark /></span>
+                    <span><strong>"ECHO"</strong><small>"RESEARCH"</small></span>
+                </div>
+                <p class="auth-brand-line"><span></span>"EVIDENCE-FIRST INTELLIGENCE"</p>
+                <h1>"把市场噪音，"<br/><em>"变成清晰判断。"</em></h1>
+                <p class="auth-story-copy">"面向美股与港股科技公司的研究工作台。事实、估值、风险与证伪，沉淀为一条可复盘的证据链。"</p>
+                <div class="auth-proof" aria-label="产品能力">
+                    <span>"实时研究"</span>
+                    <span>"数字护栏"</span>
+                    <span>"长期记忆"</span>
+                </div>
+            </section>
+            <form
+                class="auth-card"
+                aria-label=move || if register.get() { "邀请码注册" } else { "账户登录" }
+                on:submit=move |event| {
+                    event.prevent_default();
+                    dispatch.call(());
+                }
+            >
+                <div class="auth-card-head">
+                    <p class="auth-card-kicker">"PRIVATE RESEARCH WORKSPACE"</p>
+                    <h2>{move || if register.get() { "创建研究空间" } else { "欢迎回来" }}</h2>
+                    <p>{move || if register.get() { "使用邀请码开通你的私人研究台。" } else { "登录后继续你的研究与跟踪。" }}</p>
+                </div>
+                <div class="auth-tabs" role="tablist" aria-label="账户入口">
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected=move || !register.get()
+                        class=move || if !register.get() { "is-active" } else { "" }
+                        on:click=move |_| {
+                            set_register.set(false);
+                            set_password_visible.set(false);
+                            submit.value().set(None);
+                        }
+                    >"登录"</button>
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected=move || register.get()
+                        class=move || if register.get() { "is-active" } else { "" }
+                        on:click=move |_| {
+                            set_register.set(true);
+                            set_password_visible.set(false);
+                            submit.value().set(None);
+                        }
+                    >"邀请码注册"</button>
+                </div>
+                <div class="auth-field">
+                    <label for="auth-identity">"邮箱 / 用户名"</label>
+                    <div class="auth-input-shell">
+                        <input
+                            id="auth-identity"
+                            name="identity"
+                            autocomplete="username"
+                            autocapitalize="none"
+                            spellcheck="false"
+                            placeholder="name@example.com"
+                            prop:value=username
+                            on:input=move |event| {
+                                submit.value().set(None);
+                                set_username.set(event_target_value(&event));
+                            }
+                            on:keydown=move |event| {
+                                if event.key() == "Enter" {
+                                    event.prevent_default();
+                                    dispatch.call(());
+                                }
+                            }
+                        />
+                    </div>
+                    {move || register.get().then(|| view! {
+                        <span class="auth-field-hint">"可使用邮箱，或 3–24 位字母数字用户名"</span>
+                    })}
+                </div>
+                <div class="auth-field">
+                    <label for="auth-password">"密码"</label>
+                    <div class="auth-input-shell">
+                        <input
+                            id="auth-password"
+                            name="password"
+                            type=move || if password_visible.get() { "text" } else { "password" }
+                            autocomplete=move || if register.get() { "new-password" } else { "current-password" }
+                            placeholder="输入密码"
+                            prop:value=password
+                            on:input=move |event| {
+                                submit.value().set(None);
+                                set_password.set(event_target_value(&event));
+                            }
+                            on:keydown=move |event| {
+                                if event.key() == "Enter" {
+                                    event.prevent_default();
+                                    dispatch.call(());
+                                }
+                            }
+                        />
+                        <button
+                            class="auth-password-toggle"
+                            type="button"
+                            aria-label=move || if password_visible.get() { "隐藏密码" } else { "显示密码" }
+                            aria-pressed=move || password_visible.get()
+                            on:click=move |_| set_password_visible.update(|visible| *visible = !*visible)
+                        >
+                            {move || if password_visible.get() { "隐藏" } else { "显示" }}
+                        </button>
+                    </div>
+                    {move || register.get().then(|| view! {
+                        <span class=move || {
+                            if !password.get().is_empty() && password.get().chars().count() < 8 {
+                                "auth-field-hint is-warning"
+                            } else {
+                                "auth-field-hint"
+                            }
+                        }>"注册密码至少 8 位"</span>
+                    })}
+                </div>
+                {move || register.get().then(|| view! {
+                    <div class="register-extra">
+                        <div class="auth-field">
+                            <label for="auth-display-name">"显示名称（选填）"</label>
+                            <div class="auth-input-shell">
+                                <input
+                                    id="auth-display-name"
+                                    name="display-name"
+                                    autocomplete="name"
+                                    placeholder="你希望显示的名字"
+                                    prop:value=display_name
+                                    on:input=move |event| {
+                                        submit.value().set(None);
+                                        set_display_name.set(event_target_value(&event));
+                                    }
+                                    on:keydown=move |event| {
+                                        if event.key() == "Enter" {
+                                            event.prevent_default();
+                                            dispatch.call(());
+                                        }
+                                    }
+                                />
+                            </div>
+                        </div>
+                        <div class="auth-field">
+                            <label for="auth-invite">"邀请码"</label>
+                            <div class="auth-input-shell">
+                                <input
+                                    id="auth-invite"
+                                    name="invite"
+                                    autocomplete="one-time-code"
+                                    autocapitalize="none"
+                                    spellcheck="false"
+                                    placeholder="输入邀请码"
+                                    prop:value=invite
+                                    on:input=move |event| {
+                                        submit.value().set(None);
+                                        set_invite.set(event_target_value(&event));
+                                    }
+                                    on:keydown=move |event| {
+                                        if event.key() == "Enter" {
+                                            event.prevent_default();
+                                            dispatch.call(());
+                                        }
+                                    }
+                                />
+                            </div>
+                        </div>
+                    </div>
+                })}
+                <div class="auth-feedback" aria-live="polite">
+                    {move || submit.value().get().and_then(Result::err).map(|message| view! {
+                        <p class="form-error" role="alert"><span aria-hidden="true">"!"</span>{message}</p>
+                    })}
+                </div>
+                <button
+                    type="submit"
+                    class="primary-button auth-submit"
+                    aria-busy=move || submit.pending().get()
+                    disabled=move || submit.pending().get()
+                        || !can_submit.get()
+                >
+                    <span class="auth-submit-label">
+                        {move || if submit.pending().get() { "正在验证" } else if register.get() { "创建账号" } else { "进入研究台" }}
+                    </span>
+                    <span class=move || if submit.pending().get() { "auth-submit-arrow is-loading" } else { "auth-submit-arrow" } aria-hidden="true">
+                        {move || if submit.pending().get() { "···" } else { "→" }}
+                    </span>
+                </button>
+                <p class="auth-footnote"><span aria-hidden="true"></span>"你的研究记录仅在账户内可见"</p>
+            </form>
+        </main>
+    }
+}
+
+#[component]
+fn NotificationsPanel() -> impl IntoView {
+    let (open, set_open) = create_signal(false);
+    let unread = create_resource(
+        || (),
+        |_| api::get::<UnreadResponse>("/api/notifications/unread"),
+    );
+    let notifications = create_resource(
+        || (),
+        |_| api::get::<NotificationsListResponse>("/api/notifications?limit=20"),
+    );
+    let mark_all = create_action(|_: &()| async {
+        api::post::<_, ChangedCountResponse>(
+            "/api/notifications/read",
+            &NotificationReadRequest { id: None },
+        )
+        .await
+    });
+    create_effect(move |_| {
+        if matches!(mark_all.value().get(), Some(Ok(_))) {
+            unread.refetch();
+            notifications.refetch();
+        }
+    });
+    view! {
+        <div class="notification-center">
+            <button class="notification-button" aria-label="通知" aria-expanded=move || open.get() on:click=move |_| set_open.update(|value| *value = !*value)>
+                <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <path d="M10 3a4.6 4.6 0 0 0-4.6 4.6c0 3.1-.9 4.2-1.6 5a.55.55 0 0 0 .42.9h11.56a.55.55 0 0 0 .42-.9c-.7-.8-1.6-1.9-1.6-5A4.6 4.6 0 0 0 10 3Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+                    <path d="M8.4 16.2a1.7 1.7 0 0 0 3.2 0" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                </svg>
+                {move || unread.get().and_then(Result::ok).filter(|value| value.unread > 0).map(|value| view! { <span>{value.unread}</span> })}
+            </button>
+            {move || open.get().then(|| view! {
+                <div class="notification-popover">
+                    <div class="popover-head"><strong>"通知"</strong><button on:click=move |_| mark_all.dispatch(())>"全部已读"</button></div>
+                    {move || match notifications.get() {
+                        None => view! { <p class="muted">"读取中…"</p> }.into_view(),
+                        Some(Err(error)) => view! { <p class="form-error">{error}</p> }.into_view(),
+                        Some(Ok(data)) if data.notifications.is_empty() => view! { <p class="muted">"暂无通知"</p> }.into_view(),
+                        Some(Ok(data)) => data.notifications.into_iter().map(|item| view! {
+                            <article class=if item.read_at.is_some() { "notice is-read" } else { "notice" }>
+                                <strong>{item.title}</strong><p>{item.body}</p><time>{item.created_at}</time>
+                            </article>
+                        }).collect_view().into_view(),
+                    }}
+                </div>
+            })}
+        </div>
+    }
+}
+
+/// 资料库页——自选/持仓/档案三个切面的统一容器，Apple 风分段控件切换。
+#[component]
+fn LibraryPage(
+    tab: LibraryTab,
+    on_tab: Callback<LibraryTab>,
+    on_research: Callback<()>,
+) -> impl IntoView {
+    let (active_tab, set_active_tab) = create_signal(tab);
+    let (previous_tab, set_previous_tab) = create_signal(tab);
+    view! {
+        <PageHeader title="资料库" detail="自选、持仓与研究档案，一处掌控投资研究的关键脉络。" />
+        <main class="page-content library-page-content">
+            <div class="segmented" role="tablist" aria-label="资料库切面">
+                <span
+                    class=move || match (previous_tab.get(), active_tab.get()) {
+                        (LibraryTab::Watch, LibraryTab::Portfolio) => "segmented-indicator is-portfolio from-watch",
+                        (LibraryTab::Watch, LibraryTab::Profiles) => "segmented-indicator is-profiles from-watch",
+                        (LibraryTab::Portfolio, LibraryTab::Watch) => "segmented-indicator is-watch from-portfolio",
+                        (LibraryTab::Portfolio, LibraryTab::Profiles) => "segmented-indicator is-profiles from-portfolio",
+                        (LibraryTab::Profiles, LibraryTab::Watch) => "segmented-indicator is-watch from-profiles",
+                        (LibraryTab::Profiles, LibraryTab::Portfolio) => "segmented-indicator is-portfolio from-profiles",
+                        (_, LibraryTab::Watch) => "segmented-indicator is-watch",
+                        (_, LibraryTab::Portfolio) => "segmented-indicator is-portfolio",
+                        (_, LibraryTab::Profiles) => "segmented-indicator is-profiles",
+                    }
+                    aria-hidden="true"
+                ></span>
+                {[LibraryTab::Watch, LibraryTab::Portfolio, LibraryTab::Profiles]
+                    .into_iter()
+                    .map(|item| view! {
+                        <button
+                            class=move || if item == active_tab.get() { "segmented-item is-active" } else { "segmented-item" }
+                            role="tab"
+                            aria-selected=move || if item == active_tab.get() { "true" } else { "false" }
+                            on:click=move |_| {
+                                if item == active_tab.get_untracked() {
+                                    return;
+                                }
+                                set_previous_tab.set(active_tab.get_untracked());
+                                set_active_tab.set(item);
+                                on_tab.call(item);
+                            }
+                        >{item.label()}</button>
+                    })
+                    .collect_view()}
+            </div>
+            {move || match active_tab.get() {
+                LibraryTab::Watch => view! { <WatchSection on_research=on_research /> }.into_view(),
+                LibraryTab::Portfolio => view! { <PortfolioSection /> }.into_view(),
+                LibraryTab::Profiles => view! { <ProfilesSection /> }.into_view(),
+            }}
+        </main>
+    }
+}
+
+#[derive(Clone)]
+struct WatchAction {
+    track: bool,
+    ticker: String,
+    company_name: Option<String>,
+}
+
+fn market_label(ticker: &str) -> &'static str {
+    if ticker.ends_with(".HK") {
+        "港股"
+    } else if ticker.ends_with(".SH") || ticker.ends_with(".SZ") {
+        "A 股"
+    } else {
+        "美股"
+    }
+}
+
+fn ticker_initial(ticker: &str) -> String {
+    ticker
+        .chars()
+        .find(char::is_ascii_alphabetic)
+        .unwrap_or('E')
+        .to_uppercase()
+        .to_string()
+}
+
+#[component]
+fn WatchSection(on_research: Callback<()>) -> impl IntoView {
+    let (ticker, set_ticker) = create_signal(String::new());
+    let (company_name, set_company_name) = create_signal(String::new());
+    let entries = create_resource(|| (), |_| api::get::<WatchListResponse>("/api/watch/list"));
+    let mutate = create_action(|input: &WatchAction| {
+        let input = input.clone();
+        async move {
+            api::post::<_, MutationResponse>(
+                if input.track {
+                    "/api/watch/track"
+                } else {
+                    "/api/watch/untrack"
+                },
+                &WatchMutationRequest {
+                    ticker: input.ticker,
+                    company_name: input.company_name,
+                },
+            )
+            .await
+        }
+    });
+    create_effect(move |_| {
+        if matches!(mutate.value().get(), Some(Ok(_))) {
+            entries.refetch();
+            set_ticker.set(String::new());
+            set_company_name.set(String::new());
+        }
+    });
+    view! {
+        <section class="library-section watch-section">
+            <section class="data-panel watchlist-panel">
+                <div class="panel-titlebar">
+                    <h2><i aria-hidden="true"></i>"关注公司"</h2>
+                    <span class="section-status"><i></i>"持续监控"</span>
+                </div>
+                <div class="watchlist-form">
+                <div class="form-grid watch-form-grid">
+                    <label class="form-field">
+                        <span>"股票代码"</span>
+                        <input placeholder="输入代码，如 0700.HK" prop:value=ticker on:input=move |event| set_ticker.set(event_target_value(&event).to_uppercase()) />
+                    </label>
+                    <label class="form-field">
+                        <span>"公司名称"</span>
+                        <input placeholder="输入公司名称（可选）" prop:value=company_name on:input=move |event| set_company_name.set(event_target_value(&event)) />
+                    </label>
+                    <button
+                        class="primary-button compact form-submit"
+                        disabled=move || ticker.get().trim().is_empty() || mutate.pending().get()
+                        on:click=move |_| {
+                            let value = ticker.get().trim().to_string();
+                            if !value.is_empty() {
+                                mutate.dispatch(WatchAction { track: true, ticker: value, company_name: (!company_name.get().trim().is_empty()).then(|| company_name.get()) });
+                            }
+                        }
+                    >{move || if mutate.pending().get() { "正在添加…" } else { "添加关注" }}</button>
+                </div>
+                {move || mutate.value().get().and_then(Result::err).map(|error| view! {
+                    <p class="inline-feedback is-error" role="alert">{error}</p>
+                })}
+                </div>
+                {move || match entries.get() {
+                    None => loading_view(),
+                    Some(Err(error)) => error_view(error),
+                    Some(Ok(data)) => {
+                        let visible: Vec<_> = data.entries.into_iter().filter(|entry| entry.mode == "add").collect();
+                        if visible.is_empty() { empty_view("还没有自选公司。") } else { view! {
+                            <div class="watch-table data-table">
+                                <div class="watch-table-row data-table-head">
+                                    <span>"公司"</span><span>"代码"</span><span>"标签 / 状态"</span><span>"最近关注"</span><span>"操作"</span>
+                                </div>
+                                {visible.into_iter().map(|entry| {
+                                    let ticker_text = entry.ticker.clone();
+                                    let company = entry.company_name.clone().unwrap_or_else(|| ticker_text.clone());
+                                    let remove_ticker = ticker_text.clone();
+                                    let market = market_label(&ticker_text);
+                                    let initial = ticker_initial(&ticker_text);
+                                    view! {
+                                        <div class="watch-table-row">
+                                            <span class="watch-company" data-label="公司">
+                                                <i aria-hidden="true">{initial}</i><strong>{company}</strong>
+                                            </span>
+                                            <span class="watch-ticker" data-label="代码">{ticker_text.clone()}</span>
+                                            <span class="watch-tags" data-label="标签 / 状态"><em>{market}</em><b>"长期跟踪"</b></span>
+                                            <span class="watch-date" data-label="最近关注">{entry.created_at}</span>
+                                            <span class="watch-actions" data-label="操作">
+                                                <button class="watch-star" title="开始研究" aria-label=format!("开始研究 {ticker_text}") on:click=move |_| on_research.call(())>"★"</button>
+                                                <button class="watch-more danger-link" title="移出关注" aria-label=format!("移出关注 {remove_ticker}") on:click=move |_| {
+                                                    if confirm_destructive(&format!("确定将 {remove_ticker} 移出自选吗？")) {
+                                                        mutate.dispatch(WatchAction { track: false, ticker: remove_ticker.clone(), company_name: None });
+                                                    }
+                                                }>"⋮"</button>
+                                            </span>
+                                        </div>
+                                    }
+                                }).collect_view()}
+                            </div>
+                        }.into_view() }
+                    },
+                }}
+            </section>
+            <RulesDeskSection />
+        </section>
+    }
+}
+
+/// 规则种类的用户可读标签——列表里不给用户看 `price_below` 这类内部代码。
+fn rule_kind_label(kind: &str) -> &str {
+    match kind {
+        "price_below" => "现价 ≤ 阈值",
+        "price_above" => "现价 ≥ 阈值",
+        "fundamental_below" => "基本面 ≤ 阈值",
+        "fundamental_above" => "基本面 ≥ 阈值",
+        "valuation_percentile_below" => "估值分位 ≤ 阈值",
+        "valuation_percentile_above" => "估值分位 ≥ 阈值",
+        "event_earnings" => "有新业绩事实",
+        other => other,
+    }
+}
+
+/// 监控规则 + 台面：新增/删除 `watch_rules`，聚合展示已跟踪 ticker 的行情、挂载的规则与
+/// 近期触发通知——只读聚合，不新增写路径（写路径就是下面的新增/删除规则表单）。
+#[component]
+fn RulesDeskSection() -> impl IntoView {
+    const KIND_OPTIONS: &[(&str, &str)] = &[
+        ("price_below", "现价 ≤ 阈值"),
+        ("price_above", "现价 ≥ 阈值"),
+        ("fundamental_below", "基本面指标 ≤ 阈值"),
+        ("fundamental_above", "基本面指标 ≥ 阈值"),
+        (
+            "valuation_percentile_below",
+            "历史估值分位 ≤ 阈值（仅美股）",
+        ),
+        (
+            "valuation_percentile_above",
+            "历史估值分位 ≥ 阈值（仅美股）",
+        ),
+        ("event_earnings", "有新业绩事实（无需阈值）"),
+    ];
+
+    let (rule_ticker, set_rule_ticker) = create_signal(String::new());
+    let (rule_kind, set_rule_kind) = create_signal("price_below".to_string());
+    let (rule_threshold, set_rule_threshold) = create_signal(String::new());
+    let (rule_metric, set_rule_metric) = create_signal(String::new());
+    let (rule_label, set_rule_label) = create_signal(String::new());
+    let (form_error, set_form_error) = create_signal(None::<String>);
+    let (builder_open, set_builder_open) = create_signal(false);
+
+    let desk = create_resource(|| (), |_| api::get::<DeskResponse>("/api/watch/desk"));
+    let create_rule = create_action(|input: &WatchRuleCreateRequest| {
+        let input = input.clone();
+        async move { api::post::<_, echo_contracts::WatchRule>("/api/watch/rules", &input).await }
+    });
+    let delete_rule = create_action(|id: &i64| {
+        let path = format!("/api/watch/rules?id={id}");
+        async move { api::delete::<MutationResponse>(&path).await }
+    });
+    create_effect(move |_| {
+        if matches!(create_rule.value().get(), Some(Ok(_))) {
+            desk.refetch();
+            set_rule_threshold.set(String::new());
+            set_rule_metric.set(String::new());
+            set_rule_label.set(String::new());
+            set_builder_open.set(false);
+        }
+    });
+    create_effect(move |_| {
+        if matches!(delete_rule.value().get(), Some(Ok(_))) {
+            desk.refetch();
+        }
+    });
+
+    let submit = move || {
+        let ticker = rule_ticker.get().trim().to_uppercase();
+        if ticker.is_empty() {
+            set_form_error.set(Some("请填写 ticker".into()));
+            return;
+        }
+        let kind = rule_kind.get();
+        let needs_threshold = kind != "event_earnings";
+        let threshold = if needs_threshold {
+            match rule_threshold.get().trim().parse::<Decimal>() {
+                Ok(value) => Some(value),
+                Err(_) => {
+                    set_form_error.set(Some("阈值必须是有效数字".into()));
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        let needs_metric = kind == "fundamental_below" || kind == "fundamental_above";
+        if needs_metric && rule_metric.get().trim().is_empty() {
+            set_form_error.set(Some("该规则种类需要填写 metric".into()));
+            return;
+        }
+        set_form_error.set(None);
+        create_rule.dispatch(WatchRuleCreateRequest {
+            ticker,
+            kind,
+            threshold,
+            metric: (!rule_metric.get().trim().is_empty()).then(|| rule_metric.get()),
+            label: (!rule_label.get().trim().is_empty()).then(|| rule_label.get()),
+        });
+    };
+
+    view! {
+        <section class="rules-desk data-panel">
+            <div class="panel-titlebar">
+                <h2><i aria-hidden="true"></i>"监控规则"</h2>
+                <button
+                    class=move || if builder_open.get() { "outline-button is-active" } else { "outline-button" }
+                    aria-expanded=move || builder_open.get()
+                    on:click=move |_| set_builder_open.update(|value| *value = !*value)
+                ><span aria-hidden="true">{move || if builder_open.get() { "−" } else { "+" }}</span>{move || if builder_open.get() { "收起表单" } else { "新建规则" }}</button>
+            </div>
+            {move || builder_open.get().then(|| view! {
+                <section class="action-panel rule-builder">
+                    <div class="form-grid rule-form-grid">
+                        <label class="form-field">
+                            <span>"股票代码"</span>
+                            <input placeholder="AAPL" prop:value=rule_ticker on:input=move |event| set_rule_ticker.set(event_target_value(&event).to_uppercase()) />
+                        </label>
+                        <label class="form-field form-field-wide">
+                            <span>"触发条件"</span>
+                            <select on:change=move |event| set_rule_kind.set(event_target_value(&event))>
+                                {KIND_OPTIONS.iter().map(|(value, label)| view! {
+                                    <option value=*value selected=move || rule_kind.get() == *value>{*label}</option>
+                                }).collect_view()}
+                            </select>
+                        </label>
+                        <label class="form-field">
+                            <span>"阈值"</span>
+                            <input
+                                placeholder=move || if rule_kind.get() == "event_earnings" { "无需填写" } else { "输入数值" }
+                                disabled=move || rule_kind.get() == "event_earnings"
+                                inputmode="decimal"
+                                prop:value=rule_threshold
+                                on:input=move |event| set_rule_threshold.set(event_target_value(&event))
+                            />
+                        </label>
+                        <label class="form-field">
+                            <span>"基本面指标 "<em>"按需"</em></span>
+                            <input
+                                placeholder="如 gross_margin"
+                                disabled=move || !matches!(rule_kind.get().as_str(), "fundamental_below" | "fundamental_above")
+                                prop:value=rule_metric
+                                on:input=move |event| set_rule_metric.set(event_target_value(&event))
+                            />
+                        </label>
+                        <label class="form-field form-field-wide">
+                            <span>"说明 "<em>"可选"</em></span>
+                            <input placeholder="例如：跌破长期观察位" prop:value=rule_label on:input=move |event| set_rule_label.set(event_target_value(&event)) />
+                        </label>
+                        <button class="primary-button compact form-submit" disabled=move || create_rule.pending().get() on:click=move |_| submit()>
+                            {move || if create_rule.pending().get() { "正在创建…" } else { "创建规则" }}
+                        </button>
+                    </div>
+                </section>
+            })}
+            <div class="feedback-slot" aria-live="polite">
+                {move || form_error.get().map(|error| view! { <p class="inline-feedback is-error">{error}</p> })}
+                {move || create_rule.value().get().map(|result| match result {
+                    Ok(_) => view! { <p class="inline-feedback is-success">"规则已创建并开始监控"</p> }.into_view(),
+                    Err(error) => view! { <p class="inline-feedback is-error">{error}</p> }.into_view(),
+                })}
+            </div>
+            {move || match desk.get() {
+                None => loading_view(),
+                Some(Err(error)) => error_view(error),
+                Some(Ok(data)) if data.tickers.is_empty() => empty_view("还没有跟踪任何 ticker。"),
+                Some(Ok(data)) => {
+                    let rules: Vec<_> = data.tickers.into_iter().flat_map(|item| item.rules).collect();
+                    if rules.is_empty() {
+                        empty_view("已关注公司尚未设置监控规则。")
+                    } else {
+                        view! {
+                            <div class="rules-table data-table">
+                                <div class="rules-table-row data-table-head">
+                                    <span>"股票代码"</span><span>"触发条件"</span><span>"基本面指标"</span><span>"说明"</span><span>"操作"</span>
+                                </div>
+                                {rules.into_iter().map(|rule| {
+                                    let rule_id = rule.id;
+                                    let condition = if rule.kind == "event_earnings" {
+                                        rule_kind_label(&rule.kind).to_string()
+                                    } else {
+                                        format!("{} {}", rule_kind_label(&rule.kind), rule.threshold)
+                                    };
+                                    view! {
+                                        <div class="rules-table-row">
+                                            <span data-label="股票代码"><strong>{rule.ticker}</strong></span>
+                                            <span data-label="触发条件">{condition}</span>
+                                            <span data-label="基本面指标">{rule.metric.unwrap_or_else(|| "—".to_string())}</span>
+                                            <span data-label="说明">{rule.label.unwrap_or_else(|| "持续监控".to_string())}</span>
+                                            <span class="rules-actions" data-label="操作">
+                                                <button class="table-action" disabled title="编辑功能即将开放">"编辑"</button>
+                                                <button class="watch-more danger-link" title="删除规则" aria-label="删除监控规则" on:click=move |_| {
+                                                    if confirm_destructive("确定删除这条监控规则吗？") {
+                                                        delete_rule.dispatch(rule_id);
+                                                    }
+                                                }>"⋮"</button>
+                                            </span>
+                                        </div>
+                                    }
+                                }).collect_view()}
+                            </div>
+                        }.into_view()
+                    }
+                },
+            }}
+            <section class="activity-section">
+                <div class="activity-head"><h3>"近期触发"</h3><span>"最近的规则命中记录"</span></div>
+                <div class="activity-feed">
+                    {move || match desk.get() {
+                        None => loading_view(),
+                        Some(Err(error)) => error_view(error),
+                        Some(Ok(data)) if data.recent_triggers.is_empty() => empty_view("暂无触发记录。"),
+                        Some(Ok(data)) => data.recent_triggers.into_iter().map(|item| view! {
+                            <article class="notice">
+                                <i aria-hidden="true"></i>
+                                <div><strong>{item.title}</strong><p>{item.body}</p><time>{item.created_at}</time></div>
+                            </article>
+                        }).collect_view().into_view(),
+                    }}
+                </div>
+            </section>
+        </section>
+    }
+}
+
+#[component]
+fn PortfolioSection() -> impl IntoView {
+    let (ticker, set_ticker) = create_signal(String::new());
+    let (company_name, set_company_name) = create_signal(String::new());
+    let (shares, set_shares) = create_signal(String::new());
+    let (avg_cost, set_avg_cost) = create_signal(String::new());
+    let (stop_loss, set_stop_loss) = create_signal(String::new());
+    let (take_profit, set_take_profit) = create_signal(String::new());
+    let (form_error, set_form_error) = create_signal(None::<String>);
+    let positions = create_resource(
+        || (),
+        |_| api::get::<PortfolioListResponse>("/api/portfolio"),
+    );
+    let save = create_action(|input: &PortfolioUpsertRequest| {
+        let input = input.clone();
+        async move { api::post::<_, echo_contracts::PortfolioPosition>("/api/portfolio", &input).await }
+    });
+    let remove = create_action(|ticker: &String| {
+        let path = format!("/api/portfolio?ticker={ticker}");
+        async move { api::delete::<MutationResponse>(&path).await }
+    });
+    create_effect(move |_| {
+        if matches!(save.value().get(), Some(Ok(_))) || matches!(remove.value().get(), Some(Ok(_)))
+        {
+            positions.refetch();
+        }
+        if matches!(save.value().get(), Some(Ok(_))) {
+            set_ticker.set(String::new());
+            set_company_name.set(String::new());
+            set_shares.set(String::new());
+            set_avg_cost.set(String::new());
+            set_stop_loss.set(String::new());
+            set_take_profit.set(String::new());
+        }
+    });
+    let submit = move || {
+        if ticker.get().trim().is_empty() {
+            set_form_error.set(Some("请先填写股票代码".into()));
+            return;
+        }
+        let parsed_shares = shares.get().parse::<Decimal>();
+        let parsed_cost = avg_cost.get().parse::<Decimal>();
+        // 止损/止盈可选——留空即不设，但填了就必须是有效数字，不能静默丢弃。
+        let parse_optional = |text: String| -> Result<Option<Decimal>, ()> {
+            let trimmed = text.trim().to_string();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                trimmed.parse::<Decimal>().map(Some).map_err(|_| ())
+            }
+        };
+        let parsed_stop = parse_optional(stop_loss.get());
+        let parsed_take = parse_optional(take_profit.get());
+        match (parsed_shares, parsed_cost, parsed_stop, parsed_take) {
+            (Ok(shares), Ok(avg_cost), Ok(stop_loss), Ok(take_profit)) => {
+                set_form_error.set(None);
+                save.dispatch(PortfolioUpsertRequest {
+                    ticker: ticker.get().trim().to_uppercase(),
+                    company_name: (!company_name.get().trim().is_empty())
+                        .then(|| company_name.get()),
+                    shares,
+                    avg_cost,
+                    stop_loss,
+                    take_profit,
+                    note: String::new(),
+                });
+            }
+            _ => set_form_error.set(Some("股数、成本与风控线必须是有效数字".into())),
+        }
+    };
+    view! {
+        <section class="library-section">
+            <div class="section-heading">
+                <div>
+                    <p class="section-kicker">"PORTFOLIO"</p>
+                    <h2>"持仓与风控"</h2>
+                    <p>"记录真实仓位，并把止损与止盈线放到同一个决策视图。"</p>
+                </div>
+                <span class="section-status is-neutral">"仅你可见"</span>
+            </div>
+            <section class="action-panel portfolio-form">
+                <div class="form-grid portfolio-form-grid">
+                    <label class="form-field">
+                        <span>"股票代码"</span>
+                        <input placeholder="AAPL" prop:value=ticker on:input=move |event| set_ticker.set(event_target_value(&event).to_uppercase()) />
+                    </label>
+                    <label class="form-field form-field-wide">
+                        <span>"公司名称"</span>
+                        <input placeholder="Apple Inc." prop:value=company_name on:input=move |event| set_company_name.set(event_target_value(&event)) />
+                    </label>
+                    <label class="form-field">
+                        <span>"持有股数"</span>
+                        <input placeholder="0" inputmode="decimal" prop:value=shares on:input=move |event| set_shares.set(event_target_value(&event)) />
+                    </label>
+                    <label class="form-field">
+                        <span>"平均成本"</span>
+                        <input placeholder="0.00" inputmode="decimal" prop:value=avg_cost on:input=move |event| set_avg_cost.set(event_target_value(&event)) />
+                    </label>
+                    <label class="form-field">
+                        <span>"止损线 "<em>"可选"</em></span>
+                        <input placeholder="0.00" inputmode="decimal" prop:value=stop_loss on:input=move |event| set_stop_loss.set(event_target_value(&event)) />
+                    </label>
+                    <label class="form-field">
+                        <span>"止盈线 "<em>"可选"</em></span>
+                        <input placeholder="0.00" inputmode="decimal" prop:value=take_profit on:input=move |event| set_take_profit.set(event_target_value(&event)) />
+                    </label>
+                    <button class="primary-button compact form-submit" disabled=move || save.pending().get() on:click=move |_| submit()>
+                        {move || if save.pending().get() { "正在保存…" } else { "保存持仓" }}
+                    </button>
+                </div>
+            </section>
+            <div class="feedback-slot" aria-live="polite">
+                {move || form_error.get().map(|error| view! { <p class="inline-feedback is-error">{error}</p> })}
+                {move || save.value().get().map(|result| match result {
+                    Ok(_) => view! { <p class="inline-feedback is-success">"持仓已保存"</p> }.into_view(),
+                    Err(error) => view! { <p class="inline-feedback is-error">{error}</p> }.into_view(),
+                })}
+            </div>
+            {move || match positions.get() {
+                None => loading_view(),
+                Some(Err(error)) => error_view(error),
+                Some(Ok(data)) if data.positions.is_empty() => empty_view("还没有持仓。"),
+                Some(Ok(data)) => view! { <div class="portfolio-table">
+                    <div class="table-row table-head"><span>"公司"</span><span>"股数"</span><span>"平均成本"</span><span>"风控线"</span><span></span></div>
+                    {data.positions.into_iter().map(|position| {
+                        let remove_ticker = position.ticker.clone();
+                        view! { <div class="table-row">
+                            <span data-label="公司"><strong>{position.company_name}</strong><small>{position.ticker}</small></span>
+                            <span data-label="股数">{decimal_text(position.shares)}</span>
+                            <span data-label="平均成本">{decimal_text(position.avg_cost)}</span>
+                            <span data-label="风控线">{format!("{} / {}", decimal_text(position.stop_loss), decimal_text(position.take_profit))}</span>
+                            <button class="danger-link" on:click=move |_| {
+                                if confirm_destructive(&format!("确定删除 {remove_ticker} 的持仓记录吗？")) {
+                                    remove.dispatch(remove_ticker.clone());
+                                }
+                            }>"删除"</button>
+                        </div> }
+                    }).collect_view()}
+                </div> }.into_view(),
+            }}
+        </section>
+    }
+}
+
+#[component]
+fn SettingsPage() -> impl IntoView {
+    let (initialized, set_initialized) = create_signal(false);
+    let (notify_digest, set_notify_digest) = create_signal(true);
+    let (notify_positions, set_notify_positions) = create_signal(true);
+    let (notify_falsify, set_notify_falsify) = create_signal(true);
+    let (notify_review, set_notify_review) = create_signal(true);
+    let (notify_earnings, set_notify_earnings) = create_signal(true);
+    let (quiet_start, set_quiet_start) = create_signal("22:30".to_string());
+    let (quiet_end, set_quiet_end) = create_signal("07:00".to_string());
+    let preferences = create_resource(
+        || (),
+        |_| api::get::<PreferencesResponse>("/api/preferences"),
+    );
+    create_effect(move |_| {
+        if initialized.get_untracked() {
+            return;
+        }
+        if let Some(Ok(data)) = preferences.get() {
+            let value = data.preferences;
+            set_notify_digest.set(value.notify_digest);
+            set_notify_positions.set(value.notify_positions);
+            set_notify_falsify.set(value.notify_falsify);
+            set_notify_review.set(value.notify_review);
+            set_notify_earnings.set(value.notify_earnings);
+            set_quiet_start.set(value.quiet_hours_start.unwrap_or_default());
+            set_quiet_end.set(value.quiet_hours_end.unwrap_or_default());
+            set_initialized.set(true);
+        }
+    });
+    let save = create_action(|input: &PreferencesUpdateRequest| {
+        let input = input.clone();
+        async move { api::patch::<_, PreferencesResponse>("/api/preferences", &input).await }
+    });
+    view! {
+        <PageHeader title="通知与免打扰" detail="开关在通知写入咽喉生效，后台作业无法绕过。" />
+        <main class="page-content settings-page-content">
+            <div class="settings-overview">
+                <div><SettingsGlyph kind="check" /><p><strong>"通知由你掌控"</strong><small>"重要风控信号始终优先于普通摘要。"</small></p></div>
+                <span class="section-status"><i></i>"设置实时生效"</span>
+            </div>
+            <div class="settings-grid">
+                <section class="settings-card settings-delivery-card">
+                    <div class="settings-card-head"><h2>"通知类型"</h2></div>
+                    <Toggle icon="clock" label="盘前 / 盘后摘要" detail="每天汇总市场与自选公司变化" value=notify_digest set_value=set_notify_digest />
+                    <Toggle icon="bell" label="仓位价格告警" detail="持仓触及止损或止盈线时提醒" value=notify_positions set_value=set_notify_positions />
+                    <Toggle icon="pulse" label="证伪条件触发" detail="核心论点的证伪条件出现时提醒" value=notify_falsify set_value=set_notify_falsify />
+                    <Toggle icon="calendar" label="定期研究复盘" detail="按周期提醒重新审视研究结论" value=notify_review set_value=set_notify_review />
+                    <Toggle icon="chart" label="业绩跟踪更新" detail="财报发布后更新事实与判断" value=notify_earnings set_value=set_notify_earnings />
+                </section>
+                <section class="settings-card quiet-hours-card">
+                    <div class="settings-card-head"><h2>"免打扰时段"</h2></div>
+                    <p class="muted">"普通通知在该时段暂停；证伪和仓位告警仍会送达。"</p>
+                    <div class="time-range">
+                        <label><span>"开始"</span><div class="time-input-shell"><SettingsGlyph kind="clock" /><input type="time" prop:value=quiet_start on:input=move |event| set_quiet_start.set(event_target_value(&event)) /></div></label>
+                        <span class="time-range-divider">"—"</span>
+                        <label><span>"结束"</span><div class="time-input-shell"><SettingsGlyph kind="clock" /><input type="time" prop:value=quiet_end on:input=move |event| set_quiet_end.set(event_target_value(&event)) /></div></label>
+                    </div>
+                    <div class="quiet-note"><span aria-hidden="true">"i"</span>"紧急风控提醒不会被静音"</div>
+                </section>
+            </div>
+            <div class="settings-actions">
+                <div aria-live="polite">
+                    {move || preferences.get().and_then(Result::err).map(|error| view! { <p class="inline-feedback is-error">{error}</p> })}
+                    {move || save.value().get().map(|result| match result {
+                        Ok(_) => view! { <p class="inline-feedback is-success">"设置已保存"</p> }.into_view(),
+                        Err(error) => view! { <p class="inline-feedback is-error">{error}</p> }.into_view(),
+                    })}
+                </div>
+                <button class="primary-button settings-save" disabled=move || save.pending().get() on:click=move |_| save.dispatch(PreferencesUpdateRequest {
+                    onboarding_completed: None,
+                    notify_digest: Some(notify_digest.get()),
+                    notify_positions: Some(notify_positions.get()),
+                    notify_falsify: Some(notify_falsify.get()),
+                    notify_review: Some(notify_review.get()),
+                    notify_earnings: Some(notify_earnings.get()),
+                    quiet_hours_start: Some(quiet_start.get()),
+                    quiet_hours_end: Some(quiet_end.get()),
+                })>{move || if save.pending().get() { "正在保存…" } else { "保存设置" }}</button>
+            </div>
+        </main>
+    }
+}
+
+#[component]
+fn SettingsGlyph(kind: &'static str) -> impl IntoView {
+    let drawing = match kind {
+        "check" => view! {
+            <circle cx="12" cy="12" r="7.5"></circle>
+            <path d="m8.7 12.1 2.1 2.1 4.6-5"></path>
+        }
+        .into_view(),
+        "bell" => view! {
+            <path d="M7.5 10.2a4.5 4.5 0 0 1 9 0c0 3 .9 4.1 1.5 4.8H6c.6-.7 1.5-1.8 1.5-4.8Z"></path>
+            <path d="M10.2 18a2 2 0 0 0 3.6 0"></path>
+        }
+        .into_view(),
+        "pulse" => view! {
+            <path d="M3.5 12h4l1.7-5.5 3.2 11 2-7 1.3 1.5h4.8"></path>
+        }
+        .into_view(),
+        "calendar" => view! {
+            <rect x="5" y="6.5" width="14" height="13" rx="2"></rect>
+            <path d="M8 4.5v4M16 4.5v4M5 10.5h14M9 14h2M13 14h2"></path>
+        }
+        .into_view(),
+        "chart" => view! {
+            <path d="M4.5 19.5h15"></path>
+            <rect x="6" y="11" width="2.6" height="6.5" rx=".5"></rect>
+            <rect x="10.7" y="6.5" width="2.6" height="11" rx=".5"></rect>
+            <rect x="15.4" y="9" width="2.6" height="8.5" rx=".5"></rect>
+        }
+        .into_view(),
+        _ => view! {
+            <circle cx="12" cy="12" r="7.5"></circle>
+            <path d="M12 8v4l2.5 1.5"></path>
+        }
+        .into_view(),
+    };
+    view! {
+        <span class=format!("settings-glyph is-{kind}") aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">{drawing}</svg>
+        </span>
+    }
+}
+
+#[component]
+fn Toggle(
+    icon: &'static str,
+    label: &'static str,
+    detail: &'static str,
+    value: ReadSignal<bool>,
+    set_value: WriteSignal<bool>,
+) -> impl IntoView {
+    view! {
+        <label class="toggle-row">
+            <SettingsGlyph kind=icon />
+            <span class="toggle-copy"><strong>{label}</strong><small>{detail}</small></span>
+            <input type="checkbox" role="switch" aria-label=label prop:checked=value on:change=move |event| set_value.set(event_target_checked(&event)) />
+        </label>
+    }
+}
+
+#[component]
+fn PageHeader(title: &'static str, detail: &'static str) -> impl IntoView {
+    view! {
+        <header class="page-header">
+            <p class="page-kicker">"ECHO WORKSPACE"</p>
+            <h1>{title}</h1>
+            <p>{detail}</p>
+        </header>
+    }
+}
+
+fn decimal_text(value: Option<Decimal>) -> String {
+    value
+        .map(|value| value.normalize().to_string())
+        .unwrap_or_else(|| "—".into())
+}
+
+fn loading_view() -> View {
+    view! {
+        <div class="page-state is-loading" aria-live="polite">
+            <span class="state-loader" aria-hidden="true"><i></i><i></i><i></i></span>
+            <p><strong>"正在读取"</strong><small>"正在同步最新数据…"</small></p>
+        </div>
+    }
+    .into_view()
+}
+
+fn error_view(error: String) -> View {
+    view! {
+        <div class="page-state is-error" role="alert">
+            <span class="state-symbol" aria-hidden="true">"!"</span>
+            <p><strong>"暂时无法读取"</strong><small>{error}</small></p>
+        </div>
+    }
+    .into_view()
+}
+
+fn empty_view(message: &'static str) -> View {
+    view! {
+        <div class="page-state is-empty">
+            <span class="state-symbol" aria-hidden="true">"·"</span>
+            <p><strong>{message}</strong><small>"完成上方操作后，内容会出现在这里。"</small></p>
+        </div>
+    }
+    .into_view()
+}

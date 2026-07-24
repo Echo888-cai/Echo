@@ -1,0 +1,28 @@
+[package]
+name = "echo-data"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Licensed data-source routing, quality gates, circuit breakers and quote ingestion"
+
+[dependencies]
+echo-config.workspace = true
+echo-db.workspace = true
+rust_decimal.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+futures-util.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+lettre.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+rust_decimal_macros.workspace = true

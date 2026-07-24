@@ -1,0 +1,76 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: echo_ci
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # Superuser：只用于迁移与角色引导。活库测试改用下方 echo_app（NOBYPASSRLS）。
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/echo_ci
+      ECHO_APP_DATABASE_URL: postgresql://echo_app:echo_app@127.0.0.1:5432/echo_ci
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - name: Migrate schema as bootstrap role
+        run: cargo xtask migrate
+      - name: Create NOBYPASSRLS app role for live DB tests
+        env:
+          PGPASSWORD: postgres
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+          psql -h 127.0.0.1 -U postgres -d echo_ci -v ON_ERROR_STOP=1 <<'SQL'
+          DROP ROLE IF EXISTS echo_app;
+          CREATE ROLE echo_app LOGIN PASSWORD 'echo_app'
+            NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+          GRANT USAGE ON SCHEMA public TO echo_app;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO echo_app;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO echo_app;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO echo_app;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            GRANT USAGE, SELECT ON SEQUENCES TO echo_app;
+          SQL
+          # Prove the app role can authenticate before cargo tests.
+          PGPASSWORD=echo_app psql -h 127.0.0.1 -U echo_app -d echo_ci -c 'SELECT 1'
+      - name: Live Postgres integration (ignored DB/API tests)
+        env:
+          DATABASE_URL: ${{ env.ECHO_APP_DATABASE_URL }}
+          ECHO_SKIP_TEST_MIGRATE: "1"
+        run: |
+          cargo test -p echo-db --lib -- --ignored --nocapture
+          cargo test -p echo-api --lib -- --ignored --nocapture
+      - run: cargo check -p echo-web --target wasm32-unknown-unknown
+      - run: cargo install trunk --version 0.21.14 --locked
+      - run: cargo xtask release

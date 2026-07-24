@@ -1,0 +1,32 @@
+[package]
+name = "echo-db"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Persistence and tenant RLS (PostgreSQL/sqlx) — repositories for the research pipeline"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+rust_decimal.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+# 金额/股数/比率一律 NUMERIC → Decimal（红线 4）；双时态列用 chrono。
+# 用 sqlx 的运行期查询（query_as 函数而非 query_as! 宏）：离线可编译，不需要活库/DATABASE_URL，
+# 平价切流前再上编译期校验的宏。
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "rust_decimal",
+    "chrono",
+    "macros",
+] }
+chrono.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# 活库集成测试（#[ignore]，仅配了 DATABASE_URL 时手动跑）用的异步测试宏与运行时。
+tokio = { workspace = true }
+rust_decimal_macros.workspace = true

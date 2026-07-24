@@ -1,0 +1,17 @@
+# 默认 owner；第二位联合创始人取得 GitHub 写权限后，把产品目录追加给其账号共同持有。
+* @Echo888-cai
+
+# 平台、数据与高风险配置
+/src/server/ @Echo888-cai
+/src/db/ @Echo888-cai
+/scripts/ @Echo888-cai
+/deploy/ @Echo888-cai
+/.github/ @Echo888-cai
+
+# 产品体验（当前由仓库 owner 兜底，第二位产品 owner 入组后追加其账号）
+/src/ui/ @Echo888-cai
+/src/styles/ @Echo888-cai
+/index.html @Echo888-cai
+
+# 共同持有的产品宪法与文档
+/docs/ @Echo888-cai

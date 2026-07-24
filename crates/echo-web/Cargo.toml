@@ -1,0 +1,42 @@
+[package]
+name = "echo-web"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Research workspace frontend compiled to WebAssembly with Leptos"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+echo-contracts.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+leptos = { version = "0.6", features = ["csr"] }
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+
+# WASM 专属依赖：gloo-net(fetch) / wasm-bindgen 只在 wasm32 目标编。原生目标（workspace 类型检查用）
+# 不拉它们——组件与视图逻辑照样原生 type-check，只有网络那层按目标分版。
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+gloo-net = { version = "0.6", features = ["http"] }
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "History",
+    "Location",
+    "Window",
+    "AbortController",
+    "AbortSignal",
+    "ReadableStream",
+    "ReadableStreamDefaultReader",
+    "Blob",
+    "BlobPropertyBag",
+    "Url",
+    "HtmlAnchorElement",
+] }
+
+[package.metadata.echo]
+# 研究对话优先的工作台；研究、观察、组合与设置共享同一 Rust UI 壳。
+workspace-surface = "research-watch-portfolio-settings"
