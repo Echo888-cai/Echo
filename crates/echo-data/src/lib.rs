@@ -12,6 +12,7 @@ mod fmp;
 mod fundamentals;
 mod historical;
 mod hk_financials;
+mod hkex;
 mod market;
 mod peers;
 mod quality;
@@ -35,6 +36,7 @@ pub use hk_financials::{
     NormalizedHkFinancials, RawHkFinancials, ingest_hk_financials, normalize_hk_financials,
     source_unit_scale,
 };
+pub use hkex::{HkexAnnouncement, HkexError, HkexPeriod, HkexService, parse_period_from_title};
 pub use market::{Market, detect_market, normalize_ticker};
 pub use peers::{PeerBand, PeerService, PeerSetSummary, PeersError};
 pub use quality::{QualityIssue, QualityReport, Severity, check_quote};

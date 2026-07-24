@@ -172,9 +172,25 @@ fn ingest_hk_financials(path: &Path) -> TaskResult {
     })
 }
 
+fn discover_hk_announcements(ticker: &str) -> TaskResult {
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|error| format!("创建 tokio runtime 失败: {error}"))?;
+    runtime.block_on(async move {
+        let service = echo_data::HkexService::new().map_err(|error| error.to_string())?;
+        let announcements = service
+            .results_announcements(ticker, 2, 10)
+            .await
+            .map_err(|error| error.to_string())?;
+        let output = serde_json::to_string_pretty(&announcements)
+            .map_err(|error| format!("序列化公告失败: {error}"))?;
+        println!("{output}");
+        Ok(())
+    })
+}
+
 fn usage() {
     eprintln!(
-        "用法: cargo xtask <命令>\n\n  check            Rust fmt + clippy + test + Leptos/WASM release build\n  web              构建开发版 Leptos/WASM\n  e2e              通过 WebDriver 验收真实浏览器核心流程\n  migrate          对显式 DATABASE_URL 执行 Rust 迁移\n  bootstrap-owner  用显式环境变量创建首个 owner（不覆盖已有 owner）\n  hk-ingest <json> 校验并写入一份结构化 HKEX 业绩公告\n  release          执行完整 Rust 检查并构建 release Web"
+        "用法: cargo xtask <命令>\n\n  check              Rust fmt + clippy + test + Leptos/WASM release build\n  web                构建开发版 Leptos/WASM\n  e2e                通过 WebDriver 验收真实浏览器核心流程\n  migrate            对显式 DATABASE_URL 执行 Rust 迁移\n  bootstrap-owner    用显式环境变量创建首个 owner（不覆盖已有 owner）\n  hk-discover <代码> 从 HKEX 披露易发现最近业绩公告\n  hk-ingest <json>   校验并写入一份结构化 HKEX 业绩公告\n  release            执行完整 Rust 检查并构建 release Web"
     );
 }
 
@@ -193,6 +209,10 @@ fn main() -> ExitCode {
         Some("e2e") => browser_e2e(&root),
         Some("migrate") => migrate_database(),
         Some("bootstrap-owner") => bootstrap_owner(),
+        Some("hk-discover") => match env::args().nth(2) {
+            Some(ticker) => discover_hk_announcements(&ticker),
+            None => Err("hk-discover 需要港股代码".into()),
+        },
         Some("hk-ingest") => match env::args().nth(2) {
             Some(path) => ingest_hk_financials(Path::new(&path)),
             None => Err("hk-ingest 需要 JSON 文件路径".into()),

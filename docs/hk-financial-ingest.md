@@ -1,5 +1,14 @@
 # 港股财报结构化 ingest
 
+先从 HKEX 披露易发现最近两年的官方业绩公告：
+
+```bash
+cargo xtask hk-discover 0700.HK
+```
+
+输出包含公告原题、PDF URL、发布时间及解析后的 `period_end`/`period_type`/`period_label`。
+股票代码只用于查询 HKEX 官方端点，不经过搜索引擎或二手数据源。
+
 港股绝对金额只允许通过运维命令写入：
 
 ```bash
@@ -47,3 +56,6 @@ DATABASE_URL=postgres://... cargo xtask hk-ingest ./hk-results.json
 - `amounts_normalized=false` 的历史行只用于同一行内毛利率、净利率和增速，绝对金额不外传。
 - `amounts_normalized=true` 的新行可进入展示和估值。
 - EV/Sales 还要求报告币种与行情币种一致；没有 FX 时，CNY 财报不能直接除以 HKD 企业价值。
+
+当前自动化边界：公告发现与期间解析已经迁入 Rust；PDF 文本抽取和三表行解析尚未接到
+`hk-ingest`，因此发现结果不会自动写库。
