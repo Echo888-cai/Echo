@@ -1,8 +1,6 @@
 # 文档导航
 
-- [RUST_REFACTOR_HANDOFF.md](RUST_REFACTOR_HANDOFF.md)：Rust-only 合并后的真实完成度、缺口、续作顺序和最终验收定义；交接给其他 AI 时先读这一份。
-- [rust-parity-matrix.md](rust-parity-matrix.md)：旧能力 → Rust 落点的功能平价底账（未决定项不得标完成）。
-- [PLAN.md](PLAN.md)：结构迁移 vs 功能平价口径、验收门禁与续作入口。
+- [PLAN.md](PLAN.md)：唯一计划与架构底账——结构迁移 vs 功能平价口径、不变量、发布门禁、生产闭环待办；交接给其他 AI 时先读这一份。
 - [architecture/repository-layout.md](architecture/repository-layout.md)：crate 归属与新增代码规则。
 - [architecture/system-overview.md](architecture/system-overview.md)：运行时拓扑、数据质量和租户边界。
 - [architecture/conversation-research-engine.md](architecture/conversation-research-engine.md)：研究回答的意图、估值和事实护栏。

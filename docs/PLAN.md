@@ -9,10 +9,10 @@
 | 口径 | 含义 | 当前 |
 | --- | --- | --- |
 | 结构迁移 | Cargo-only；旧 Node/React/Python 运行路径已删除 | **已完成**（PR #43 / `dc4b75c`） |
-| 功能平价 | 迁移前保留能力均有 Rust 等价实现、替代说明或退役 ADR | **未完成** — 见 [rust-parity-matrix.md](rust-parity-matrix.md) |
-| 生产闭环 | HTTPS Web、密钥、备份、Worker 租约、观测、自动集成验收 | **未完成** — 见 [RUST_REFACTOR_HANDOFF.md](RUST_REFACTOR_HANDOFF.md) |
+| 功能平价 | 迁移前保留能力均有 Rust 等价实现、替代说明或退役 ADR | **推进中** — 见下方《当前结构迁移状态》逐区口径 |
+| 生产闭环 | HTTPS Web、密钥、备份、Worker 租约、观测、自动集成验收 | **推进中** — 见下方《生产闭环待办》 |
 
-“能编译 / 门禁绿 / 竖切可演示”不等于功能平价完成。矩阵条目不得标成完成，除非已有验收测试或明确退役 ADR。
+“能编译 / 门禁绿 / 竖切可演示”不等于功能平价完成。任一能力不得标成完成，除非已有验收测试或明确退役 ADR。
 
 ## 当前结构迁移状态
 
@@ -58,9 +58,15 @@ cargo test -p echo-domain --test intent_routing_corpus
 
 迁移 `0001`–`0010` 的 SHA-256 冻结于 `docs/qa/fixtures/migration-checksums.json`；新变更只加 `0011+`。
 
-## 续作顺序
+## 生产闭环待办
 
-完整阶段与 PR 切片见 [RUST_REFACTOR_HANDOFF.md](RUST_REFACTOR_HANDOFF.md)。能力级状态以 [rust-parity-matrix.md](rust-parity-matrix.md) 为准。
+结构迁移已完成，以下为进入生产前仍需闭合的通道（每条须真数据端到端验证，不以“能编译”代替）：
+
+- **研究主链平价**：统一 `ResearchService` 与完整取数链（FMP 基本面、公告/同业/日历、对比双腿证据）逐条从 pending 转为已验收。
+- **Worker 生产化**：多实例租约抢占、S3 备份与恢复演练；真实 S3 桶/凭据的上传成功路径需在 AWS 侧配置后验证。
+- **观测**：`OTEL_EXPORTER_OTLP_ENDPOINT` 非空时挂 OTLP span 导出，API/Worker 每请求/每作业 span，优雅停机排空批处理队列。
+- **验收去 ignore**：活库认证、DB 调度状态、DB workspace/RLS、真实浏览器 E2E 四项集成测试当前默认 `#[ignore]`，需外部依赖就绪后转为门禁。
+- **部署**：HTTPS Web、密钥注入、镜像 smoke、CI 真浏览器 E2E。
 
 ## 后续增强（不改变单栈边界）
 

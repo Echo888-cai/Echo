@@ -28,7 +28,7 @@ cargo test -p echo-domain --test intent_routing_corpus
 
 当前 runner 断言 `intent`；ticker / discovery / dual-listing 等字段记为 deferred，待公司身份端口迁入 domain 后启用。Live probes 仅作目录，声明式全链路门禁在后续阶段接入。
 
-能力平价状态见 [../rust-parity-matrix.md](../rust-parity-matrix.md)。
+能力平价状态见 [../PLAN.md](../PLAN.md)。
 
 ## 浏览器 E2E
 
