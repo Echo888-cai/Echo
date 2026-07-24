@@ -8,11 +8,11 @@
 
 use crate::api;
 use echo_contracts::{
-    AnswerSource, AskRequest, AskResponse, CompanyResolveResponse, CompanySearchItem,
-    CompanySearchResponse, CompareLegView, CompareResponse, Decimal, EarningsCalendarView,
-    GuardView, MutationResponse, ReportGenerateResponse, ReportMode, ResearchSessionDetail,
-    ResearchSessionResponse, ResearchSessionsResponse, ResearchStreamEvent,
-    ResearchStreamStageName, RouteView, ValuationView,
+    AnswerSource, AskRequest, AskResponse, CitationGuardView, CompanyResolveResponse,
+    CompanySearchItem, CompanySearchResponse, CompareLegView, CompareResponse, Decimal,
+    EarningsCalendarView, EvidenceView, GuardView, MutationResponse, ReportGenerateResponse,
+    ReportMode, ResearchSessionDetail, ResearchSessionResponse, ResearchSessionsResponse,
+    ResearchStreamEvent, ResearchStreamStageName, RouteView, ValuationView,
 };
 use leptos::*;
 
@@ -500,6 +500,57 @@ pub(crate) fn DataSources(sources: Vec<String>) -> impl IntoView {
     .into_view()
 }
 
+/// 网页证据来源卡——可点击的二手来源列表（标题/域名/日期）。空列表不渲染。二手信息只做
+/// 定性支撑，与数字护栏互补：护栏保证数字，来源卡让定性判断可追溯到原始网页。
+#[component]
+pub(crate) fn SourceCards(sources: Vec<EvidenceView>) -> impl IntoView {
+    if sources.is_empty() {
+        return ().into_view();
+    }
+    view! {
+        <div class="source-cards">
+            <p class="source-cards-title">"网页证据 · " {sources.len()} " 条（二手来源，仅定性支撑）"</p>
+            {sources.into_iter().map(|s| {
+                let domain = s.source_domain.clone().unwrap_or_else(|| "来源".to_string());
+                let meta = match s.published_date.clone() {
+                    Some(date) => format!("{domain} · {date}"),
+                    None => domain,
+                };
+                view! {
+                    <a class="source-card" href=s.url target="_blank" rel="noopener noreferrer">
+                        <span class="source-card-title">{s.title}</span>
+                        <span class="source-card-meta">{meta}</span>
+                    </a>
+                }
+            }).collect_view()}
+        </div>
+    }
+    .into_view()
+}
+
+/// 定性引用护栏徽标——与数字护栏并列，核的是"定性论断有没有标注真实来源号"。虚构来源号
+/// 标红。仅本轮有网页证据时出现。
+#[component]
+pub(crate) fn CitationBadge(citation: CitationGuardView) -> impl IntoView {
+    let cls = if citation.has_hard_fail {
+        "fact-guard has-hard"
+    } else {
+        "fact-guard"
+    };
+    view! {
+        <div class=cls>
+            <span class="fact-guard-k">"引用护栏"</span>
+            <span>
+                "证据 " {citation.evidence_count} " · 已引 " {citation.cited_count}
+                {(citation.out_of_range > 0).then(|| view! { <span>" · 虚构 " {citation.out_of_range}</span> })}
+            </span>
+            {(!citation.note.is_empty()).then(|| view! {
+                <p class="fact-guard-note">{citation.note.clone()}</p>
+            })}
+        </div>
+    }
+}
+
 #[component]
 pub(crate) fn GuardBadge(guard: GuardView) -> impl IntoView {
     let cls = if guard.has_hard_fail {
@@ -564,13 +615,15 @@ fn EvidencePanel(
     earnings: Option<EarningsCalendarView>,
     sources: Vec<String>,
     guard: Option<GuardView>,
+    #[prop(optional_no_strip)] citation: Option<CitationGuardView>,
     answer_source: Option<String>,
 ) -> impl IntoView {
     let has_content = valuation.is_some()
         || completeness.is_some()
         || earnings.is_some()
         || !sources.is_empty()
-        || guard.is_some();
+        || guard.is_some()
+        || citation.is_some();
     if !has_content {
         return ().into_view();
     }
@@ -581,9 +634,13 @@ fn EvidencePanel(
     if !sources.is_empty() {
         summary_parts.push(format!("{} 个数据源", sources.len()));
     }
-    let guard_hard = guard.as_ref().is_some_and(|g| g.has_hard_fail);
+    let guard_hard = guard.as_ref().is_some_and(|g| g.has_hard_fail)
+        || citation.as_ref().is_some_and(|c| c.has_hard_fail);
     if let Some(g) = &guard {
         summary_parts.push(format!("护栏 过 {}/{}", g.pass, g.total));
+    }
+    if let Some(c) = &citation {
+        summary_parts.push(format!("引用 {}/{}", c.cited_count, c.evidence_count));
     }
     let summary_text = if summary_parts.is_empty() {
         "研究依据".to_string()
@@ -604,6 +661,7 @@ fn EvidencePanel(
                 {earnings.map(|e| view! { <EarningsBadge earnings=e /> })}
                 <DataSources sources=sources />
                 {guard.map(|g| view! { <GuardBadge guard=g /> })}
+                {citation.map(|c| view! { <CitationBadge citation=c /> })}
                 {answer_source.map(|s| view! { <p class="evidence-provenance">"作答来源 · " {s}</p> })}
             </div>
         </details>
@@ -678,12 +736,15 @@ fn DoneCard(res: AskResponse) -> impl IntoView {
                 }}
             </div>
 
+            <SourceCards sources=res.sources.clone() />
+
             <EvidencePanel
                 valuation=Some(res.valuation.clone())
                 completeness=Some(res.data_completeness)
                 earnings=res.earnings.clone()
                 sources=res.connected_sources.clone()
                 guard=res.fact_guard.clone()
+                citation=res.citation_guard.clone()
                 answer_source=Some(answer_source_label(res.answer_source).to_string())
             />
         </div>
@@ -777,6 +838,7 @@ fn ReportCard(res: ReportGenerateResponse) -> impl IntoView {
                 earnings=res.earnings.clone()
                 sources=Vec::new()
                 guard=res.fact_guard.clone()
+                citation=res.citation_guard.clone()
                 answer_source=Some(report_mode_label(res.mode).to_string())
             />
 
@@ -852,6 +914,19 @@ fn RetryableMessage(message: String, cancelled: bool, on_retry: Callback<()>) ->
 
 // ── App root ──────────────────────────────────────────────────────────────
 
+fn confirm_session_delete() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        leptos::window()
+            .confirm_with_message("确定删除这条研究记录吗？删除后无法恢复。")
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        true
+    }
+}
+
 /// 会话历史侧栏——列表/切换/删除，选中项由 `active_id` 驱动高亮。
 #[component]
 fn HistorySidebar(
@@ -859,12 +934,26 @@ fn HistorySidebar(
     active_id: Option<String>,
     on_select: Callback<Option<String>>,
     on_delete: Callback<String>,
+    collapsed: ReadSignal<bool>,
+    set_collapsed: WriteSignal<bool>,
 ) -> impl IntoView {
     view! {
-        <aside class="research-sidebar">
+        <aside class=move || if collapsed.get() { "research-sidebar is-collapsed" } else { "research-sidebar" }>
             <div class="research-sidebar-head">
-                <span>"研究历史"</span>
-                <button class="sidebar-new" on:click=move |_| on_select.call(None)>"+ 新对话"</button>
+                <button class="sidebar-new" aria-label="创建新研究" on:click=move |_| on_select.call(None)>
+                    <span aria-hidden="true">"+"</span><b>"新建研究对话"</b>
+                </button>
+                <button
+                    class="sidebar-toggle"
+                    title=move || if collapsed.get() { "展开研究历史" } else { "收起研究历史" }
+                    aria-label=move || if collapsed.get() { "展开研究历史" } else { "收起研究历史" }
+                    aria-expanded=move || !collapsed.get()
+                    on:click=move |_| set_collapsed.update(|value| *value = !*value)
+                >{move || if collapsed.get() { "›" } else { "‹" }}</button>
+            </div>
+            <div class="sidebar-section-title">
+                <span class="sidebar-title"><b>"研究对话"</b><i aria-hidden="true"></i></span>
+                <span>"最近"</span>
             </div>
             <div class="research-sidebar-list">
                 {move || match sessions.get() {
@@ -896,7 +985,9 @@ fn HistorySidebar(
                                         aria-label="删除该研究记录"
                                         on:click=move |ev| {
                                             ev.stop_propagation();
-                                            on_delete.call(del_id.clone());
+                                            if confirm_session_delete() {
+                                                on_delete.call(del_id.clone());
+                                            }
                                         }
                                     >"×"</button>
                                 </div>
@@ -930,8 +1021,10 @@ pub fn ResearchPage(
     let (resolving, set_resolving) = create_signal(false);
     let (resolve_error, set_resolve_error) = create_signal(None::<String>);
     let (thread, set_thread) = create_signal(Vec::<Turn>::new());
+    let (sidebar_collapsed, set_sidebar_collapsed) = create_signal(false);
     let (next_id, set_next_id) = create_signal(0u64);
     let (session_error, set_session_error) = create_signal(None::<String>);
+    let conversation_ref = create_node_ref::<html::Div>();
     // 本页面当前续接的研究会话 id——深链带来的历史会话，或本页面第一轮问答落库后
     // 归位的新会话；后续每一轮追问都带上它，让模型能承接代词/实体指代。
     let (current_session_id, set_current_session_id) = create_signal(initial_session.clone());
@@ -1017,6 +1110,20 @@ pub fn ResearchPage(
     // 任一轮仍在流式研究或深度报告生成中都视为 pending——禁止再次提交，避免并发请求的结果错位。
     let pending = move || thread.get().iter().any(|turn| turn.status.is_busy());
     let on_persisted = Callback::new(move |_| sessions.refetch());
+
+    // 新消息和流式增量到达时让阅读位置自然跟到最新内容；用下一帧等待 DOM 先完成更新。
+    #[cfg(target_arch = "wasm32")]
+    {
+        let scroll_target = conversation_ref;
+        create_effect(move |_| {
+            let _ = thread.get();
+            request_animation_frame(move || {
+                if let Some(node) = scroll_target.get_untracked() {
+                    node.set_scroll_top(node.scroll_height());
+                }
+            });
+        });
+    }
 
     // 服务端从问题里识别出主体后（meta 回填了最后一轮的 ticker），若 composer 还没有
     // 确认公司，就把它补成 chip——追问自然续接。只看最后一轮：不许把更早轮次的旧公司
@@ -1164,11 +1271,26 @@ pub fn ResearchPage(
                 active_id=initial_session.clone()
                 on_select=on_navigate
                 on_delete=Callback::new(move |id| delete_session.dispatch(id))
+                collapsed=sidebar_collapsed
+                set_collapsed=set_sidebar_collapsed
             />
         // ── Desk ──
         <main class=move || if has_thread() { "desk has-thread" } else { "desk" }>
+            <div class="desk-toolbar">
+                <div class="desk-context">
+                    <span class="desk-context-mark" aria-hidden="true"></span>
+                    <span>
+                        <small>{move || if has_thread() { "ACTIVE RESEARCH" } else { "NEW RESEARCH" }}</small>
+                        <strong>{move || if has_thread() { "证据研究会话" } else { "开始一段新的研究" }}</strong>
+                    </span>
+                </div>
+                <div class="desk-toolbar-meta">
+                    <span class="trust-chip"><i></i>"数字护栏开启"</span>
+                    <button class="toolbar-new" on:click=move |_| on_navigate.call(None)><span aria-hidden="true">"+"</span>"新研究"</button>
+                </div>
+            </div>
             // conversation thread
-            <div class=move || if has_thread() { "conversation" } else { "conversation is-empty" }>
+            <div node_ref=conversation_ref class=move || if has_thread() { "conversation" } else { "conversation is-empty" }>
                 {move || if !has_thread() {
                     if let Some(error) = session_error.get() {
                         view! {
@@ -1186,15 +1308,74 @@ pub fn ResearchPage(
                     // ── 空态 hero（对齐原 auth-page 大标题风格）──
                     view! {
                         <div class="echo-empty">
-                            <h1>
-                                <span class="line-1">"让噪音退场，"</span>
-                                <span class="line-2">"让证据发声。"</span>
-                            </h1>
-                            <p class="echo-empty-sub">
-                                "直接提问即可——现状、估值、风险、证伪条件；"
-                                <br />
-                                "点到两家公司的问题会自动进入双主体对比。"
-                            </p>
+                            <div class="hero-landscape" aria-hidden="true">
+                                <span class="mountain mountain-one"></span>
+                                <span class="mountain mountain-two"></span>
+                                <span class="mountain mountain-three"></span>
+                                <svg class="hero-bamboo" viewBox="0 0 180 220" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M89 216C96 171 104 112 119 42" stroke="currentColor" stroke-width="2"/>
+                                    <path d="M104 132c-21-14-32-31-38-50M111 91c18-9 30-22 40-39M99 159c-18-3-32-12-43-27M116 62c-13-10-20-22-23-38" stroke="currentColor" stroke-width="1.5"/>
+                                    <path d="M65 83c-2 16 5 28 22 36-2-17-8-29-22-36ZM151 52c-14 2-25 10-32 25 16-2 27-10 32-25ZM55 132c4 14 14 23 30 27-5-15-14-23-30-27ZM92 24c-1 15 6 27 21 36-1-16-8-28-21-36Z" fill="currentColor" opacity=".52"/>
+                                </svg>
+                            </div>
+                            <div class="hero-heading-row">
+                                <h1>
+                                    <span class="line-1">"让每一个判断，"</span>
+                                    <span class="line-2">"都有证据。"</span>
+                                </h1>
+                            </div>
+                            <div class="research-launch-support">
+                                <div class="research-intents" aria-label="研究主题快捷入口">
+                                    <button on:click=move |_| set_question.set("分析这家公司的商业模式与核心增长驱动".to_string())><span>"◌"</span>"商业模式"</button>
+                                    <button on:click=move |_| set_question.set("分析这家公司的盈利质量、现金流与会计风险".to_string())><span>"⌁"</span>"盈利质量"</button>
+                                    <button on:click=move |_| set_question.set("分析这家公司的竞争格局、护城河与份额变化".to_string())><span>"♙"</span>"竞争格局"</button>
+                                    <button on:click=move |_| set_question.set("基于最新基本面给出熊、基准、牛三种估值情景".to_string())><span>"↗"</span>"估值概率"</button>
+                                    <button on:click=move |_| set_question.set("列出这家公司当前论点最关键、可观察的证伪条件".to_string())><span>"◎"</span>"证伪条件"</button>
+                                </div>
+                                <section class="company-showcase-section" aria-labelledby="popular-research-title">
+                                    <header class="company-showcase-heading">
+                                        <div>
+                                            <span class="company-showcase-kicker">"CURATED RESEARCH"</span>
+                                            <h2 id="popular-research-title">"常用研究"</h2>
+                                        </div>
+                                        <p>"从高频判断开始，或在上方直接提出你的问题。"</p>
+                                    </header>
+                                    <div class="company-showcase">
+                                        <button class="company-card" on:click=move |_| {
+                                            set_resolved.set(Some(("0700.HK".to_string(), "腾讯控股 · 0700.HK".to_string())));
+                                            set_question.set("腾讯当前的估值便宜吗？".to_string());
+                                        }>
+                                            <span class="company-card-head"><i class="company-logo is-tencent">"T"</i><span><strong>"腾讯控股"</strong><small>"0700.HK"</small></span><b aria-hidden="true">"☆"</b></span>
+                                            <span class="company-question">"腾讯当前的估值便宜吗？"</span>
+                                            <span class="company-evidence"><span>"12 条证据 · 3 个论点"</span><b aria-hidden="true">"→"</b></span>
+                                        </button>
+                                        <button class="company-card" on:click=move |_| {
+                                            set_resolved.set(Some(("AAPL".to_string(), "苹果公司 · AAPL".to_string())));
+                                            set_question.set("苹果的盈利质量正在变化吗？".to_string());
+                                        }>
+                                            <span class="company-card-head"><i class="company-logo is-apple">"●"</i><span><strong>"苹果公司"</strong><small>"AAPL"</small></span><b aria-hidden="true">"☆"</b></span>
+                                            <span class="company-question">"苹果的盈利质量正在变化吗？"</span>
+                                            <span class="company-evidence"><span>"15 条证据 · 4 个论点"</span><b aria-hidden="true">"→"</b></span>
+                                        </button>
+                                        <button class="company-card" on:click=move |_| {
+                                            set_resolved.set(Some(("NVDA".to_string(), "英伟达 · NVDA".to_string())));
+                                            set_question.set("英伟达的护城河能维持多久？".to_string());
+                                        }>
+                                            <span class="company-card-head"><i class="company-logo is-nvidia">"N"</i><span><strong>"英伟达"</strong><small>"NVDA"</small></span><b aria-hidden="true">"☆"</b></span>
+                                            <span class="company-question">"英伟达的护城河能维持多久？"</span>
+                                            <span class="company-evidence"><span>"18 条证据 · 4 个论点"</span><b aria-hidden="true">"→"</b></span>
+                                        </button>
+                                        <button class="company-card" on:click=move |_| {
+                                            set_resolved.set(Some(("9988.HK".to_string(), "阿里巴巴 · 9988.HK".to_string())));
+                                            set_question.set("什么会证伪阿里巴巴的复苏？".to_string());
+                                        }>
+                                            <span class="company-card-head"><i class="company-logo is-alibaba">"A"</i><span><strong>"阿里巴巴"</strong><small>"9988.HK"</small></span><b aria-hidden="true">"☆"</b></span>
+                                            <span class="company-question">"什么会证伪阿里巴巴的复苏？"</span>
+                                            <span class="company-evidence"><span>"9 条证据 · 3 个论点"</span><b aria-hidden="true">"→"</b></span>
+                                        </button>
+                                    </div>
+                                </section>
+                            </div>
                         </div>
                     }.into_view()
                     }
@@ -1276,7 +1457,7 @@ pub fn ResearchPage(
                                     </div>
                                     // assistant card
                                     <div class="message">
-                                        <div class="bubble" style="max-width:100%;width:100%">
+                                        <div class="bubble assistant-bubble">
                                             {result_view}
                                         </div>
                                     </div>
@@ -1299,7 +1480,8 @@ pub fn ResearchPage(
                                 submit(SubmitMode::Ask);
                             }
                         }
-                        placeholder="想研究什么？现状、估值、护城河、风险、证伪条件……"
+                        placeholder="输入公司名、代码，或直接问出你的判断"
+                        aria-label="研究问题"
                         rows="2"
                     />
                     <div class="composer-footer">
@@ -1378,7 +1560,7 @@ pub fn ResearchPage(
                             disabled=move || pending() || resolving.get()
                             title="生成深度报告"
                             aria-label="生成深度研究报告"
-                        >"深度报告"</button>
+                        ><span aria-hidden="true">"✦"</span>"深度报告"</button>
                         <button
                             class="composer-send"
                             on:click=move |_| submit(SubmitMode::Ask)
@@ -1392,6 +1574,10 @@ pub fn ResearchPage(
                     {move || resolve_error.get().map(|message| view! {
                         <p class="company-error">{message}</p>
                     })}
+                    <div class="composer-meta">
+                        <span>"Echo 可能出错，关键结论请结合证据面板核验。"</span>
+                        <span class="composer-shortcut"><kbd>"Enter"</kbd>" 发送 · "<kbd>"Shift Enter"</kbd>" 换行"</span>
+                    </div>
                 </div>
             </div>
         </main>
